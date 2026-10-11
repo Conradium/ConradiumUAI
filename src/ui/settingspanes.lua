@@ -257,6 +257,10 @@ return function(env)
 		if env.require("net/bridge_connection").enabled() then
 			list[#list + 1] = { key = "Web bridge", value = bridgeModule.status().url }
 		end
+		local relayLink = env.require("net/relay_link")
+		if relayLink.usable() then
+			list[#list + 1] = { key = "Companion relay", value = "127.0.0.1:" .. tostring(relayLink.status().port) }
+		end
 		if #list == 0 then
 			build.note("Nothing is configured, so nothing leaves this machine at all.")
 		else

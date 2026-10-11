@@ -19,11 +19,13 @@ return function(env)
 	local overlay = env.require("ui/overlay")
 	local bridge = env.require("net/bridge")
 	local sessions = env.require("agent/session")
+	local relayLink = env.require("net/relay_link")
 
 	local M = {}
 
 	function M.new(parent)
 		local panel = {}
+		local mobile = relayLink.mobile()
 		local scroll = P.scroll(parent, {
 			name = "Cowork",
 			size = UDim2.new(1, 0, 1, 0),
@@ -33,8 +35,11 @@ return function(env)
 
 		P.sectionHeader(scroll.instance, {
 			title = "Cowork",
-			description = "Open UAI Bridge on this computer and click Start Cowork. The desktop app connects automatically. "
-				.. "Messages, tools, and permissions stay connected to this Roblox session.",
+			description = mobile
+				and ("Start UAI Relay on this phone and the script pairs with it automatically, so long replies survive the "
+					.. "executor's request limit. Messages, tools, and permissions stay connected to this Roblox session.")
+				or ("Open UAI Bridge on this computer and click Start Cowork. The desktop app connects automatically. "
+					.. "Messages, tools, and permissions stay connected to this Roblox session."),
 			layoutOrder = 1,
 		})
 
@@ -54,17 +59,84 @@ return function(env)
 			order = order + 1
 			return order
 		end
+		local mobile = relayLink.mobile()
 
-		local desktopCard = P.card(container, { name = "DesktopBridge", layoutOrder = nextOrder(), gap = theme.space.sm })
-		P.text(desktopCard, { text = "UAI Bridge desktop app", role = "label", layoutOrder = 1 })
-		P.text(desktopCard, { text = "Click Start Cowork in UAI Bridge.exe. This script finds it on port 28791 and reconnects when the app restarts. No token copying is needed. Manual connections below take priority when enabled.",
+		-- The companion relay is the mobile answer to the executor's request limit. It
+		-- is independent of the Cowork link, so it gets its own card, its own mode and
+		-- its own actions rather than being folded into the manual bridge below.
+		local relayCard = P.card(container, { name = "RelayCompanion", layoutOrder = nextOrder(), gap = theme.space.sm })
+		P.text(relayCard, { text = "Mobile relay (companion app)", role = "label", layoutOrder = 1 })
+		P.text(relayCard, {
+			text = "Start UAI Relay on this phone. The script hands long provider requests to it, so the executor's request limit "
+				.. "cannot cut them off. Pairing is automatic; no token copying.",
 			role = "caption", wrap = true, auto = "Y", layoutOrder = 2 })
-		local autoRow = P.row(desktopCard, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.sm, layoutOrder = 3 })
-		P.text(autoRow, { text = "Find desktop app automatically", role = "small", flex = "Fill", layoutOrder = 1 })
-		local autoToggle = C.switch(autoRow, { value = config.get("bridge.autoDiscover", true) == true,
-			onChange = function(value) config.set("bridge.autoDiscover", value) end })
-		autoToggle.instance.Name = "AutoDiscoverDesktop"
-		autoToggle.instance.LayoutOrder = 2
+		local relayRow = P.row(relayCard, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.sm, layoutOrder = 3 })
+		local relayDot = P.statusDot(relayRow, { diameter = theme.size.dot, color = theme.color.textTertiary, layoutOrder = 1 })
+		local relayText = P.text(relayRow, {
+			name = "RelayStatusText", text = "", role = "small", color = theme.color.text, wrap = true,
+			auto = "Y", size = UDim2.new(0, 0, 0, 0), flex = "Fill", layoutOrder = 2 })
+		local relayDetail = P.text(relayCard, {
+			name = "RelayStatusDetail", text = "", role = "monoSmall", color = theme.color.textSecondary,
+			wrap = true, auto = "Y", layoutOrder = 4 })
+		relayDetail.Size = UDim2.new(1, 0, 0, 0)
+		local function describeRelay()
+			local status = relayLink.status()
+			local token = tostring(config.get("relay.token", ""))
+			if status.state == "ready" then
+				relayDot.BackgroundColor3 = theme.color.success
+				relayText.Text = "Companion connected. Long replies are relayed through this phone."
+			elseif status.mode == "off" then
+				relayDot.BackgroundColor3 = theme.color.textTertiary
+				relayText.Text = "Relay mode is off, so the script calls providers directly."
+			elseif not caps.has("http") then
+				relayDot.BackgroundColor3 = theme.color.warn
+				relayText.Text = "This host has no HTTP transport, so the companion cannot be reached."
+			else
+				relayDot.BackgroundColor3 = theme.color.warn
+				relayText.Text = status.state == "searching" and "Looking for the companion app…"
+					or "Companion not found. Start UAI Relay, then press Scan now."
+			end
+			local parts = { "port " .. tostring(status.port) }
+			if status.server ~= "" then parts[#parts + 1] = "server " .. status.server end
+			if #token > 10 then parts[#parts + 1] = "token " .. token:sub(1, 6) .. "…" .. token:sub(-4) end
+			if (status.placeId or 0) > 0 then parts[#parts + 1] = "place " .. tostring(status.placeId) end
+			if status.error then parts[#parts + 1] = tostring(status.error) end
+			relayDetail.Text = table.concat(parts, "  ·  ")
+		end
+		C.segmented(relayCard, {
+			options = { { label = "Auto", value = "auto" }, { label = "Always", value = "always" }, { label = "Off", value = "off" } },
+			value = config.get("relay.mode", "auto"), layoutOrder = 5,
+			onChange = function(value) config.set("relay.mode", value) end })
+		local relayButtons = P.row(relayCard, { size = UDim2.new(1, 0, 0, 0), auto = "Y", wrap = true, gap = theme.space.sm, layoutOrder = 6 })
+		P.button(relayButtons, {
+			name = "RelayScan", text = "Scan now", variant = "secondary", size = "sm", layoutOrder = 1,
+			onClick = function()
+				local ok, err = relayLink.scan()
+				describeRelay()
+				if not ok then overlay.toast(tostring(err or "No companion answered on that port"), "warn", 3) end
+			end })
+		P.button(relayButtons, {
+			name = "RelayUnpair", text = "Unpair", variant = "ghost", size = "sm", layoutOrder = 2,
+			onClick = function()
+				relayLink.forget()
+				describeRelay()
+				overlay.toast("Companion unpaired", "good", 2)
+			end })
+
+		local desktopCard
+		local autoToggle
+		if not mobile then
+			desktopCard = P.card(container, { name = "DesktopBridge", layoutOrder = nextOrder(), gap = theme.space.sm })
+			P.text(desktopCard, { text = "UAI Bridge desktop app", role = "label", layoutOrder = 1 })
+			P.text(desktopCard, { text = "Click Start Cowork in UAI Bridge.exe. This script finds it on port 28791 and reconnects when the app restarts. No token copying is needed. Manual connections below take priority when enabled.",
+				role = "caption", wrap = true, auto = "Y", layoutOrder = 2 })
+			local autoRow = P.row(desktopCard, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.sm, layoutOrder = 3 })
+			P.text(autoRow, { text = "Find desktop app automatically", role = "small", flex = "Fill", layoutOrder = 1 })
+			autoToggle = C.switch(autoRow, { value = config.get("bridge.autoDiscover", true) == true,
+				onChange = function(value) config.set("bridge.autoDiscover", value) end })
+			autoToggle.instance.Name = "AutoDiscoverDesktop"
+			autoToggle.instance.LayoutOrder = 2
+		end
 
 		local statusCard = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
 
@@ -174,36 +246,39 @@ return function(env)
 		-- label above the token field, that field, the hint and the button row were sorted
 		-- by whatever the tie-break happened to produce -- which is a card whose two
 		-- labels can end up over the wrong two fields.
-		local installerCard = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
-		P.text(installerCard, { text = "Manual setup: download and start", role = "label", layoutOrder = 1 })
-		local installStatus = P.text(installerCard, { name = "BridgeDownloadStatus",
-			text = "Install Node.js 18+ on this computer. Download the files, then open a terminal in your executor workspace (the folder containing UAI). Run: node UAI/bridge/start.txt",
-			role = "caption", wrap = true, auto = "Y", layoutOrder = 2 })
-		P.button(installerCard, { name = "DownloadBridge", text = "Download bridge files", icon = "folder",
-			variant = "secondary", size = "sm", fill = true, layoutOrder = 3,
-			onClick = function(button)
-				button.setEnabled(false)
-				button.setText("Downloading…")
-				task.spawn(function()
-					local ok, message = env.require("runtime/bridge_install").download(function(text)
-						if installStatus.Parent then installStatus.Text = text end
+		-- The Node installer is desktop setup; on a phone it is noise.
+		if not mobile then
+			local installerCard = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
+			P.text(installerCard, { text = "Manual setup: download and start", role = "label", layoutOrder = 1 })
+			local installStatus = P.text(installerCard, { name = "BridgeDownloadStatus",
+				text = "Install Node.js 18+ on this computer. Download the files, then open a terminal in your executor workspace (the folder containing UAI). Run: node UAI/bridge/start.txt",
+				role = "caption", wrap = true, auto = "Y", layoutOrder = 2 })
+			P.button(installerCard, { name = "DownloadBridge", text = "Download bridge files", icon = "folder",
+				variant = "secondary", size = "sm", fill = true, layoutOrder = 3,
+				onClick = function(button)
+					button.setEnabled(false)
+					button.setText("Downloading…")
+					task.spawn(function()
+						local ok, message = env.require("runtime/bridge_install").download(function(text)
+							if installStatus.Parent then installStatus.Text = text end
+						end)
+						if not installerCard.Parent then return end
+						installStatus.Text = message
+						button.setText(ok and "Download again" or "Retry download")
+						button.setEnabled(true)
+						overlay.toast(ok and "Bridge files downloaded" or message, ok and "good" or "warn", 4)
 					end)
-					if not installerCard.Parent then return end
-					installStatus.Text = message
-					button.setText(ok and "Download again" or "Retry download")
-					button.setEnabled(true)
-					overlay.toast(ok and "Bridge files downloaded" or message, ok and "good" or "warn", 4)
-				end)
-			end })
-		if caps.clipboard then
-			P.button(installerCard, { name = "CopyBridgeStart", text = "Copy start command", variant = "ghost", size = "sm", fill = true, layoutOrder = 4,
-				onClick = function()
-					local ok = pcall(caps.fn.clipboard, "node " .. env.require("runtime/fsx").root .. "/bridge/start.txt")
-					overlay.toast(ok and "Start command copied" or "Could not reach the clipboard", ok and "good" or "warn", 2)
 				end })
+			if caps.clipboard then
+				P.button(installerCard, { name = "CopyBridgeStart", text = "Copy start command", variant = "ghost", size = "sm", fill = true, layoutOrder = 4,
+					onClick = function()
+						local ok = pcall(caps.fn.clipboard, "node " .. env.require("runtime/fsx").root .. "/bridge/start.txt")
+						overlay.toast(ok and "Start command copied" or "Could not reach the clipboard", ok and "good" or "warn", 2)
+					end })
+			end
+			P.text(installerCard, { text = "No npm install or file renaming needed. Keep the terminal and Roblox open. From a Git checkout, run node bridge/server.js instead.",
+				role = "caption", wrap = true, auto = "Y", layoutOrder = 5 })
 		end
-		P.text(installerCard, { text = "No npm install or file renaming needed. Keep the terminal and Roblox open. From a Git checkout, run node bridge/server.js instead.",
-			role = "caption", wrap = true, auto = "Y", layoutOrder = 5 })
 		local settings = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
 		P.text(settings, { text = "2. Connect Roblox", role = "label", layoutOrder = 0 })
 		local runtimeCard = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
@@ -287,17 +362,25 @@ return function(env)
 		})
 
 		describe()
+		describeRelay()
 		local unsubscribeConfig = config.changed:connect(function(path)
-			if path == nil or path == "bridge" or path == "bridge.autoDiscover" then
+			if autoToggle and (path == nil or path == "bridge" or path == "bridge.autoDiscover") then
 				autoToggle.set(config.get("bridge.autoDiscover", true) == true, true)
 			end
 			if path == nil or path == "bridge" or path == "bridge.enabled" then
 				toggle.set(config.get("bridge.enabled", false) == true, true)
 			end
+			if path == nil or path == "relay" or util.startsWith(tostring(path), "relay.") then
+				describeRelay()
+			end
 		end)
 		local unsubscribeBridge = bridge.changed:connect(function()
 			if not statusCard.Parent then return end
 			describe()
+		end)
+		local unsubscribeRelay = relayLink.changed:connect(function()
+			if not relayCard.Parent then return end
+			describeRelay()
 		end)
 		local unsubscribeSessions = sessions.listChanged:connect(function()
 			if not statusCard.Parent then return end
@@ -307,6 +390,7 @@ return function(env)
 			pcall(unsubscribeBridge)
 			pcall(unsubscribeSessions)
 			pcall(unsubscribeConfig)
+			pcall(unsubscribeRelay)
 		end)
 
 		return statusCard
