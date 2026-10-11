@@ -15,20 +15,16 @@ return function(env)
 	M.hash = hash
 	-- A decompiler, and the bundled luacid service, report a failed decompile as
 	-- a comment notice rather than an error, so a returned string is not proof of
-	-- source. Real decompiled code always carries at least one statement, so
-	-- text that is present and entirely comment is a failure notice that must
-	-- not be cached, shown, or allowed to displace a working fallback. A blank
-	-- result stays a legitimate empty snapshot.
+	-- source. Real decompiled code carries at least one statement, so blank or
+	-- entirely comment text is a failure notice that must not be cached, shown,
+	-- or allowed to displace a working fallback. Only decompiler output is
+	-- checked: the host-readable path can legitimately read an empty Source.
 	local function notice(source)
 		if type(source) ~= "string" then return true end
-		local seen = false
 		for line in source:gmatch("[^\n]+") do
-			if line:match("%S") then
-				seen = true
-				if not line:match("^%s*%-%-") then return false end
-			end
+			if line:match("%S") and not line:match("^%s*%-%-") then return false end
 		end
-		return seen
+		return true
 	end
 	-- The bundled service's own failure titles, surfaced without its detail text:
 	-- a notice can carry a remote response body, which does not belong in

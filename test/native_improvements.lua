@@ -68,8 +68,9 @@ case("failure notices are never presented as source and defer to a usable fallba
 	check("usable fallback source replaces a comment-only host result", recovered.method == "decompiled" and recovered.origin == "luacid"
 		and recovered.readOnly and recovered.source:find("return answer", 1, true) ~= nil)
 	luacid.install = function() return function() return "" end end
-	local blank = assert(f.run(function() return sources.inspect(key, nil, { refresh = true, decompile = true }) end))
-	check("a blank decompile stays an empty snapshot", blank.status == "empty" and blank.bytes == 0 and blank.origin == "luacid")
+	local blank, blankMessage, blankDetail = f.run(function() return sources.inspect(key, nil, { refresh = true, decompile = true }) end)
+	check("a blank decompile result is reported, not stored as an empty script", not blank
+		and blankDetail.code == "decompiler_failure" and has(blankMessage, "luacid"))
 	f.healthy(); f.close()
 end)
 

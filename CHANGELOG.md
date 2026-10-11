@@ -15,6 +15,8 @@ Portable files, faster routine work, and clearer reasoning and provider feedback
   bytecode before a request. It now works where a host compiles chunks into a
   narrower environment. `lune run test/luacid_fallback.luau` covers it with the
   real Luau compiler.
+- Retry an empty success from the decompile service instead of storing it as an
+  empty script, so a transient empty response cannot stick for the session.
 
 ### October 10 update
 

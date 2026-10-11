@@ -67,6 +67,7 @@ local function build(options)
 	end
 	globals._G = globals
 	globals.getgenv = function() return globals end
+	globals.warn = function() end -- the asset warns on retries; keep the transcript readable
 	globals.typeof = function(value) return type(value) end
 	globals.task = TASK
 	globals.identifyexecutor = function() return "Lune", "0" end
@@ -173,6 +174,20 @@ do
 	local notice = decompiler(target("Empty"))
 	check("empty bytecode is refused before any request is sent",
 		type(notice) == "string" and notice:find("^%-%- Failed to read script bytecode", 1) ~= nil, notice)
+end
+
+do
+	local first = true
+	local host = build({ request = function()
+		if first then
+			first = false
+			return { StatusCode = 200, Body = "", Headers = {} }
+		end
+		return { StatusCode = 200, Body = "return 9\n", Headers = {} }
+	end })
+	local decompiler = assert(host.luacid.install())
+	local source = decompiler(target("Retried"))
+	check("an empty success is retried instead of cached as source", source == "return 9\n", source)
 end
 
 stdio.write("luacid fallback: " .. passed .. " checks passed\n")

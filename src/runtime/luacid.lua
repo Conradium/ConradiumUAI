@@ -298,7 +298,17 @@ end
 		return setmetatable({
 			_G = globals,
 			getgenv = caps.fn.getgenv,
-			request = request,
+			-- A successful response with no body is not source, and the asset caches
+			-- any 200 for the session; report it as a retryable failure so a
+			-- transient empty response cannot stick as an empty script.
+			request = function(options)
+				local response = request(options)
+				if type(response) == "table" and response.StatusCode == 200
+					and (response.Body == nil or tostring(response.Body) == "") then
+					return { StatusCode = 502, Body = "empty response body", Headers = response.Headers or {} }
+				end
+				return response
+			end,
 			getscriptbytecode = function(object)
 				local value = getscriptbytecode(object)
 				if type(value) ~= "string" or value == "" then
