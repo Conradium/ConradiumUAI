@@ -361,7 +361,7 @@ local function start()
 
 	-- After the interface, because the bridge attaches to whichever thread is
 	-- active and the interface is what establishes that on a fresh install. A
-	-- no-op unless the setting has been turned on.
+	-- manual bridge is opt-in; the desktop app is discovered on its own local port.
 	local bridge = env.require("net/bridge")
 	local bridgeOk, bridgeWhy = bridge.sync()
 	if not bridgeOk and bridgeWhy then log.warn("bridge", "not started", bridgeWhy) end

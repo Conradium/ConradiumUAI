@@ -640,8 +640,14 @@ first two entirely.
 ## Cowork: your browser workspace
 
 Cowork gives your Roblox conversation more room in the browser. Keep Roblox and
-its local bridge running on the same computer. **Node.js 18+** is required; there
-are no production npm dependencies.
+its local bridge running on the same computer. The [Windows desktop launcher](desktop/README.md)
+includes its runtimes: extract the ZIP, open **UAI Bridge.exe**, click **Start
+Cowork**, and load the updated UAI script. It discovers the app on dedicated port
+**28791** and reconnects automatically after app restarts. The matching script is
+also included in the package under `client/uai.lua`.
+
+For manual terminal setup, **Node.js 18+** is required; there are no production
+npm dependencies. An enabled manual bridge takes priority over desktop discovery.
 
 1. In Roblox, open **UAI → Cowork → Download bridge files**. Open a terminal in
    your executor workspace (the folder containing `UAI`) and run:

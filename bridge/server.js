@@ -33,7 +33,9 @@ function flag(name, fallback) {
 }
 function hasFlag(name) { return args.includes('--' + name); }
 
-const PORT = Number(flag('port', 8790)) || 8790;
+const DESKTOP = hasFlag('desktop');
+const DESKTOP_PORT = 28791;
+const PORT = DESKTOP ? DESKTOP_PORT : (Number(flag('port', 8790)) || 8790);
 const HOST = '127.0.0.1';
 const WEB_DIR = path.join(__dirname, 'web');
 // Staged rollout: --legacy disables the picture routes and the normalized-delta
@@ -621,6 +623,11 @@ async function serveStatic(pathname, res) {
 // Router ---------------------------------------------------------------------
 
 const server = http.createServer(async (req, res) => {
+  // Desktop discovery trusts native programs on this computer, never web pages.
+  // An exact Host check also prevents a rebound public hostname reaching it.
+  if (DESKTOP && req.headers.host !== `${HOST}:${PORT}`) {
+    sendText(res, 403, 'bad host'); return;
+  }
   // Parse the target inside a guard: a malformed request target returns 400
   // instead of rejecting the async handler and taking the process down.
   let url, route;
@@ -648,6 +655,27 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     await serveStatic(route, res);
+    return;
+  }
+
+  if (route === '/api/desktop/discover') {
+    if (!DESKTOP) { sendText(res, 404, 'not found'); return; }
+    const peer = req.socket.remoteAddress;
+    if (req.headers.origin !== undefined || Object.keys(req.headers).some(key => key.startsWith('sec-fetch-')) ||
+        (peer !== '127.0.0.1' && peer !== '::ffff:127.0.0.1') || req.headers['x-uai-discovery'] !== '1') {
+      sendText(res, 403, 'native local discovery only'); return;
+    }
+    if (req.method !== 'POST') { sendText(res, 405, 'method not allowed'); return; }
+    if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) {
+      sendText(res, 415, 'expected JSON'); return;
+    }
+    try {
+      const body = JSON.parse(await readBody(req, 256));
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) {
+        sendText(res, 400, 'expected empty object'); return;
+      }
+      sendJson(res, 200, { product: 'project-uai-desktop', protocol: 1, port: PORT, token: TOKEN, instance: inference.instance });
+    } catch (err) { sendText(res, err.status || 400, 'invalid discovery request'); }
     return;
   }
 
@@ -833,6 +861,11 @@ setInterval(() => {
 
 server.listen(PORT, HOST, () => {
   const origin = `http://${HOST}:${PORT}`;
+  if (DESKTOP) {
+    process.stdout.write(JSON.stringify({ type: 'ready', product: 'project-uai-desktop', protocol: 1,
+      port: PORT, token: TOKEN, url: `${origin}/#t=${TOKEN}` }) + '\n');
+    return;
+  }
   // The token rides in the fragment, which browsers never send to a server and
   // nothing logs. The page reads it once and keeps it, so this link is the whole
   // setup on the browser side.
@@ -848,14 +881,35 @@ server.listen(PORT, HOST, () => {
   );
 });
 
-for (const event of ['SIGINT', 'SIGTERM']) process.on(event, () => {
+let stopping = false;
+function shutdown() {
+  if (stopping) return;
+  stopping = true;
   inference.close();
   pictures?.close();
   server.closeAllConnections();
   server.close(() => process.exit(0));
-});
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+for (const event of ['SIGINT', 'SIGTERM']) process.on(event, shutdown);
+if (DESKTOP) {
+  const control = require('node:readline').createInterface({ input: process.stdin });
+  control.on('line', line => {
+    if (line.length > 256) return;
+    try { if (JSON.parse(line).type === 'stop') shutdown(); } catch { /* Ignore malformed control messages. */ }
+  });
+  control.on('close', shutdown);
+  process.stdout.on('error', shutdown);
+}
 
 server.on('error', (err) => {
+  if (DESKTOP) {
+    const message = err && err.code === 'EADDRINUSE'
+      ? `Port ${PORT} is already in use. Close the other UAI Bridge app or the program using this port, then try again.`
+      : 'The local bridge could not start. Restart the app and try again.';
+    process.stdout.write(JSON.stringify({ type: 'error', message }) + '\n', () => process.exit(1));
+    return;
+  }
   if (err && err.code === 'EADDRINUSE') {
     process.stderr.write(`\n  Port ${PORT} is already in use. Try --port ${PORT + 1}.\n\n`);
     process.exit(1);

@@ -79,7 +79,7 @@ full.providers = {
 }
 full.identity.extraHeaders = { ["X-Identity"] = "identity-secret" }
 full.memory.entries = { { key = "preference", value = "concise", at = 123 } }
-full.bridge = { enabled = true, port = 8795, token = "bridge-secret", runtime = "web", requestTimeout = 300 }
+full.bridge = { enabled = true, autoDiscover = false, port = 8795, token = "bridge-secret", runtime = "web", requestTimeout = 300 }
 full.logs = { level = "debug", mirror = true }
 full.skills.disabled = { ["sample.md"] = true, ["other.md"] = false }
 full.extension = { token = "extension-secret", active = false }

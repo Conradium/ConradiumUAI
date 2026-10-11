@@ -84,7 +84,7 @@ return function(env)
 		elseif streaming and util.trim(record.wsUrl) ~= "" then
 			transport = caps.ws and "UAI gateway socket, with HTTP fallback before send" or "Buffered SSE over HTTP (socket unavailable)"
 		end
-		if config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web" then transport = "Web relay" end
+		if env.require("net/bridge_connection").enabled() and config.get("bridge.runtime", "game") == "web" then transport = "Web relay" end
 		local out = {
 			{ key = "Endpoint", value = chat.endpointOf(record) },
 			{ key = "Model list", value = registry.endpoint(record, "/models") },

@@ -910,7 +910,7 @@ return function(env)
 		end
 		local wantStream = request.stream
 		if wantStream == nil then wantStream = record.stream ~= false and config.get("agent.stream", true) end
-		if config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web" then wantStream = true end
+		if env.require("net/bridge_connection").enabled() and config.get("bridge.runtime", "game") == "web" then wantStream = true end
 
 		local body = M.buildBody(record, util.merge(request, { stream = wantStream }))
 		applyRemembered(record, body)
@@ -953,7 +953,7 @@ return function(env)
 			-- A socket is only used when the record names one and the host has
 			-- WebSocket support; otherwise the SSE body arrives whole over HTTP.
 			local imageRequest = env.require("runtime/images").hasReferences(request.messages)
-			local web = imageRequest or (config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web")
+			local web = imageRequest or (env.require("net/bridge_connection").enabled() and config.get("bridge.runtime", "game") == "web")
 			if not web and not registry.proxyProvider(record) and payload.stream and util.trim(record.wsUrl) ~= "" and caps.ws then
 				local ws = env.require("net/ws")
 				local socketHeaders = http.headersFor({ url = url, headers = headers, body = payload,

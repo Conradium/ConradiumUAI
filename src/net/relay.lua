@@ -5,11 +5,13 @@ return function(env)
 	local clock = env.require("runtime/clock")
 	local config = env.require("runtime/config")
 	local dispose = env.require("runtime/dispose")
+	local connection = env.require("net/bridge_connection")
 	local alive, pending = true, {}
 	local M = {}
 	function M.request(spec, headers, call)
-		local base = "http://127.0.0.1:" .. tostring(config.get("bridge.port", 8790))
-		local token = tostring(config.get("bridge.token", ""))
+		local endpoint = connection.get()
+		local base = "http://127.0.0.1:" .. tostring(endpoint.port)
+		local token = endpoint.token
 		local timeout = util.clamp(tonumber(config.get("bridge.requestTimeout", 180)) or 180, 10, 86400)
 		local id = "inference_" .. env.services.HttpService:GenerateGUID(false)
 		local deadline = clock.ms() + (timeout + 30) * 1000
@@ -22,7 +24,9 @@ return function(env)
 		end
 		pending[id] = cancel
 		local function ended()
-			return not alive or not config.get("bridge.enabled", false) or (spec.aborted and spec.aborted())
+			local current = connection.get()
+			return not alive or not current.enabled or current.token ~= token or current.port ~= endpoint.port
+				or (spec.aborted and spec.aborted())
 		end
 		local function failure(message)
 			pending[id] = nil
@@ -30,7 +34,7 @@ return function(env)
 				via = "web", terminal = true }, nil
 		end
 		if token == "" then return failure("Web runtime needs the bridge token in Cowork settings.") end
-		if not config.get("bridge.enabled", false) then return failure("Reconnect the web bridge to use the images in this conversation.") end
+		if not endpoint.enabled then return failure("Reconnect the web bridge to use the images in this conversation.") end
 		local hello = short("GET", "/api/hello")
 		local info = hello and hello.ok and util.decode(hello.body)
 		if type(info) ~= "table" or info.protocol ~= 2 or not info.instance then

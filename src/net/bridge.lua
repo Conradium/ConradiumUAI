@@ -19,11 +19,13 @@ return function(env)
 	local caps = env.require("runtime/caps")
 	local http = env.require("net/http")
 	local signal = env.require("runtime/signal")
+	local connection = env.require("net/bridge_connection")
 
 	-- Fired on a state transition only -- started, stopped, reachable, unreachable --
 	-- so the Settings panel can show the truth without polling for it.
 	local M = { running = false, online = false, lastError = nil, changed = signal.new("bridge") }
 	local clientId = env.services.HttpService:GenerateGUID(false)
+	local alive, generation = false, 0
 
 	-- Queue bounds limit offline buffering; event text itself stays lossless so
 	-- Markdown, code listings, and streamed finals agree between both interfaces.
@@ -132,18 +134,20 @@ return function(env)
 	end
 
 	local function base()
-		return "http://127.0.0.1:" .. tostring(config.get("bridge.port", 8790))
+		return "http://127.0.0.1:" .. tostring(connection.get().port)
 	end
 
 	local function headers()
-		return { ["Authorization"] = "Bearer " .. tostring(config.get("bridge.token", "")), ["X-UAI-Client"] = clientId }
+		return { ["Authorization"] = "Bearer " .. connection.get().token, ["X-UAI-Client"] = clientId }
 	end
 
 	-- `identity = "none"` because the Claude Code headers identify this client to an
 	-- inference gateway and mean nothing to a local relay. `silent` keeps the poll
 	-- out of the Requests view.
 	local function call(spec)
+		local mine = generation
 		spec.headers = headers()
+		spec.aborted = function() return not alive or mine ~= generation end
 		spec.identity = "none"
 		spec.silent = true
 		spec.tag = "bridge"
@@ -235,8 +239,6 @@ return function(env)
 		log.info("bridge", "connected to the local bridge")
 		M.changed:fire()
 	end
-
-	local alive = false
 
 	-- The browser's panels are drawn from the same modules the in-game interface
 	-- reads, so nothing in the web UI is a guess: providers and their real model
@@ -446,7 +448,6 @@ return function(env)
 		return false, err or ("status " .. tostring(res and res.status or 0))
 	end
 
-	local generation = 0
 	local function uploadLoop(mine)
 		local attempt = 0
 		while alive and mine == generation do
@@ -496,7 +497,9 @@ return function(env)
 								commandResults[id] = { id = id, pending = true }
 							end
 							clock.spawn(function()
+								if not alive or mine ~= generation then return end
 								local ok, result = pcall(runCommand, command)
+								if not alive or mine ~= generation then return end
 								if id then
 									local answer = { id = id, ok = ok, error = not ok and tostring(result) or nil,
 										data = ok and type(result) == "table" and result or nil }
@@ -536,7 +539,7 @@ return function(env)
 	function M.start()
 		if M.running then return true end
 		if not caps.has("http") then return false, caps.reason("http") end
-		if util.trim(tostring(config.get("bridge.token", ""))) == "" then
+		if util.trim(connection.get().token) == "" then
 			return false, "no token yet -- run bridge/server.js and paste the token it prints"
 		end
 
@@ -557,8 +560,10 @@ return function(env)
 		return true
 	end
 
-	function M.stop()
-		if not M.running then return false end
+	function M.stop(keepDiscovery)
+		local wasRunning = M.running
+		if not keepDiscovery then connection.pause() end
+		if not M.running then return wasRunning end
 		if unregister then
 			unregister()
 			unregister = nil
@@ -573,8 +578,9 @@ return function(env)
 	-- One place decides whether the bridge should be up, so boot and the Settings
 	-- toggle cannot disagree about it.
 	function M.sync()
-		if config.get("bridge.enabled", false) == true then return M.start() end
-		M.stop()
+		connection.resume()
+		if connection.enabled() then return M.start() end
+		M.stop(true)
 		return false
 	end
 
@@ -583,6 +589,8 @@ return function(env)
 			running = M.running,
 			online = M.online,
 			url = base(),
+			source = connection.get().source,
+			searching = connection.searching(),
 			queued = #queue,
 			error = M.lastError,
 		}
@@ -592,11 +600,13 @@ return function(env)
 	-- panel, a console call or a host script, so the panel only has to write config
 	-- rather than orchestrate this. A port or token change aims the connection
 	-- somewhere new, so it is torn down and rebuilt rather than adjusted in place.
+	dispose.add(connection.changed:connect(function()
+		if M.running then M.stop(true) end
+		if connection.enabled() then M.start() end
+		M.changed:fire()
+	end), "bridge connection")
 	dispose.add(config.changed:connect(function(path)
-		if path == "bridge.runtime" or path == "bridge.requestTimeout" then lastStateJson = nil; return end
-		if path ~= nil and not util.startsWith(tostring(path), "bridge.") then return end
-		if M.running then M.stop() end
-		if config.get("bridge.enabled", false) == true then M.start() end
+		if path == "bridge.runtime" or path == "bridge.requestTimeout" then lastStateJson = nil end
 	end), "bridge config")
 
 	return M

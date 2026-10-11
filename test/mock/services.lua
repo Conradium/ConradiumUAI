@@ -22,6 +22,7 @@ function M.build(deps)
 		log = {},
 		queued = {},
 		handler = nil,
+		desktop = nil,
 		requestCount = 0,
 	}
 
@@ -33,6 +34,7 @@ function M.build(deps)
 		http.log = {}
 		http.queued = {}
 		http.handler = nil
+		http.desktop = nil
 		http.requestCount = 0
 	end
 
@@ -51,7 +53,13 @@ function M.build(deps)
 		http.log[#http.log + 1] = entry
 
 		local response
-		if http.handler then
+		-- Background desktop discovery is plumbing, not part of a scenario's script.
+		-- It is intercepted before the general handler so a handler that answers
+		-- every request cannot record, queue a reply for, or starve it. A scenario
+		-- that wants a desktop app supplies `http.desktop`; otherwise none listens.
+		if entry.url == "http://127.0.0.1:28791/api/desktop/discover" then
+			response = http.desktop and http.desktop(entry) or { StatusCode = 404, Body = "not found" }
+		elseif http.handler then
 			response = http.handler(entry)
 		end
 		if not response and #http.queued > 0 then

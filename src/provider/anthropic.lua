@@ -495,7 +495,7 @@ return function(env)
 		if wantStream == nil then
 			wantStream = record.stream ~= false and config.get("agent.stream", true)
 		end
-		if config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web" then wantStream = true end
+		if env.require("net/bridge_connection").enabled() and config.get("bridge.runtime", "game") == "web" then wantStream = true end
 
 		local body = M.buildBody(record, util.merge(request, { stream = wantStream }))
 		local requestScope = registry.compatibilityKey(record)
@@ -526,7 +526,7 @@ return function(env)
 			local requestStarted = clock.ms()
 			local res, err = http.send({
 				relay = env.require("runtime/images").hasReferences(request.messages)
-					or (config.get("bridge.enabled", false) and config.get("bridge.runtime", "game") == "web"),
+					or (env.require("net/bridge_connection").enabled() and config.get("bridge.runtime", "game") == "web"),
 				sessionId = request.sessionId,
 				url = url,
 				method = "POST",

@@ -1,0 +1,30 @@
+UAI BRIDGE 1.0 — WINDOWS 10/11 (64-BIT)
+
+1. Extract the entire ZIP to a folder of your choice.
+2. Open UAI Bridge.exe and click Start Cowork.
+3. Load the updated Project UAI script in Roblox. It connects automatically.
+
+The browser opens automatically. Node and .NET are included; no terminal,
+administrator access, or separate runtime installation is required.
+
+This package includes the matching script in client/uai.lua. If your published
+loader still has an older client, run this updated script in your executor.
+Roblox must remain running. The app does not launch Roblox or an executor.
+
+If Roblox is not connecting, open UAI > Cowork. Turn on "Find desktop app
+automatically" and turn off "Manual bridge enabled". Discovery checks port
+28791 on this computer every four seconds. Tokens refresh automatically.
+
+Closing a running app hides it in the system tray. Double-click its tray icon
+to return. Use Stop bridge to disconnect, or Exit to stop and close the app.
+Stopping interrupts active bridge requests and clears temporary picture uploads.
+
+Port 28791 is reserved by this app while it is running. If another program
+uses it, the app reports the conflict. It never terminates other programs.
+
+This build is not code-signed. Windows may identify it as an unrecognized app.
+Download only from a source you trust. Package hashes are in manifest.json;
+they identify file content and are not a publisher signature.
+
+Source: https://github.com/Project-Ptolemy/ProjectUAI
+Licenses and third-party notices are in licenses/.

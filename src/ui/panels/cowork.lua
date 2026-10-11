@@ -33,7 +33,7 @@ return function(env)
 
 		P.sectionHeader(scroll.instance, {
 			title = "Cowork",
-			description = "Give your conversation more room in the browser. Follow the steps below on this computer. "
+			description = "Open UAI Bridge on this computer and click Start Cowork. The desktop app connects automatically. "
 				.. "Messages, tools, and permissions stay connected to this Roblox session.",
 			layoutOrder = 1,
 		})
@@ -54,6 +54,17 @@ return function(env)
 			order = order + 1
 			return order
 		end
+
+		local desktopCard = P.card(container, { name = "DesktopBridge", layoutOrder = nextOrder(), gap = theme.space.sm })
+		P.text(desktopCard, { text = "UAI Bridge desktop app", role = "label", layoutOrder = 1 })
+		P.text(desktopCard, { text = "Click Start Cowork in UAI Bridge.exe. This script finds it on port 28791 and reconnects when the app restarts. No token copying is needed. Manual connections below take priority when enabled.",
+			role = "caption", wrap = true, auto = "Y", layoutOrder = 2 })
+		local autoRow = P.row(desktopCard, { size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.sm, layoutOrder = 3 })
+		P.text(autoRow, { text = "Find desktop app automatically", role = "small", flex = "Fill", layoutOrder = 1 })
+		local autoToggle = C.switch(autoRow, { value = config.get("bridge.autoDiscover", true) == true,
+			onChange = function(value) config.set("bridge.autoDiscover", value) end })
+		autoToggle.instance.Name = "AutoDiscoverDesktop"
+		autoToggle.instance.LayoutOrder = 2
 
 		local statusCard = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
 
@@ -100,18 +111,21 @@ return function(env)
 			local shared = sessions.current()
 			if not status.running then
 				dot.BackgroundColor3 = theme.color.textTertiary
-				statusText.Text = "Not connected. Start the bridge, paste its token, then turn Enabled on."
+				statusText.Text = status.searching and "Looking for UAI Bridge. Click Start Cowork in the desktop app."
+					or "Not connected. Enable automatic discovery or configure a manual bridge below."
 				detail.Text = string.format("%s\nwould share: %s", status.url, shared.title)
 				return
 			end
 			if status.online then
 				dot.BackgroundColor3 = theme.color.success
-				statusText.Text = "Connected. Open the browser link and start chatting."
+				statusText.Text = status.source == "desktop" and "Desktop app connected automatically. Cowork is ready."
+					or "Connected. Open the browser link and start chatting."
 				detail.Text = string.format("%s\nsharing: %s\nqueued: %d", status.url, shared.title, status.queued or 0)
 				return
 			end
 			dot.BackgroundColor3 = theme.color.warn
-			statusText.Text = "Waiting for the bridge. Keep its terminal open and check the token and port."
+			statusText.Text = status.source == "desktop" and "Desktop app found. Connecting to Cowork..."
+				or "Waiting for the manual bridge. Check its token and port."
 			detail.Text = string.format("%s\n%s", status.url, tostring(status.error or "no answer yet"))
 		end
 
@@ -128,9 +142,9 @@ return function(env)
 			gap = 0,
 			layoutOrder = 1,
 		})
-		P.text(switchText, { text = "Enabled", role = "small" })
+		P.text(switchText, { text = "Manual bridge enabled", role = "small" })
 		P.text(switchText, {
-			text = "Turn on after starting the bridge and pasting its token below.",
+			text = "Use this for terminal-based setup. Turn it off to use desktop discovery.",
 			role = "caption",
 			color = theme.color.textTertiary,
 			wrap = true,
@@ -161,7 +175,7 @@ return function(env)
 		-- by whatever the tie-break happened to produce -- which is a card whose two
 		-- labels can end up over the wrong two fields.
 		local installerCard = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
-		P.text(installerCard, { text = "1. Download and start", role = "label", layoutOrder = 1 })
+		P.text(installerCard, { text = "Manual setup: download and start", role = "label", layoutOrder = 1 })
 		local installStatus = P.text(installerCard, { name = "BridgeDownloadStatus",
 			text = "Install Node.js 18+ on this computer. Download the files, then open a terminal in your executor workspace (the folder containing UAI). Run: node UAI/bridge/start.txt",
 			role = "caption", wrap = true, auto = "Y", layoutOrder = 2 })
@@ -274,6 +288,9 @@ return function(env)
 
 		describe()
 		local unsubscribeConfig = config.changed:connect(function(path)
+			if path == nil or path == "bridge" or path == "bridge.autoDiscover" then
+				autoToggle.set(config.get("bridge.autoDiscover", true) == true, true)
+			end
 			if path == nil or path == "bridge" or path == "bridge.enabled" then
 				toggle.set(config.get("bridge.enabled", false) == true, true)
 			end

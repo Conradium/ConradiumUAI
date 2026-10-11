@@ -1,0 +1,110 @@
+package.path = "test/?.lua;test/mock/?.lua;" .. package.path
+local envMock, json = require("env"), require("json")
+local passed = 0
+local function check(label, value) assert(value, label); passed = passed + 1; print("ok " .. label) end
+local function info(token, instance)
+	return { product = "project-uai-desktop", protocol = 1, port = 28791, token = token or ("a"):rep(64), instance = instance or "desktop-one" }
+end
+local function setup(value)
+	local h = envMock.new()
+	local state = { discovery = value, probes = 0, delay = 0, auth = {} }
+	h.http.desktop = function(req)
+		state.probes = state.probes + 1
+		check("discovery uses bounded native POST", req.method == "POST" and req.headers["X-UAI-Discovery"] == "1" and req.body == "{}")
+		return { StatusCode = state.discovery and 200 or 404, Body = json.encode(state.discovery or {}), delay = state.delay }
+	end
+	h.http.handler = function(req)
+		if req.url:find("/api/agent/", 1, true) then
+			state.auth[#state.auth + 1] = { url = req.url, token = req.headers.Authorization }
+			return { StatusCode = 200, Body = req.url:find("inbox", 1, true) and '{"commands":[]}' or '{}' }
+		end
+		return { StatusCode = 404, Body = '{}' }
+	end
+	local app = assert(h.boot())
+	h.settle(1)
+	return h, app, state
+end
+
+do
+	local h, app, state = setup(info())
+	check("desktop is discovered at boot", app.bridge.running and app.bridge.status().source == "desktop")
+	check("manual settings remain disabled and unchanged", app.config.get("bridge.enabled") == false and app.config.get("bridge.port") == 8790 and app.config.get("bridge.token") == "")
+	check("bridge uses discovered token and dedicated port", #state.auth > 0 and state.auth[1].token == "Bearer " .. ("a"):rep(64) and state.auth[1].url:find(":28791/", 1, true))
+	app.config.saveNow()
+	check("ephemeral credentials are absent from saved config", not json.encode(app.config.data):find(("a"):rep(64), 1, true))
+	state.discovery = info(("b"):rep(64), "desktop-two")
+	h.settle(6)
+	check("restart refreshes credentials automatically", app.env.require("net/bridge_connection").get().token == ("b"):rep(64))
+	check("restarted commands use new credentials", state.auth[#state.auth].token == "Bearer " .. ("b"):rep(64))
+	app.config.set("bridge.autoDiscover", false)
+	h.settle(1)
+	local probes = state.probes
+	h.settle(8)
+	check("opt-out stops discovery and disconnects", state.probes == probes and not app.bridge.running)
+	app.config.set("bridge.autoDiscover", true)
+	h.settle(1)
+	check("opt-in reconnects without script reload", app.bridge.running)
+	app.bridge.stop()
+	probes = state.probes
+	h.settle(6)
+	check("explicit stop suspends discovery", state.probes == probes and not app.bridge.running)
+	app.bridge.sync(); h.settle(1)
+	check("explicit reconnect resumes discovery", app.bridge.running)
+	app.destroy(); probes = state.probes; h.settle(8)
+	check("unload ends discovery", state.probes == probes)
+end
+
+do
+	local h, app, state = setup(nil)
+	check("app may be started after script", not app.bridge.running)
+	for _, bad in ipairs({ { product = "other", protocol = 1, port = 28791, token = ("a"):rep(64), instance = "x" },
+		{ product = "project-uai-desktop", protocol = 2, port = 28791, token = ("a"):rep(64), instance = "x" },
+		{ product = "project-uai-desktop", protocol = 1, port = 8790, token = ("a"):rep(64), instance = "x" },
+		{ product = "project-uai-desktop", protocol = 1, port = 28791, token = "bad", instance = "x" } }) do
+		state.discovery = bad; h.settle(5)
+		check("invalid discovery response cannot attach", not app.bridge.running)
+	end
+	state.discovery = info(); h.settle(5)
+	check("late desktop start connects", app.bridge.running)
+	app.config.set("bridge.token", "manual-token")
+	app.config.set("bridge.port", 8792)
+	app.config.set("bridge.enabled", true)
+	h.settle(1)
+	local probes = state.probes; h.settle(5)
+	check("enabled manual bridge takes precedence", app.bridge.status().source == "manual" and state.probes == probes)
+	check("manual bridge keeps its own endpoint", state.auth[#state.auth].url:find(":8792/", 1, true) and state.auth[#state.auth].token == "Bearer manual-token")
+	app.destroy()
+end
+
+do
+	local h, app, state = setup(nil)
+	state.discovery, state.delay = info(), 1
+	app.config.set("bridge.autoDiscover", true)
+	h.settle(0.3)
+	app.config.set("bridge.autoDiscover", false)
+	h.settle(2)
+	check("late discovery after opt-out cannot attach", not app.bridge.running)
+	app.config.set("bridge.autoDiscover", true); h.settle(0.3)
+	app.destroy(); h.settle(3)
+	check("late discovery after unload cannot attach", not app.bridge.running)
+end
+
+do
+	local h, app = setup(info())
+	local result, calls = nil, 0
+	h.sandbox.task.spawn(function()
+		result = app.env.require("net/relay").request({ url = "https://provider.invalid/v1", body = "{}", sessionId = "test" }, {}, function(spec)
+			check("relay uses effective desktop credentials", spec.url:find(":28791/", 1, true) and spec.headers.Authorization == "Bearer " .. ("a"):rep(64))
+			if spec.url:find("/api/hello", 1, true) then return { ok = true, body = '{"protocol":2,"instance":"desktop-one"}' } end
+			if spec.method == "POST" then
+				local body = json.decode(spec.body); calls = calls + 1
+				return { ok = true, body = json.encode({ id = body.id, state = "running" }) }
+			end
+			return { ok = true, body = json.encode({ id = spec.url:match("/api/inference/(.+)$"), state = "completed", status = 200, body = "answer" }) }
+		end)
+	end)
+	h.settle(3)
+	check("web inference works without saved manual enable/token", result and result.body == "answer" and calls == 1)
+	app.destroy()
+end
+print(string.format("%d desktop bridge checks passed", passed))

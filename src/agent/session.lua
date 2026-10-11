@@ -254,7 +254,7 @@ return function(env)
 			local validated, imageError = env.require("runtime/images").validate(images, session.id)
 			if not validated then return false, imageError end
 			images = validated
-			if #images > 0 and not config.get("bridge.enabled", false) then return false, "Connect the web bridge to send these images" end
+			if #images > 0 and not env.require("net/bridge_connection").enabled() then return false, "Connect the web bridge to send these images" end
 			local clean = util.trim(text)
 			if clean == "" and #images > 0 then clean = "Please look at the attached " .. (#images == 1 and "image." or "images."); text = clean end
 			if clean == "" then return false, "nothing to send" end

@@ -1169,6 +1169,25 @@ documented in [bridge/README.md](bridge/README.md). Executor downloads start wit
 `node UAI/bridge/start.txt`; Git checkouts use `node bridge/server.js`. Bridge test
 fixtures and helpers live under `bridge/tests/` and are excluded from downloads.
 
+The separate Windows launcher in `desktop/` owns a bundled bridge process in
+`--desktop` mode on `127.0.0.1:28791`. Start opens Cowork after a structured ready
+message; Stop/Exit use owned stdin control, and a Windows Job Object prevents
+orphan processes. Manual CLI behavior remains on its configured port (8790 by
+default). The desktop-only discovery POST rejects browser Origin/Fetch Metadata
+headers, non-loopback peers, incorrect Host and missing protocol headers. Native
+local programs share this trust boundary; ordinary API routes retain bearer auth.
+
+`net/bridge_connection` holds the effective connection and temporary desktop
+credentials. `bridge.autoDiscover` defaults to true, probes every four seconds
+with a two-second deadline, and yields to an explicitly enabled manual bridge.
+The token is never persisted or copied into manual settings. Discovery validates
+product, protocol, port, token and instance; stale completions after settings
+changes or unload cannot connect. `bridge.stop()` suspends discovery until sync
+or a connection-setting change. Commands, pictures and inference use the same
+effective connection. A changed endpoint/token aborts an active relay rather than
+resubmitting inference. Desktop tests exercise real local processes and simulated
+game input, not native Roblox/executor behavior. See [desktop/README.md](desktop/README.md).
+
 `dist/uai.lua` is what a user runs:
 
 ```lua

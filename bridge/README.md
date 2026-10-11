@@ -1,8 +1,13 @@
 # Cowork bridge
 
 Use UAI in your browser while Roblox runs your tools and keeps the conversation.
-Run both on the same computer. The bridge needs **Node.js 18 or newer** and has no
-production npm dependencies.
+Run both on the same computer. The [Windows desktop app](../desktop/README.md)
+bundles everything: extract its ZIP, open **UAI Bridge.exe**, click **Start
+Cowork**, and load the updated UAI script. The browser opens and Roblox connects
+automatically on dedicated port **28791**. No terminal or token copying is needed.
+
+The terminal workflow below needs **Node.js 18 or newer** and has no production
+npm dependencies. It retains port 8790 and manual pairing.
 
 ## Start in three steps
 
@@ -131,4 +136,7 @@ cause a second provider dispatch. Active upload bodies and provider bodies are
 bounded separately. Model vision support remains provider-specific.
 
 The bridge binds to loopback, rotates its bearer token on restart,
-checks browser origins and serves local assets under a same-origin CSP.
+checks browser origins and serves local assets under a same-origin CSP. Desktop
+mode adds a native-only local discovery route with exact Host checking, a custom
+POST header, browser-header rejection and no CORS. See the desktop guide for its
+local-program trust boundary and launcher lifecycle tests.

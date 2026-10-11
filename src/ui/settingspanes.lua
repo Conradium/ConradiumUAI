@@ -254,7 +254,7 @@ return function(env)
 				}
 			end
 		end
-		if config.get("bridge.enabled", false) == true then
+		if env.require("net/bridge_connection").enabled() then
 			list[#list + 1] = { key = "Web bridge", value = bridgeModule.status().url }
 		end
 		if #list == 0 then
