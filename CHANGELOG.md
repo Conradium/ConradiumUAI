@@ -4,6 +4,18 @@
 
 Portable files, faster routine work, and clearer reasoning and provider feedback.
 
+### October 11 update
+
+- Stop presenting a failed decompile as script source. A decompiler that fails
+  returns a comment notice rather than raising, so the notice is rejected, the
+  bundled luacid fallback is tried, and its own failure is reported with the
+  reason instead of being cached or displayed as code.
+- Install the bundled luacid fallback with the executor's bytecode and HTTP
+  functions pinned behind the host's own globals, and refuse unreadable or empty
+  bytecode before a request. It now works where a host compiles chunks into a
+  narrower environment. `lune run test/luacid_fallback.luau` covers it with the
+  real Luau compiler.
+
 ### October 10 update
 
 - Refresh model/provider identity on fallback requests. Isolate request-hook

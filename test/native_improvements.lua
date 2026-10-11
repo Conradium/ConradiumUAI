@@ -48,6 +48,31 @@ case("decompile fallback returns safe structured failures without execution", fu
 	f.healthy(); f.close()
 end)
 
+case("failure notices are never presented as source and defer to a usable fallback", function()
+	local f = F.new(); local sources, refs, caps = f.env.require("runtime/script_sources"), f.env.require("runtime/instance_refs"), f.env.require("runtime/caps")
+	local luacid = f.env.require("runtime/luacid")
+	local key = refs.id(object(f, "LocalScript", "NoticeTarget"))
+	caps.fn.decompile = function() return "-- Failed to decompile\n-- fixture-private-host-detail" end
+	local installed = 0
+	luacid.install = function()
+		installed = installed + 1
+		return function() return "-- Decompiler API request failed\n-- HTTP 403\n-- rate limited" end
+	end
+	local failed, message, detail = f.run(function() return sources.inspect(key, nil, { decompile = true }) end)
+	check("a host notice is not source and the fallback is consulted", installed == 1 and not failed and detail.code == "decompiler_failure"
+		and not has(message, "fixture-private") and has(message, "luacid"))
+	check("the service's own title is reported without its response body", has(detail.diagnostics, "Decompiler API request failed")
+		and not has(detail.diagnostics, "rate limited"))
+	luacid.install = function() return function() return "local answer: number = 42\nreturn answer" end end
+	local recovered = assert(f.run(function() return sources.inspect(key, nil, { refresh = true, decompile = true }) end))
+	check("usable fallback source replaces a comment-only host result", recovered.method == "decompiled" and recovered.origin == "luacid"
+		and recovered.readOnly and recovered.source:find("return answer", 1, true) ~= nil)
+	luacid.install = function() return function() return "" end end
+	local blank = assert(f.run(function() return sources.inspect(key, nil, { refresh = true, decompile = true }) end))
+	check("a blank decompile stays an empty snapshot", blank.status == "empty" and blank.bytes == 0 and blank.origin == "luacid")
+	f.healthy(); f.close()
+end)
+
 case("duplicate decompiles share one worker and cancelled owners cannot steal completion", function()
 	local f = F.new(); local sources, refs = f.env.require("runtime/script_sources"), f.env.require("runtime/instance_refs")
 	local key = refs.id(object(f, "LocalScript", "Slow")); local calls, results = 0, {}

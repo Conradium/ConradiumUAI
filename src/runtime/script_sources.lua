@@ -13,6 +13,32 @@ return function(env)
 	local function id(prefix) serial = serial + 1; return prefix .. ":" .. refs.epoch .. ":" .. serial end
 	local function hash(source) local value = 5381; for i = 1, #source do value = (value * 33 + source:byte(i)) % 4294967296 end; return string.format("%08x", value) end
 	M.hash = hash
+	-- A decompiler, and the bundled luacid service, report a failed decompile as
+	-- a comment notice rather than an error, so a returned string is not proof of
+	-- source. Real decompiled code always carries at least one statement, so
+	-- text that is present and entirely comment is a failure notice that must
+	-- not be cached, shown, or allowed to displace a working fallback. A blank
+	-- result stays a legitimate empty snapshot.
+	local function notice(source)
+		if type(source) ~= "string" then return true end
+		local seen = false
+		for line in source:gmatch("[^\n]+") do
+			if line:match("%S") then
+				seen = true
+				if not line:match("^%s*%-%-") then return false end
+			end
+		end
+		return seen
+	end
+	-- The bundled service's own failure titles, surfaced without its detail text:
+	-- a notice can carry a remote response body, which does not belong in
+	-- diagnostics. Its two titles are pinned to the vendored asset.
+	local NOTICE_TITLES = { ["Failed to read script bytecode"] = true, ["Decompiler API request failed"] = true }
+	local function noticeTitle(source)
+		if type(source) ~= "string" then return nil end
+		local first = (source:match("^%s*([^\n]*)") or ""):gsub("^%-%-%s*", "")
+		return NOTICE_TITLES[first] and first or nil
+	end
 	local function failure(code, message, instanceId, method)
 		return { id = id("source"), instanceId = instanceId, runtimeEpoch = refs.epoch, method = method or "source",
 			status = (code == "expired_snapshot" and "expired") or ((code == "decompiler_failure" or code == "invalid_source" or code == "source_failure") and "error") or "unavailable",
@@ -131,23 +157,32 @@ return function(env)
 						-- The host's own decompiler first; the bundled luacid fallback
 						-- when it is missing or fails. A client whose executor has no
 						-- native decompiler still reaches source through the service.
-						local decompiled, from
+						-- Results are checked for failure notices, because a broken
+						-- decompiler reports them as a string instead of raising.
+						local decompiled, from, fallbackNote
 						if caps.fn.decompile then
 							local okRead, value = pcall(caps.fn.decompile, object)
-							if okRead and type(value) == "string" then decompiled, from = value, "decompiled" end
+							if okRead and not notice(value) then decompiled, from = value, "decompiled" end
 						end
 						if not decompiled then
-							local fallback = env.require("runtime/luacid").install()
+							local fallback, why = env.require("runtime/luacid").install()
 							if fallback then
 								local okRead, value = pcall(fallback, object)
-								if okRead and type(value) == "string" then decompiled, from = value, "luacid" end
+								if okRead and not notice(value) then decompiled, from = value, "luacid"
+								else
+									local title = okRead and noticeTitle(value) or nil
+									fallbackNote = "The bundled luacid fallback " .. (title and ("reported: " .. title) or "returned no source") .. "."
+								end
+							else
+								fallbackNote = "The bundled luacid fallback is unavailable: " .. tostring(why) .. "."
 							end
 						end
 						if not decompiled then
+							local reason = " " .. (fallbackNote or "No further decompiler was available.")
 							if caps.fn.decompile then
-								return nil, "Decompiler failed to return source", failure("decompiler_failure", "Decompiler failed to return source; host error text was omitted", instanceId, "decompiled")
+								return nil, "Decompiler failed to return source." .. reason, failure("decompiler_failure", "Decompiler failed to return source; host error text was omitted." .. reason, instanceId, "decompiled")
 							end
-							return nil, "Decompiler unavailable on this host", failure("decompiler_unavailable", "Source is unreadable and no decompiler is available", instanceId)
+							return nil, "Decompiler unavailable on this host." .. reason, failure("decompiler_unavailable", "Source is unreadable and no decompiler is available." .. reason, instanceId)
 						end
 						source, read, used, origin = decompiled, true, "decompiled", from
 					end

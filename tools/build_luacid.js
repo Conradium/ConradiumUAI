@@ -39,8 +39,33 @@ return function(env)
 ${asset}
 ]==]
 
+\t-- The asset reads bytecode, sends an executor HTTP request, and publishes on
+\t-- getgenv, which it calls unconditionally. The fallback is advertised only
+\t-- when every one of those is present.
 \tfunction M.available()
-\t\treturn caps.fn.loadstring ~= nil and caps.fn.getscriptbytecode ~= nil and caps.fn.request ~= nil
+\t\treturn caps.fn.loadstring ~= nil and caps.fn.getscriptbytecode ~= nil
+\t\t\tand caps.fn.request ~= nil and caps.fn.getgenv ~= nil
+\tend
+
+\t-- The asset resolves getscriptbytecode and request as plain globals, which
+\t-- depends on the environment the host compiles chunks into. Pin the two
+\t-- functions this client already probed, behind the host's own globals, and
+\t-- treat missing or empty bytecode as a read error so an unreadable script
+\t-- cannot become an empty API request.
+\tlocal function executorEnvironment(globals)
+\t\tlocal getscriptbytecode, request = caps.fn.getscriptbytecode, caps.fn.request
+\t\treturn setmetatable({
+\t\t\t_G = globals,
+\t\t\tgetgenv = caps.fn.getgenv,
+\t\t\trequest = request,
+\t\t\tgetscriptbytecode = function(object)
+\t\t\t\tlocal value = getscriptbytecode(object)
+\t\t\t\tif type(value) ~= "string" or value == "" then
+\t\t\t\t\terror("the host returned no bytecode for this script", 0)
+\t\t\t\tend
+\t\t\t\treturn value
+\t\t\tend,
+\t\t}, { __index = globals })
 \tend
 
 \t-- Compiles and runs the fallback once, then hands back the function it
@@ -53,21 +78,25 @@ ${asset}
 \t\tif caps.fn.getscriptbytecode == nil then return nil, "the host cannot read script bytecode (getscriptbytecode is unavailable)" end
 \t\tif caps.fn.request == nil then return nil, "the host has no executor HTTP function for luacid" end
 \t\tlocal getgenv = caps.fn.getgenv
-\t\tlocal previous
+\t\tlocal globals, previous
 \t\tif getgenv then
-\t\t\tlocal okEnv, globals = pcall(getgenv)
-\t\t\tif okEnv and type(globals) == "table" then
+\t\t\tlocal okEnv, value = pcall(getgenv)
+\t\t\tif okEnv and type(value) == "table" then
+\t\t\t\tglobals = value
 \t\t\t\tprevious = globals.decompile
 \t\t\t\tif globals.request == nil then globals.request = caps.fn.request end
 \t\t\tend
 \t\tend
 \t\tlocal loader, why = caps.fn.loadstring(M.SOURCE)
 \t\tif not loader then return nil, "luacid could not be compiled: " .. tostring(why) end
+\t\tif globals and type(setfenv) == "function" then
+\t\t\tpcall(setfenv, loader, executorEnvironment(globals))
+\t\tend
 \t\tlocal ok, err = pcall(loader)
 \t\tif not ok then return nil, "luacid failed to initialise: " .. tostring(err) end
-\t\tlocal decompiler = getgenv and getgenv().decompile or nil
-\t\tif getgenv and type(decompiler) == "function" then
-\t\t\tpcall(function() getgenv().decompile = previous end)
+\t\tlocal decompiler = globals and globals.decompile or nil
+\t\tif globals and type(decompiler) == "function" then
+\t\t\tpcall(function() globals.decompile = previous end)
 \t\tend
 \t\tif type(decompiler) ~= "function" then return nil, "luacid did not publish a decompiler" end
 \t\tM.installed = decompiler

@@ -583,7 +583,12 @@ Luau compiler, then run a scenario file through the same offline harness:
 lune run test/lune_runner.luau test/mobile_ui.lua
 lune run test/lune_runner.luau test/mobile_workflows.lua
 lune run test/lune_runner.luau test/shared_ui_layout.lua
+lune run test/luacid_fallback.luau
 ```
+
+The last check needs only Lune. It compiles the vendored luacid asset with real
+Luau, which the LuaJIT harness cannot, and verifies the fallback installs
+through its pinned environment and calls the service as the client expects.
 
 These checks use mocked Roblox services. They verify code, geometry and
 interactions, but do not render native Roblox text or GUI layouts.

@@ -63,6 +63,10 @@ return function(env)
 				{ category = "improved", label = "Project links and app attribution", items = {
 					"OpenRouter app attribution, the Cowork bridge download and the published loader and site links now use the project's new Project-Ptolemy repository after the move from the personal account. Saved OpenRouter providers pick up the new URL on the next start; a referer set by hand is left alone.",
 				} },
+				{ category = "fixed", label = "October 11: script source fallback", items = {
+					"A failed decompile is no longer shown as script source. A decompiler that fails returns a comment notice rather than raising, so the notice is rejected, the bundled luacid fallback is tried, and its own failure is reported with the reason instead of being cached or displayed as code.",
+					"The bundled luacid fallback is installed with the executor's bytecode and HTTP functions pinned behind the host's own globals, and unreadable or empty bytecode is refused before a request. It now works where a host compiles chunks into a narrower environment.",
+				} },
 			},
 		},
 		{

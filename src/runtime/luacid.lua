@@ -280,8 +280,33 @@ getgenv().decompile = function(src)
 end
 ]==]
 
+	-- The asset reads bytecode, sends an executor HTTP request, and publishes on
+	-- getgenv, which it calls unconditionally. The fallback is advertised only
+	-- when every one of those is present.
 	function M.available()
-		return caps.fn.loadstring ~= nil and caps.fn.getscriptbytecode ~= nil and caps.fn.request ~= nil
+		return caps.fn.loadstring ~= nil and caps.fn.getscriptbytecode ~= nil
+			and caps.fn.request ~= nil and caps.fn.getgenv ~= nil
+	end
+
+	-- The asset resolves getscriptbytecode and request as plain globals, which
+	-- depends on the environment the host compiles chunks into. Pin the two
+	-- functions this client already probed, behind the host's own globals, and
+	-- treat missing or empty bytecode as a read error so an unreadable script
+	-- cannot become an empty API request.
+	local function executorEnvironment(globals)
+		local getscriptbytecode, request = caps.fn.getscriptbytecode, caps.fn.request
+		return setmetatable({
+			_G = globals,
+			getgenv = caps.fn.getgenv,
+			request = request,
+			getscriptbytecode = function(object)
+				local value = getscriptbytecode(object)
+				if type(value) ~= "string" or value == "" then
+					error("the host returned no bytecode for this script", 0)
+				end
+				return value
+			end,
+		}, { __index = globals })
 	end
 
 	-- Compiles and runs the fallback once, then hands back the function it
@@ -294,21 +319,25 @@ end
 		if caps.fn.getscriptbytecode == nil then return nil, "the host cannot read script bytecode (getscriptbytecode is unavailable)" end
 		if caps.fn.request == nil then return nil, "the host has no executor HTTP function for luacid" end
 		local getgenv = caps.fn.getgenv
-		local previous
+		local globals, previous
 		if getgenv then
-			local okEnv, globals = pcall(getgenv)
-			if okEnv and type(globals) == "table" then
+			local okEnv, value = pcall(getgenv)
+			if okEnv and type(value) == "table" then
+				globals = value
 				previous = globals.decompile
 				if globals.request == nil then globals.request = caps.fn.request end
 			end
 		end
 		local loader, why = caps.fn.loadstring(M.SOURCE)
 		if not loader then return nil, "luacid could not be compiled: " .. tostring(why) end
+		if globals and type(setfenv) == "function" then
+			pcall(setfenv, loader, executorEnvironment(globals))
+		end
 		local ok, err = pcall(loader)
 		if not ok then return nil, "luacid failed to initialise: " .. tostring(err) end
-		local decompiler = getgenv and getgenv().decompile or nil
-		if getgenv and type(decompiler) == "function" then
-			pcall(function() getgenv().decompile = previous end)
+		local decompiler = globals and globals.decompile or nil
+		if globals and type(decompiler) == "function" then
+			pcall(function() globals.decompile = previous end)
 		end
 		if type(decompiler) ~= "function" then return nil, "luacid did not publish a decompiler" end
 		M.installed = decompiler
