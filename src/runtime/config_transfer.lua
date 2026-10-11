@@ -184,6 +184,7 @@ return function(env)
 		end
 		local enums = {
 			["bridge.runtime"] = { game = true, web = true },
+			["relay.mode"] = { auto = true, always = true, off = true },
 			["permissions.mode"] = { readonly = true, ask = true, auto = true, full = true },
 			["ui.density"] = { comfortable = true, compact = true },
 			["ui.reduceMotion"] = { auto = true, on = true, off = true },
@@ -197,6 +198,9 @@ return function(env)
 		end
 		if merged.bridge.requestTimeout < 10 or merged.bridge.requestTimeout > 86400 then
 			return nil, "config.bridge.requestTimeout must be between 10 and 86400 seconds"
+		end
+		if merged.relay.port < 1 or merged.relay.port > 65535 then
+			return nil, "config.relay.port must be between 1 and 65535"
 		end
 		ok, err = array(merged.memory.entries, "config.memory.entries", function(entry, path)
 			local valid, why = object(entry, path)

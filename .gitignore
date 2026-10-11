@@ -6,3 +6,8 @@ desktop/.build/
 desktop/release/
 desktop/src/**/bin/
 desktop/src/**/obj/
+companion/.gradle/
+companion/build/
+companion/app/build/
+companion/local.properties
+companion/.cache/

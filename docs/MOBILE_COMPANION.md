@@ -1,8 +1,15 @@
 # Mobile Relay and Android Companion — Detailed Plan
 
-Status: planning only. No implementation in this change.
+Status: client and companion implemented; device verification pending.
 Scope decision: Android only. The existing `bridge/` directory is not modified.
 PC Cowork behaviour must be observationally unchanged.
+
+Implemented: the client decoupling (`relay.*` config, `net/relay_link`,
+`net/transport`, target-aware `net/relay.lua`, provider gating) verified by
+`test/mobile_relay.lua`; and the companion app in `companion/` (Ktor loopback
+server, job engine, foreground service, Compose UI) verified by JVM contract tests.
+Still required: the Section 9.4 executor measurement and on-device survival checks,
+which need a phone.
 
 This document is the source of truth for building the Android companion app and the
 client-side decoupling that lets the in-game mobile UI route inference through it.

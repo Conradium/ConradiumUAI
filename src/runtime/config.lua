@@ -194,6 +194,18 @@ return function(env)
 			runtime = "game",
 			requestTimeout = 180,
 		},
+		-- The local inference relay (mobile companion). It owns the upstream
+		-- connection so every executor-visible call stays short, which is what a
+		-- phone's executor otherwise cuts off. `token`/`instance` are written by
+		-- `/api/pair` and the probe; they are never copied into Cowork settings.
+		relay = {
+			mode = "auto",
+			port = 8790,
+			token = "",
+			instance = "",
+			server = "",
+			placeId = 0,
+		},
 		logs = {
 			mirror = false,
 			level = "info",

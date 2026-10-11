@@ -366,6 +366,10 @@ local function start()
 	local bridgeOk, bridgeWhy = bridge.sync()
 	if not bridgeOk and bridgeWhy then log.warn("bridge", "not started", bridgeWhy) end
 
+	-- The local relay prober starts alongside the bridge. It only spawns, so boot
+	-- never waits on it, and it is a no-op while its mode is off.
+	env.require("net/relay_link").ensure()
+
 	-- The handle a host script (or the user, from a console) can drive.
 	-- Declared before it is populated: `local handle = { ... }` does not put `handle`
 	-- in scope inside its own initialiser, so every closure below that reaches for

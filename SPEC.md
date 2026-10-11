@@ -1188,6 +1188,21 @@ effective connection. A changed endpoint/token aborts an active relay rather tha
 resubmitting inference. Desktop tests exercise real local processes and simulated
 game input, not native Roblox/executor behavior. See [desktop/README.md](desktop/README.md).
 
+The Android companion in `companion/` is a narrower relay, not a second Cowork: it
+holds the provider connection so every executor-visible call stays short, which is
+what a phone executor's HTTP wall-clock limit otherwise cuts off. It implements only
+`/api/hello`, `/api/pair`, `/api/inference` and `/api/status` — no agent routes, no
+web UI, no static files. `relay.mode` defaults to `auto`; `net/relay_link` probes
+`127.0.0.1:8790`, requires protocol 2 and the `uai-relay` marker (so a PC bridge on
+the same port is never mistaken for it), and pairs once for a token that survives
+companion restarts. `net/transport` is the single transport decision point: an
+enabled Cowork connection wins, then the companion, then the executor directly.
+Images always relay because they need a resolver. `relay.*` is independent of
+`bridge.*` and is preserved across settings import. The companion never persists or
+logs provider keys, binds loopback only, and compares its token in constant time.
+JVM tests cover the engine and server contract; a device is needed for the service
+and the executor compatibility measurement. See [docs/MOBILE_COMPANION.md](docs/MOBILE_COMPANION.md).
+
 `dist/uai.lua` is what a user runs:
 
 ```lua

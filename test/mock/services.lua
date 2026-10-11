@@ -23,6 +23,7 @@ function M.build(deps)
 		queued = {},
 		handler = nil,
 		desktop = nil,
+		relay = nil,
 		requestCount = 0,
 	}
 
@@ -35,6 +36,7 @@ function M.build(deps)
 		http.queued = {}
 		http.handler = nil
 		http.desktop = nil
+		http.relay = nil
 		http.requestCount = 0
 	end
 
@@ -53,12 +55,16 @@ function M.build(deps)
 		http.log[#http.log + 1] = entry
 
 		local response
-		-- Background desktop discovery is plumbing, not part of a scenario's script.
-		-- It is intercepted before the general handler so a handler that answers
-		-- every request cannot record, queue a reply for, or starve it. A scenario
-		-- that wants a desktop app supplies `http.desktop`; otherwise none listens.
+		-- Background discovery and the companion probe are plumbing, not part of a
+		-- scenario's script. They are intercepted before the general handler so a
+		-- handler that answers every request cannot record, starve or busy-wait on
+		-- them, and so they never consume a queued provider response. A scenario
+		-- that wants a desktop app or a companion supplies `http.desktop`/`http.relay`.
+		local companion = entry.url:match("^http://127%.0%.0%.1:8790/api/") ~= nil
 		if entry.url == "http://127.0.0.1:28791/api/desktop/discover" then
 			response = http.desktop and http.desktop(entry) or { StatusCode = 404, Body = "not found" }
+		elseif companion and (http.relay ~= nil or entry.url:match("/api/(hello|pair)") ~= nil) then
+			response = http.relay and http.relay(entry) or { StatusCode = 599, Body = "no companion" }
 		elseif http.handler then
 			response = http.handler(entry)
 		end

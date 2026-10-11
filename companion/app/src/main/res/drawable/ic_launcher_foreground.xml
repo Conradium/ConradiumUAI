@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Project UAI mark in the library's stroke language: a relay arc between two
+     nodes. Vector only, so the package carries no bitmap assets. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M42,38 L42,70 M42,38 a10,10 0 0 1 0,20"
+        android:strokeColor="#F2EFE2"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M66,38 L66,70 M66,50 a10,10 0 0 0 0,20"
+        android:strokeColor="#F2EFE2"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+</vector>

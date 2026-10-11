@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">UAI Relay</string>
+    <string name="notification_channel">Relay status</string>
+    <string name="notification_channel_description">Shows the local inference relay while it is running</string>
+    <string name="notification_title">UAI Relay active</string>
+    <string name="notification_stop">Stop</string>
+</resources>

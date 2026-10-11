@@ -20,7 +20,7 @@ return function(env)
 		elseif kind == "setting" then
 			local path = tostring(command.path or "")
 			local section = path:match("^([^.]+)%.")
-			if not ({ ui = true, agent = true, logs = true, memory = true, iy = true, identity = true })[section]
+			if not ({ ui = true, agent = true, logs = true, memory = true, iy = true, identity = true, relay = true })[section]
 				and path ~= "bridge.requestTimeout" then error("Setting is not editable here", 0) end
 			local default = util.get(config.defaults, path)
 			if default == nil or type(default) == "table" or type(command.value) ~= type(default) then error("Invalid setting value", 0) end
@@ -34,6 +34,7 @@ return function(env)
 				["ui.codeTheme"] = { dark = true, light = true },
 				["ui.transcriptWidth"] = { narrow = true, medium = true, wide = true },
 				["iy.mode"] = { off = true, hidden = true, visible = true },
+				["relay.mode"] = { auto = true, always = true, off = true },
 				["agent.effort"] = { low = true, medium = true, high = true, xhigh = true, max = true },
 			}
 			if choices[path] and not choices[path][command.value] then error("Unsupported setting choice", 0) end
@@ -42,6 +43,7 @@ return function(env)
 				["agent.toolTimeout"] = { 1, 86400 }, ["agent.requestTimeout"] = { 1, 86400 },
 				["bridge.requestTimeout"] = { 10, 86400 }, ["agent.retries"] = { 1, 10 },
 				["agent.contextTokens"] = { 1000, 2000000 }, ["agent.contextFraction"] = { 0.3, 0.95 },
+				["relay.port"] = { 1, 65535 },
 				["agent.maxTokens"] = { 1, 1000000 } }
 			local range = ranges[path]
 			if range and (command.value < range[1] or command.value > range[2]) then error("Setting is outside its supported range", 0) end
@@ -110,6 +112,7 @@ return function(env)
 			if not preview then error(err, 0) end
 			-- Connection credentials stay valid until the acknowledgement is delivered.
 			preview.config.bridge = util.deepCopy(config.get("bridge"))
+			preview.config.relay = util.deepCopy(config.get("relay"))
 			local ok, why = transfer.apply(preview)
 			if not ok then error(why, 0) end
 		elseif kind == "logs:clear" then env.require("runtime/log").clear(); env.require("net/http").clearHistory()

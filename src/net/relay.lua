@@ -1,17 +1,27 @@
--- Node owns the provider connection; every executor exchange is short. A lost
--- submission is retried with the same ID, never as a second inference request.
+-- The relay owns the provider connection; every executor exchange stays short.
+-- A lost submission is retried with the same ID, never as a second inference
+-- request. The endpoint is resolved per call so a companion that appears or
+-- restarts mid-session is picked up without a reload.
 return function(env)
 	local util = env.require("runtime/util")
 	local clock = env.require("runtime/clock")
 	local config = env.require("runtime/config")
 	local dispose = env.require("runtime/dispose")
-	local connection = env.require("net/bridge_connection")
+	local transport = env.require("net/transport")
 	local alive, pending = true, {}
 	local M = {}
+
+	local function noRelay()
+		return { status = 599, body = util.encode({ error = { message =
+			"This request needs a local relay. Start the Project UAI Companion app on this device, "
+			.. "or enable the web bridge in Cowork settings." } }), headers = {}, via = "web", terminal = true }, nil
+	end
+
 	function M.request(spec, headers, call)
-		local endpoint = connection.get()
-		local base = "http://127.0.0.1:" .. tostring(endpoint.port)
-		local token = endpoint.token
+		local endpoint = transport.endpoint()
+		if not endpoint then return noRelay() end
+		local base, token, target = endpoint.base, endpoint.token, endpoint.target
+		local via = target == "companion" and "relay" or "web"
 		local timeout = util.clamp(tonumber(config.get("bridge.requestTimeout", 180)) or 180, 10, 86400)
 		local id = "inference_" .. env.services.HttpService:GenerateGUID(false)
 		local deadline = clock.ms() + (timeout + 30) * 1000
@@ -24,20 +34,28 @@ return function(env)
 		end
 		pending[id] = cancel
 		local function ended()
-			local current = connection.get()
-			return not alive or not current.enabled or current.token ~= token or current.port ~= endpoint.port
+			local current = transport.endpoint()
+			return not alive or not current or current.target ~= target or current.token ~= token
+				or current.base ~= base or (current.instance or "") ~= (endpoint.instance or "")
 				or (spec.aborted and spec.aborted())
 		end
 		local function failure(message)
 			pending[id] = nil
 			return { status = 599, body = util.encode({ error = { message = message } }), headers = {},
-				via = "web", terminal = true }, nil
+				via = via, terminal = true }, nil
 		end
-		if token == "" then return failure("Web runtime needs the bridge token in Cowork settings.") end
-		if not endpoint.enabled then return failure("Reconnect the web bridge to use the images in this conversation.") end
+		if token == "" then
+			if target == "companion" then
+				return failure("The companion relay is not paired. Open Cowork settings and pair again.")
+			end
+			return failure("Web runtime needs the bridge token in Cowork settings.")
+		end
 		local hello = short("GET", "/api/hello")
 		local info = hello and hello.ok and util.decode(hello.body)
 		if type(info) ~= "table" or info.protocol ~= 2 or not info.instance then
+			if target == "companion" then
+				return failure("The companion relay did not answer. Start the Project UAI Companion app, then retry.")
+			end
 			return failure("Web runtime cannot connect. Start the updated bridge/server.js and check its token.")
 		end
 		local payload = util.encode({ id = id, instance = info.instance, url = spec.url, headers = headers,
@@ -57,7 +75,7 @@ return function(env)
 				submitted = true
 				if job.state == "completed" then
 					pending[id] = nil
-					return { status = job.status, headers = job.headers or {}, body = job.body or "", via = "web", inferenceId = id }
+					return { status = job.status, headers = job.headers or {}, body = job.body or "", via = via, inferenceId = id }
 				elseif job.state ~= "running" then
 					return failure(job.error or ("Relay job " .. tostring(job.state) .. "; inference was not resubmitted."))
 				end
@@ -82,6 +100,6 @@ return function(env)
 		alive = false
 		for _, cancel in pairs(pending) do cancel() end
 		pending = {}
-	end, "web inference")
+	end, "relayed inference")
 	return M
 end
