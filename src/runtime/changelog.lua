@@ -74,7 +74,7 @@ return function(env)
 			sections = {
 				{ category = "added", label = "Project and appearance", items = {
 					"Open ProjectUAI from the player profile menu for project information and Star us on GitHub, with browser, clipboard and selectable-link support. What's New stays separate.",
-					"UI LIB v1.3.0 adds a text mode switch, GetTheme and ToggleTheme to its existing Light/Dark system. Existing configuration profiles can retain the mode and custom accent; older profiles remain supported.",
+					"UI LIB v1.3.0 adds a sun/moon mode icon beside the window controls, GetTheme and ToggleTheme to its existing Light/Dark system. Existing configuration profiles can retain the mode and custom accent; older profiles remain supported.",
 					"Theme changes preserve controls, drafts and open overlays. Custom accent foregrounds use sRGB contrast; ThemeToggle=false keeps a script's existing appearance control.",
 				} },
 				{ category = "improved", label = "Context and tool work", items = {

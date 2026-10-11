@@ -106,7 +106,7 @@ Reliable context, consistent game files, and theme controls.
   information and Star us on GitHub. Open the repository when supported, with
   clipboard and selectable-link fallbacks. Keep the existing What's New section.
 - UI LIB v1.3.0 builds on its existing Light/Dark palettes and live bindings:
-  add a built-in text mode switch, `GetTheme`, `ToggleTheme`, optional
+  add a built-in sun/moon mode icon beside the window controls, `GetTheme`, `ToggleTheme`, optional
   `ThemeToggle=false`, appearance persistence in existing profiles, and improved
   custom-accent foreground contrast. Preserve controls, drafts, overlays, and layout.
 - Validate with focused context, filesystem, tool, provider, subagent, and UI

@@ -283,6 +283,34 @@ return function(env)
 			ClipsDescendants = true, Size = UDim2.fromScale(1, 1),
 		}, { ScrollBarImageColor3 = "Muted" })
 	end
+	-- The two mode glyphs trace the reference art kept in assets/icons (moon.png
+	-- and sun.png): a crescent built from two arcs, and a ringed ray. Both are
+	-- assembled from the same frame strokes as every other control, so the
+	-- library still needs no uploaded image and the glyph takes its color from
+	-- the live theme like the rest of the window.
+	local function ray(cx, cy, inner, outer, angle)
+		local radians = math.rad(angle)
+		local dx, dy = math.cos(radians), math.sin(radians)
+		return { cx + dx * inner, cy + dy * inner, cx + dx * outer, cy + dy * outer }
+	end
+	local function arc(cx, cy, radius, from, sweep, steps)
+		local lines = {}
+		for index = 0, steps - 1 do
+			local start = math.rad(from + sweep * index / steps)
+			local finish = math.rad(from + sweep * (index + 1) / steps)
+			lines[index + 1] = {
+				cx + math.cos(start) * radius, cy + math.sin(start) * radius,
+				cx + math.cos(finish) * radius, cy + math.sin(finish) * radius,
+			}
+		end
+		return lines
+	end
+	local MOON = {}
+	for _, line in ipairs(arc(9.77, 9.90, 7.43, 3.2, 261.3, 15)) do MOON[#MOON + 1] = line end
+	for _, line in ipairs(arc(14.46, 5.13, 5.72, -152.7, -142.3, 8)) do MOON[#MOON + 1] = line end
+	local SUN = {}
+	for _, line in ipairs(arc(10, 10, 3.33, 0, 360, 16)) do SUN[#SUN + 1] = line end
+	for index = 0, 7 do SUN[#SUN + 1] = ray(10, 10, 5.78, 9.22, index * 45) end
 	local ICONS = {
 		close = { { 4, 4, 16, 16 }, { 16, 4, 4, 16 } },
 		minus = { { 4, 10, 16, 10 } },
@@ -292,6 +320,8 @@ return function(env)
 		sliders = { { 3, 5, 17, 5 }, { 3, 10, 17, 10 }, { 3, 15, 17, 15 }, { 7, 3, 7, 7 }, { 13, 8, 13, 12 }, { 8, 13, 8, 17 } },
 		grid = { { 4, 4, 8, 4 }, { 12, 4, 16, 4 }, { 4, 10, 8, 10 }, { 12, 10, 16, 10 }, { 4, 16, 8, 16 }, { 12, 16, 16, 16 } },
 		code = { { 6, 5, 2, 10 }, { 2, 10, 6, 15 }, { 14, 5, 18, 10 }, { 18, 10, 14, 15 }, { 12, 3, 8, 17 } },
+		moon = MOON,
+		sun = SUN,
 	}
 	function M.icon(owner, parent, name, color, size)
 		size = size or 18

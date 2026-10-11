@@ -941,7 +941,7 @@ when the host denies browser access. Both entry and modal reuse the frame-drawn
 brand mark. Viewing it does not mark release notes read.
 
 UI LIB retains its existing per-window Light/Dark token palettes and live bindings.
-Its built-in text mode action, `GetTheme` and `ToggleTheme` use `SetTheme`;
+Its built-in header mode icon, `GetTheme` and `ToggleTheme` use `SetTheme`;
 `ThemeToggle=false` permits a script's existing theme control. Configuration
 profiles optionally retain mode and custom accent, with validation before any
 changes and compatibility with earlier profiles. Custom accent foregrounds use

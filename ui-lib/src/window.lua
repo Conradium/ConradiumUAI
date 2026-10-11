@@ -64,7 +64,8 @@ return function(env)
 	function Window:SetTheme(name, accent)
 		self.Theme = T.resolve(name, accent)
 		self._themeName, self._accent = name or "Dark", accent
-		if self._themeLabel then self._themeLabel.Text = self._themeName == "Dark" and "Light mode" or "Dark mode" end
+		-- The action carries the mode it offers: sun in Dark, moon in Light.
+		if self._themeIcon then self._themeIcon(self._themeName == "Light") end
 		self:_Refresh()
 		return self
 	end
@@ -291,8 +292,6 @@ return function(env)
 		local searchVisible = self._search and (searchFocused or (height >= 300 and not (self.Touch and keyboardVisible)))
 		local search = searchVisible and self.Target + 12 or 0
 		local footer = T.Size.Footer
-		local themeHeight = self._themeToggle and not self._compact and (self.Target + 12) or 0
-		local themeWidth = self._themeToggle and math.max(96, math.ceil(78 * self.TextScale + 20)) or 0
 		if self._compact and height < 240 then nav = 0 end
 		if height < header + footer + self.Target then header = 0 end
 		self.Frame.Size = UDim2.fromOffset(math.floor(width), math.floor(height))
@@ -310,14 +309,18 @@ return function(env)
 		self._brandTile.Position = UDim2.fromOffset(18, math.floor((header - brand) / 2) - 8)
 		self._brandTile.Size = UDim2.fromOffset(brand + 16, brand + 16)
 		local titleInset = self._brand.Visible and (26 + brand + 20) or 20
+		-- Theme, Minimize and Close share one header row; the mode action sits
+		-- to the left of Minimize, and the row keeps full-size targets.
+		local actionSpan = (self.Target + 4) * (self._themeButton and 3 or 2) - 4
 		self._title.Position = UDim2.fromOffset(titleInset, short and 12 or 14)
-		self._title.Size = UDim2.new(1, -(titleInset + self.Target * 2 + 32), 0, titleHeight)
+		self._title.Size = UDim2.new(1, -(titleInset + actionSpan + 32), 0, titleHeight)
 		self._subtitle.Visible = not short and self._subtitle.Text ~= ""
 		self._subtitle.Position = UDim2.fromOffset(titleInset, 17 + titleHeight)
-		self._subtitle.Size = UDim2.new(1, -(titleInset + self.Target * 2 + 32), 0, subtitleHeight)
-		self._headerActions.Position = UDim2.new(1, -self.Target * 2 - 20, 0, (header - self.Target) / 2)
-		self._headerActions.Size = UDim2.fromOffset(self.Target * 2 + 4, self.Target)
+		self._subtitle.Size = UDim2.new(1, -(titleInset + actionSpan + 32), 0, subtitleHeight)
+		self._headerActions.Position = UDim2.new(1, -actionSpan - 16, 0, (header - self.Target) / 2)
+		self._headerActions.Size = UDim2.fromOffset(actionSpan, self.Target)
 		self._minimize.Size, self._close.Size = UDim2.fromOffset(self.Target, self.Target), UDim2.fromOffset(self.Target, self.Target)
+		if self._themeButton then self._themeButton.Size = UDim2.fromOffset(self.Target, self.Target) end
 		local profileHeight = 0
 		if self._profile then
 			profileHeight = self._profile.Layout(sidebar)
@@ -333,14 +336,8 @@ return function(env)
 		self._navCaption.Visible = not self._compact
 		self._nav.Position = UDim2.fromOffset(0, header + railHeading)
 		self._nav.Visible = not self._compact or nav > 0
-		self._nav.Size = self._compact and UDim2.new(1, self._themeToggle and -themeWidth - 12 or 0, 0, nav)
-			or UDim2.new(0, sidebar, 1, -header - railHeading - footer - profileHeight - themeHeight)
-		if self._themeToggle then
-			self._themeToggle.Visible = not self._compact or nav > 0
-			self._themeToggle.Size = UDim2.fromOffset(self._compact and themeWidth or sidebar - 24, self.Target)
-			self._themeToggle.Position = self._compact and UDim2.new(1, -themeWidth - 12, 0, header + 4)
-				or UDim2.new(0, 12, 1, -footer - profileHeight - themeHeight)
-		end
+		self._nav.Size = self._compact and UDim2.new(1, 0, 0, nav)
+			or UDim2.new(0, sidebar, 1, -header - railHeading - footer - profileHeight)
 		self._navLayout.FillDirection = self._compact and Enum.FillDirection.Horizontal or Enum.FillDirection.Vertical
 		self._nav.ScrollingDirection = self._compact and Enum.ScrollingDirection.X or Enum.ScrollingDirection.Y
 		self._nav.AutomaticCanvasSize = self._compact and Enum.AutomaticSize.X or Enum.AutomaticSize.Y
@@ -449,8 +446,10 @@ return function(env)
 		-- Window controls sit directly on the header with no resting fill: the
 		-- glyph is the control. Hover and gamepad selection brighten that glyph
 		-- instead of painting a tile behind it, and Close warms to the danger
-		-- tone rather than shouting in red until it is pointed at.
-		local function headerButton(name, icon, callback, tone)
+		-- tone rather than shouting in red until it is pointed at. The theme
+		-- action builds both reference faces up front and swaps their
+		-- visibility, so repeated mode changes rebuild nothing and leak nothing.
+		local function headerButton(name, icon, callback, tone, alternate)
 			local button = C.node(self, "TextButton", self._headerActions, { Name = name, BackgroundTransparency = 1 })
 			C.corner(button)
 			local hovered, selected = false, false
@@ -459,13 +458,30 @@ return function(env)
 				if hovered then return (tone == "Danger") and theme.Danger or theme.Text end
 				return theme.Muted
 			end
-			local glyph = C.icon(self, button, icon, glyphColor)
-			glyph.AnchorPoint, glyph.Position = Vector2.new(0.5, 0.5), UDim2.fromScale(0.5, 0.5)
+			local glyph = C.node(self, "Frame", button, {
+				Name = "Glyph", BackgroundTransparency = 1, Size = UDim2.fromOffset(18, 18),
+				AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			})
+			local faces = {}
+			local function face(iconName)
+				local frame = C.icon(self, glyph, iconName, glyphColor)
+				frame.AnchorPoint, frame.Position = Vector2.new(0.5, 0.5), UDim2.fromScale(0.5, 0.5)
+				faces[#faces + 1] = frame
+				return frame
+			end
+			local primary = face(icon)
+			local second = alternate and face(alternate) or nil
+			local function showAlternate(value)
+				if not second then return end
+				second.Visible, primary.Visible = value == true, value ~= true
+			end
 			local focus = C.stroke(self, button, "Accent"); focus.Transparency = 1
 			local function repaint()
 				local color = glyphColor(self.Theme)
-				for _, line in ipairs(glyph:GetChildren()) do
-					if line:IsA("Frame") then motion.to(self, line, { BackgroundColor3 = color }) end
+				for _, root in ipairs(faces) do
+					for _, line in ipairs(root:GetChildren()) do
+						if line:IsA("Frame") then motion.to(self, line, { BackgroundColor3 = color }) end
+					end
 				end
 				motion.to(self, focus, { Transparency = selected and 0 or 1 })
 			end
@@ -474,10 +490,15 @@ return function(env)
 			self._scope:Connect(button.SelectionGained, function() selected = true; repaint() end)
 			self._scope:Connect(button.SelectionLost, function() selected = false; repaint() end)
 			self._scope:Connect(button.Activated, callback)
-			return button
+			return button, showAlternate
+		end
+		if options.ThemeToggle ~= false then
+			self._themeButton, self._themeIcon = headerButton("Theme", "sun", function() self:ToggleTheme() end, nil, "moon")
+			self._themeIcon(self._themeName == "Light")
 		end
 		self._minimize = headerButton("Minimize", "minus", function() self:Minimize() end)
 		self._close = headerButton("Close", "close", function() self:Destroy() end, "Danger")
+		self._minimize.LayoutOrder, self._close.LayoutOrder = 1, 2
 		self._rail = C.node(self, "Frame", self.Frame, { Name = "NavigationRail" }, { BackgroundColor3 = "Sidebar" })
 		self._navCaption = C.text(self, self.Frame, "NAVIGATION", "Eyebrow", "Muted", { TextWrapped = false })
 		self._nav = C.scroll(self, self.Frame, "Tabs")
@@ -485,16 +506,6 @@ return function(env)
 		self._nav.BackgroundTransparency = 0
 		self._navLayout = C.list(self._nav, false, 6)
 		self._navPad = C.pad(self._nav, 12, 14)
-		if options.ThemeToggle ~= false then
-			self._themeToggle = C.node(self, "TextButton", self.Frame, { Name = "ThemeToggle" })
-			C.corner(self._themeToggle)
-			C.feedback(self, self._themeToggle)
-			self._themeLabel = C.text(self, self._themeToggle, self._themeName == "Dark" and "Light mode" or "Dark mode", "Body", "Text", {
-				Name = "ThemeLabel", Position = UDim2.fromOffset(8, 0), Size = UDim2.new(1, -16, 1, 0),
-				TextWrapped = false, TextXAlignment = Enum.TextXAlignment.Center,
-			})
-			self._scope:Connect(self._themeToggle.Activated, function() self:ToggleTheme() end)
-		end
 		self._profile = env.require("profile").new(self, self.Frame, options.GameName)
 		self._workspace = C.node(self, "Frame", self.Frame, { Name = "Workspace", Active = false }, { BackgroundColor3 = "Canvas" })
 		C.corner(self._workspace, 14); C.stroke(self, self._workspace, "Subtle")

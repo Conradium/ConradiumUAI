@@ -282,7 +282,8 @@ attribution, can be dragged anywhere in the safe viewport, and restores on a cli
 that was not a drag. Hide removes that pill too, and a notification that arrives
 while minimized updates its status. The top-right close button destroys the window. The
 Minimize and Close glyphs have no resting fill;
-hover brightens them and gamepad selection adds a focus outline. The desktop
+hover brightens them and gamepad selection adds a focus outline. The mode icon
+sits beside them, to the left of Minimize. The desktop
 resize grip stays in the bottom-right corner. Each window has independent theme and state. The footer
 remains pinned outside scrolling content. The sidebar profile stays below the
 scrolling tabs; compact and short layouts use the horizontal tabs and omit the
@@ -292,10 +293,10 @@ lookup when the script already knows its display name.
 
 ### Light and Dark modes
 
-Both modes use the same semantic tokens and live bindings. The built-in text
-action offers **Light mode** or **Dark mode** beside navigation: above the player
-profile on desktop and beside the scrolling tab strip on compact layouts. It
-keeps the same mouse, touch, and gamepad behavior as other actions. Set
+Both modes use the same semantic tokens and live bindings. The built-in mode
+action is a header icon to the left of Minimize that carries the mode it offers:
+a sun in Dark and a moon in Light. It keeps the same mouse, touch, and gamepad
+behavior as the other window controls. Set
 `ThemeToggle = false` to omit it when your application supplies its own control.
 
 `window:GetTheme()` returns the active name and optional custom accent.

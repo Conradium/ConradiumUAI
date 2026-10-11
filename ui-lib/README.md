@@ -24,7 +24,8 @@ draws its own brand mark and window-control glyphs. A pinned sidebar profile sho
 the local player and game; Roblox supplies the headshot. Owned transitions support
 reduced motion. Scripts own application logic.
 
-The built-in Light/Dark action uses the existing token palettes, including open
+The built-in Light/Dark action is a sun/moon header icon to the left of Minimize
+and uses the existing token palettes, including open
 pickers and dialogs. `GetTheme()` and `ToggleTheme()` complement `SetTheme()`;
 `ThemeToggle = false` omits the built-in action. Explicit configuration profiles
 also retain the chosen mode and custom accent, without a separate settings file.

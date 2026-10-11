@@ -27,15 +27,18 @@ field.Text = "unfinished draft"
 tab.Frame.CanvasPosition = dt.Vector2.new(0, 25)
 local scroll = tab.Frame.CanvasPosition
 local roots = { window.Frame, tab.Frame, toggle.Frame }
-local mode = node("ThemeToggle")
-check("mode action is built in and can be omitted", node("ThemeLabel").Text == "Light mode" and h.byName("ThemeToggle", other.ScreenGui) == nil)
+local mode = node("Theme")
+local function face(name) return node(name, node("Glyph", mode)) end
+check("mode action is a header icon and can be omitted", face("sun").Visible and not face("moon").Visible
+	and mode.Parent == window._headerActions and h.byName("Theme", other.ScreenGui) == nil)
 toggle:Set(true, true)
 local thumb = node("Thumb", toggle.Frame)
 local oldMotion = window._motions[thumb]
 mode.SelectionGained:Fire()
 mode.Activated:Fire()
 local name, chosenAccent = window:GetTheme()
-check("mode action changes only its window and preserves custom accent", name == "Light" and chosenAccent == accent and other:GetTheme() == "Light" and node("ThemeLabel").Text == "Dark mode")
+check("mode action changes only its window and preserves custom accent", name == "Light" and chosenAccent == accent and other:GetTheme() == "Light"
+	and face("moon").Visible and not face("sun").Visible)
 check("switching mode preserves mounted controls, draft, values, and scroll", roots[1] == window.Frame and roots[2] == tab.Frame and roots[3] == toggle.Frame
 	and toggle:Get() and slider:Get() == 35 and text:Get() == "saved" and field.Text == "unfinished draft" and tab.Frame.CanvasPosition == scroll and changes == 0)
 check("switching settles in-flight motion without a stale color overwrite", oldMotion and oldMotion.tween.PlaybackState == "Cancelled" and thumb.Position.X.Offset == 24 and next(window._motions) == nil)
@@ -45,7 +48,8 @@ check("existing chrome, text, fields, and selected controls use Light tokens", w
 	and text._label.TextColor3 == window.Theme.Text and field.BackgroundColor3 == window.Theme.Input and field.TextColor3 == window.Theme.Text
 	and tab._button.BackgroundColor3 == window.Theme.Selected and node("Track", toggle.Frame).BackgroundColor3 == accent
 	and thumb.BackgroundColor3 == window.Theme.OnAccent and node("Action", action.Frame).BackgroundColor3 == window.Theme.Primary)
-check("gamepad focus survives a mode change", mode:FindFirstChildOfClass("UIStroke").Thickness == 2 and mode:FindFirstChildOfClass("UIStroke").Color == accent)
+check("gamepad focus outlines the header mode action", mode:FindFirstChildOfClass("UIStroke").Color == accent
+	and mode:FindFirstChildOfClass("UIStroke").Transparency == 0)
 mode.SelectionLost:Fire()
 slider:SetDisabled(true)
 window:ToggleTheme()
@@ -131,20 +135,17 @@ for _, viewport in ipairs({ { 1280, 720, false }, { 390, 844, true }, { 844, 390
 		window:SetTextScale(scale)
 		local right = mode.AbsolutePosition.X + mode.AbsoluteSize.X
 		local bottom = mode.AbsolutePosition.Y + mode.AbsoluteSize.Y
-		check("mode action fits navigation at " .. viewport[1] .. " and scale " .. scale, mode.Visible and mode.AbsoluteSize.Y >= window.Target
-			and right <= window.Frame.AbsolutePosition.X + window.Frame.AbsoluteSize.X and bottom <= window.Frame.AbsolutePosition.Y + window.Frame.AbsoluteSize.Y - 30)
-		if window._compact then
-			check("compact tabs retain space beside the mode action", window._nav.AbsoluteSize.X >= 100 and window._nav.AbsolutePosition.X + window._nav.AbsoluteSize.X <= mode.AbsolutePosition.X)
-		else
-			check("desktop mode action clears profile and scrolling tabs", bottom <= node("Profile").AbsolutePosition.Y
-				and window._nav.AbsolutePosition.Y + window._nav.AbsoluteSize.Y <= mode.AbsolutePosition.Y)
-		end
+		check("mode action stays in the header at " .. viewport[1] .. " and scale " .. scale, mode.Visible
+			and mode.AbsoluteSize.Y >= window.Target and right <= window.Frame.AbsolutePosition.X + window.Frame.AbsoluteSize.X
+			and bottom <= window.Frame.AbsolutePosition.Y + window.Frame.AbsoluteSize.Y - 30)
+		check("the header title keeps room beside the mode action at " .. viewport[1], window._title.AbsoluteSize.X > 0)
 	end
 end
+window:SetTextScale(1)
 h.setViewport(844, 390)
 uis.OnScreenKeyboardVisible, uis.OnScreenKeyboardSize, uis.OnScreenKeyboardPosition = true, dt.Vector2.new(844, 230), dt.Vector2.new(0, 160)
 window:_Layout()
-check("very short keyboard layouts hide mode with compact navigation", not mode.Visible and not window._nav.Visible)
+check("short keyboard layouts keep the mode action in the header", window._header.Visible and mode.Visible)
 uis.OnScreenKeyboardVisible = false
 h.setViewport(390, 844); window:_Layout()
 check("mode action returns after keyboard layout recovers", mode.Visible)
