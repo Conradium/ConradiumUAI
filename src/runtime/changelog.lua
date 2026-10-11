@@ -67,6 +67,7 @@ return function(env)
 					"A failed decompile is no longer shown as script source. A decompiler that fails returns a comment notice rather than raising, so the notice is rejected, the bundled luacid fallback is tried, and its own failure is reported with the reason instead of being cached or displayed as code.",
 					"The bundled luacid fallback is installed with the executor's bytecode and HTTP functions pinned behind the host's own globals, and unreadable or empty bytecode is refused before a request. It now works where a host compiles chunks into a narrower environment.",
 					"An empty success from the decompile service is retried instead of being stored as an empty script, so a transient empty response cannot stick for the session.",
+					"Add the ByteFall service as a second bundled decompiler fallback, so a host that cannot run the compiled luacid client still has a plain-HTTP path to source.",
 				} },
 			},
 		},

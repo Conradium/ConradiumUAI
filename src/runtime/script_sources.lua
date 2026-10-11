@@ -28,12 +28,15 @@ return function(env)
 	end
 	-- The bundled service's own failure titles, surfaced without its detail text:
 	-- a notice can carry a remote response body, which does not belong in
-	-- diagnostics. Its two titles are pinned to the vendored asset.
+	-- diagnostics. Its titles are pinned to the vendored asset and this client's
+	-- own ByteFall notices.
 	local NOTICE_TITLES = { ["Failed to read script bytecode"] = true, ["Decompiler API request failed"] = true }
 	local function noticeTitle(source)
 		if type(source) ~= "string" then return nil end
-		local first = (source:match("^%s*([^\n]*)") or ""):gsub("^%-%-%s*", "")
-		return NOTICE_TITLES[first] and first or nil
+		local first = (source:match("^%s*([^\n]*)") or ""):gsub("^%-%-%s*", ""):gsub("%s+$", "")
+		if NOTICE_TITLES[first] then return first end
+		if first:find("^ByteFall request failed") then return first:sub(1, 80) end
+		return nil
 	end
 	local function failure(code, message, instanceId, method)
 		return { id = id("source"), instanceId = instanceId, runtimeEpoch = refs.epoch, method = method or "source",
@@ -111,6 +114,7 @@ return function(env)
 		local readable, source = pcall(function() return object.Source end)
 		result.source, result.empty = readable and type(source) == "string", readable and source == ""
 		result.decompile = caps.fn.decompile ~= nil or env.require("runtime/luacid").available()
+			or env.require("runtime/bytefall").available()
 		result.status = result.source and (result.empty and "empty" or "source") or result.decompile and "decompile" or "unavailable"
 		return result
 	end
@@ -150,12 +154,12 @@ return function(env)
 					if not options.decompile then read, source = pcall(function() return object.Source end); origin = "host-readable" end
 					local used = "source"
 					if options.decompile or not read or type(source) ~= "string" then
-						-- The host's own decompiler first; the bundled luacid fallback
-						-- when it is missing or fails. A client whose executor has no
-						-- native decompiler still reaches source through the service.
-						-- Results are checked for failure notices, because a broken
-						-- decompiler reports them as a string instead of raising.
-						local decompiled, from, fallbackNote
+						-- The host's own decompiler first, then the bundled fallbacks in
+						-- order: luacid (compiled in the executor) and ByteFall (plain
+						-- HTTP), so a client whose executor has no native decompiler still
+						-- reaches source. Results are checked for failure notices, because
+						-- a broken decompiler reports them as a string instead of raising.
+						local decompiled, from, attempts = nil, nil, {}
 						if caps.fn.decompile then
 							local okRead, value = pcall(caps.fn.decompile, object)
 							if okRead and not notice(value) then decompiled, from = value, "decompiled" end
@@ -165,16 +169,23 @@ return function(env)
 							if fallback then
 								local okRead, value = pcall(fallback, object)
 								if okRead and not notice(value) then decompiled, from = value, "luacid"
-								else
-									local title = okRead and noticeTitle(value) or nil
-									fallbackNote = "The bundled luacid fallback " .. (title and ("reported: " .. title) or "returned no source") .. "."
-								end
+								else attempts[#attempts + 1] = "luacid: " .. ((okRead and noticeTitle(value)) or "returned no source") end
 							else
-								fallbackNote = "The bundled luacid fallback is unavailable: " .. tostring(why) .. "."
+								attempts[#attempts + 1] = "luacid: " .. tostring(why)
 							end
 						end
 						if not decompiled then
-							local reason = " " .. (fallbackNote or "No further decompiler was available.")
+							local bytefall = env.require("runtime/bytefall")
+							if bytefall.available() then
+								local okRead, value = pcall(bytefall.decompile, object)
+								if okRead and not notice(value) then decompiled, from = value, "bytefall"
+								else attempts[#attempts + 1] = "ByteFall: " .. ((okRead and noticeTitle(value)) or "returned no source") end
+							else
+								attempts[#attempts + 1] = "ByteFall: this host has no HTTP function or bytecode reader"
+							end
+						end
+						if not decompiled then
+							local reason = " Decompilers tried -- " .. table.concat(attempts, "; ") .. "."
 							if caps.fn.decompile then
 								return nil, "Decompiler failed to return source." .. reason, failure("decompiler_failure", "Decompiler failed to return source; host error text was omitted." .. reason, instanceId, "decompiled")
 							end

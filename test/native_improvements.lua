@@ -74,6 +74,30 @@ case("failure notices are never presented as source and defer to a usable fallba
 	f.healthy(); f.close()
 end)
 
+case("the ByteFall fallback sends base64 bytecode and never returns a service error as source", function()
+	local f = F.new(); local sources, refs, caps = f.env.require("runtime/script_sources"), f.env.require("runtime/instance_refs"), f.env.require("runtime/caps")
+	local bytefall = f.env.require("runtime/bytefall")
+	check("base64 matches the standard vectors", bytefall.encode("") == "" and bytefall.encode("A") == "QQ=="
+		and bytefall.encode("AB") == "QUI=" and bytefall.encode("ABC") == "QUJD" and bytefall.encode("hello, world") == "aGVsbG8sIHdvcmxk")
+	caps.fn.decompile = nil
+	caps.fn.getscriptbytecode = function() return "ABC" end
+	check("a bytecode reader and HTTP offer the service", bytefall.available())
+	local key = refs.id(object(f, "LocalScript", "Remote"))
+	f.h.http.queue({ StatusCode = 200, Body = "-- Decompiled using ByteFall\nreturn 1", Headers = {} })
+	local item = assert(f.run(function() return sources.inspect(key, nil, { decompile = true }) end))
+	local entry = f.h.http.log[#f.h.http.log]
+	check("the request is the JSON envelope on the ByteFall endpoint", entry.url == bytefall.URL and entry.method == "POST"
+		and entry.headers["Content-Type"] == "application/json" and entry.body == '{"script":"QUJD"}')
+	check("a served decompile is kept as ByteFall source", item.origin == "bytefall" and item.method == "decompiled"
+		and item.readOnly and item.source:find("return 1", 1, true) ~= nil)
+	f.h.http.queue({ StatusCode = 500, Body = "-- decompile error: bytecode parse: bad version", Headers = {} })
+	local failed, message, detail = f.run(function() return sources.inspect(key, nil, { refresh = true, decompile = true }) end)
+	check("a refused decompile is a failure that names the reason without the service body", not failed
+		and detail.code == "decompiler_unavailable" and has(message, "ByteFall")
+		and has(detail.diagnostics, "ByteFall request failed (HTTP 500)") and not has(detail.diagnostics, "bytecode parse"))
+	f.healthy(); f.close()
+end)
+
 case("duplicate decompiles share one worker and cancelled owners cannot steal completion", function()
 	local f = F.new(); local sources, refs = f.env.require("runtime/script_sources"), f.env.require("runtime/instance_refs")
 	local key = refs.id(object(f, "LocalScript", "Slow")); local calls, results = 0, {}

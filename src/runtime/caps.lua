@@ -111,7 +111,7 @@ return function(env)
 		invokeOutcomes = { state = "available_unverified", reason = "Requires a yielding native backend fixture" },
 	}
 	M.sourceRead = M.fn.decompile ~= nil or M.fn.getscripts ~= nil
-		or (M.fn.loadstring ~= nil and M.fn.getscriptbytecode ~= nil and M.fn.request ~= nil)
+		or (M.fn.getscriptbytecode ~= nil and M.fn.request ~= nil)
 
 	-- Thread identity ----------------------------------------------------------
 	-- The identity of the thread that boots the client. Some executors resume a

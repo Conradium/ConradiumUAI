@@ -17,6 +17,8 @@ Portable files, faster routine work, and clearer reasoning and provider feedback
   real Luau compiler.
 - Retry an empty success from the decompile service instead of storing it as an
   empty script, so a transient empty response cannot stick for the session.
+- Add the ByteFall service as a second bundled decompiler fallback, so a host
+  that cannot run the compiled luacid client still has a plain-HTTP path.
 
 ### October 10 update
 
