@@ -48,9 +48,9 @@ runner for these focused checks.
 
 ## Recorded results
 
-Verified October 12, 2026 against build `2.8.0-3fbaead153a192e3`
-([`dist/uai.lua`](../dist/uai.lua), 3,244,341 bytes.
-SHA-256: `99367d569d126de099fdf3b9d5e1a4bc7c992813ea983ef56f5e87de696216ed`).
+Verified October 12, 2026 against build `2.8.0-0b4a6abbbd058305`
+([`dist/uai.lua`](../dist/uai.lua), 3,264,586 bytes.
+SHA-256: `52b3027b001f6872a6fbb430531eda3d95ae5b644d8900b437f27201d563fb8d`).
 Focused checks only; the full native suite was not run.
 
 | Check | Outcome |
@@ -64,10 +64,15 @@ Focused checks only; the full native suite was not run.
 | `luajit test/scripting_harness.lua` | 4 cases, 15 assertions, 0 failures |
 | `luajit test/tools_runtime_audit.lua` | 7 cases, 66 assertions, 0 failures |
 | `luajit test/provider_sampling.lua` | 3 cases, 36 assertions, 0 failures |
+| `luajit test/provider_compatibility.lua` | 40 cases, 637 assertions, 0 failures |
+| `luajit test/attachments.lua` | 70 checks passed, 0 failed |
 | `luajit test/http_diagnostics.lua` | 2 cases, 7 assertions, 0 failures |
+| `luajit test/project_support.lua` | 6 cases, 43 assertions, 0 failures |
+| `luajit test/run.lua --native` (changelog and what's new scenarios) | 2 scenarios, 347 checks, 0 failed |
+| `node bridge/tests/run.js` | 60 tests passed, 0 failed |
 | `python test/site_static.py` | 8309 static checks passed |
-| `luajit test/check.lua --native` | 201 parsed, 0 failures, 0 warnings |
-| Official Luau compiler `--null` on 48 changed inputs + bundle | clean (84 KLOC) |
+| `luajit test/check.lua --native` | 202 parsed, 0 failures, 0 warnings |
+| Official Luau compiler `--null` on changed inputs and the bundle | clean |
 | `luajit tools/bundle.lua --native --check` | current |
 | `node tools/build_site.js --check` | v2.8.0, 172 tools, synchronized |
 | Changed interface behavior (UI regression set) | not run; selection requires the final UI review |

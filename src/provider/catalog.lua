@@ -81,7 +81,7 @@ return function(env)
 			-- Featured alongside HCNSEC: OpenCode's own relay, with free-tier models
 			-- and the compatibility headers the official client sends.
 			featured = true,
-			note = "OpenCode's relay with OpenCode-compatible request headers. Use your Zen key, fetch current models, and select a model supported by the configured API protocol.",
+			note = "OpenCode's relay with OpenCode-compatible request headers. Use your Zen key, fetch current models, and select a model supported by the configured API protocol. Free-tier `-free` models only answer inside OpenCode's official app, and models without tool support refuse streaming tool calls (retried here without tools). Models that only speak the Responses protocol (muse-spark) switch lanes automatically.",
 		},
 		{
 			id = "azure-foundry",

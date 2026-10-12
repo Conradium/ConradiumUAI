@@ -212,7 +212,7 @@ the manifest, test API and limits. These are native tools, without an LSP or an
 isolated test process.
 
 **Long inputs are files.** Inputs over 8,000 UTF-8 bytes are saved intact under
-`UAI/pastes/`, up to 2 MiB per file. The AI receives a compact path reference and
+`UAI/pastes/`, up to 10 MiB per file. The AI receives a compact path reference and
 reads relevant sections with `file_read`, `file_read_many`, or `file_search`.
 Saved-paste reads return at most 6,000 source bytes per slice with continuation
 offsets. Ordinary messages stay inline. A large paste becomes an attachment while

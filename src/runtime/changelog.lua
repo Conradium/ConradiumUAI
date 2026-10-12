@@ -20,10 +20,10 @@ return function(env)
 	local ENTRIES = {
 		{
 			version = "2.8.0",
-			revision = "2026-10-12-scripting-guide-decompilation-and-audit",
+			revision = "2026-10-12-scripting-guide-zen-responses-and-10-mib-attachments",
 			date = "October 12, 2026",
 			title = "Reliable scripting and clearer failures",
-			highlights = "An on-demand scripting guide, more reliable decompiler fallbacks, clearer execution results and OpenCode guidance, and focused runtime fixes from the client audit.",
+			highlights = "An on-demand scripting guide, more reliable decompiler fallbacks, clearer execution results and OpenCode guidance, support for Response-protocol Zen models, larger attachments, and focused runtime fixes from the client audit.",
 			sections = {
 				{ category = "added", label = "Script development reference", items = {
 					"Read the scripting guide on demand: a short quickstart, exact tool examples, saved-file and editor workflows, focused debugging, cleanup, source inspection and UI LIB guidance. Main and subagents can request only the sections they need.",
@@ -41,6 +41,10 @@ return function(env)
 					"Read subagents receive read-risk tools only. Mutations use write permissions, unknown presets fail early, and client_status reports diagnostics without replacing delegated agent_status.",
 					"Reject truncated arguments instead of guessing missing targets. Normalize memory keys consistently and honor supported Messages sampling settings. Successful response text no longer triggers transient retries unless explicit error fields identify one.",
 					"Do not count token-truncated batches as repeated actions when no tool ran. A later complete, repaired call can execute without inheriting a false repeat warning.",
+					"Support Zen models that only speak the Responses protocol. A request for one switches to that lane automatically on a protocol refusal, carries the standard tool declarations, and is remembered per endpoint and model. Free-tier lockout and unsupported-protocol refusals no longer count toward provider benching.",
+				} },
+				{ category = "improved", label = "Attachments and uploads", items = {
+					"Raise text and code attachments and browser uploads to 10 MiB per file, with a larger per-draft budget and a matching pending-upload allowance. Large inputs still become verified pastes/ files read with the file tools, and a failed save never falls back to sending the source inline.",
 				} },
 				{ category = "improved", label = "Code and failure review", items = {
 					"Keep Code editing and previews readable when syntax highlighting fails. Render run logs literally without requiring the Lua lexer.",

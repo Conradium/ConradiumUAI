@@ -2,7 +2,7 @@
 
 ## 2.8.0 — October 12, 2026
 
-Reliable scripting, clearer failures, and focused audit fixes.
+Reliable scripting, clearer failures, larger attachments, and focused audit fixes.
 
 ### Script execution and projects
 
@@ -49,6 +49,18 @@ Reliable scripting, clearer failures, and focused audit fixes.
 - Honor supported sampling settings in the Messages adapter. Limit transient
   retry classification inside successful HTTP responses to explicit error
   fields, so ordinary response text cannot accidentally trigger a retry.
+- Support Zen models that only speak the Responses protocol. A request for one
+  switches to that lane automatically on a protocol refusal, carries the
+  standard tool declarations, and is remembered per endpoint and model.
+  Free-tier lockout and unsupported-protocol refusals no longer count toward
+  provider benching.
+
+### Larger attachments
+
+- Raise text and code attachments and browser uploads to 10 MiB per file, with
+  a larger per-draft budget and a matching pending-upload allowance. Large
+  inputs still become verified `pastes/` files read with the file tools, and a
+  failed save never falls back to sending the source inline.
 
 ### Readable results and permission review
 

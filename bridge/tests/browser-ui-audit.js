@@ -43,7 +43,7 @@ function contrast(foreground, background) {
     activeProvider: 'p1', presets: [{ id: 'custom', label: 'Custom' }],
     settings: { ui: { density: 'comfortable', transcriptWidth: 'medium', codeTheme: 'dark' }, agent: { effort: 'high', temperature: 1, maxTurns: 24, customInstructions: '' } },
     permissions: { mode: 'ask' }, tools: [], todos: [], loops: [], logs: [], requests: [], subagents: [], questions: [], pendingPermissions: [],
-    usage: { total: 2480, requests: 3, cost: .004 }, attachments: { inlineLimit: 8000, maxBytes: 2 * 1024 * 1024, available: true },
+    usage: { total: 2480, requests: 3, cost: .004 }, attachments: { inlineLimit: 8000, maxBytes: 10 * 1024 * 1024, available: true },
   };
   const push = async extra => {
     const marker = 'Fixture provider ' + (++sequence);

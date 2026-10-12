@@ -383,6 +383,69 @@ case("a refusal cannot teach or resend through a connection changed in flight", 
 	end
 end)
 
+-- Zen serves some models only on the Responses lane: /chat/completions answers
+-- ModelProtocolUnsupported and /inference/openai/v1/responses answers normally.
+-- The adapter must switch lanes, assemble the streamed text exactly once, and
+-- surface Responses function calls in the shared tool-call shape.
+case("a model that only speaks Responses switches lanes and assembles once", function()
+	local f = F.new(); local record = recordFor(f, "zen")
+	local chatBodies, responsesBodies = {}, {}
+	local stream = table.concat({
+		"event: response.created",
+		'data: {"type":"response.created","response":{"id":"resp_1","model":"' .. record.model .. '"}}',
+		"",
+		"event: response.output_text.delta",
+		'data: {"type":"response.output_text.delta","item_id":"msg_1","delta":"Hello"}',
+		"",
+		"event: response.output_text.delta",
+		'data: {"type":"response.output_text.delta","item_id":"msg_1","delta":" there"}',
+		"",
+		"event: response.completed",
+		'data: {"type":"response.completed","response":{"id":"resp_1","model":"' .. record.model .. '","status":"completed",'
+			.. '"output":[{"type":"message","id":"msg_1","content":[{"type":"output_text","text":"Hello there"}]}],'
+			.. '"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}',
+		"",
+	}, "\n")
+	f.h.http.handler = function(entry)
+		if entry.url:find("/responses", 1, true) then
+			responsesBodies[#responsesBodies + 1] = f.h.json.decode(entry.body)
+			return { StatusCode = 200, Body = stream }
+		end
+		chatBodies[#chatBodies + 1] = f.h.json.decode(entry.body)
+		return { StatusCode = 400, Body = f.h.json.encode({ error = { type = "ModelProtocolUnsupported", message = "Model does not support this protocol." } }) }
+	end
+	local result = complete(f, record, { messages = { { role = "user", content = "hi" } }, tools = TOOLS, stream = true })
+	check("the turn recovers on the Responses lane", result ~= nil and #chatBodies == 1 and #responsesBodies == 1)
+	check("the retry carries Responses input, not chat messages", responsesBodies[1].input ~= nil and responsesBodies[1].messages == nil)
+	check("tools are flattened to the Responses shape", responsesBodies[1].tools[1].name == "fixture_tool" and responsesBodies[1].tools[1]["function"] == nil)
+	local declared = false
+	for _, tool in ipairs(responsesBodies[1].tools) do
+		if tool.name == "bash" and tool["function"] == nil then declared = true end
+	end
+	check("the standard declarations travel with it", declared)
+	check("no reasoning_effort is sent on this lane", responsesBodies[1].reasoning_effort == nil)
+	check("streamed text is assembled exactly once", result and result.content == "Hello there")
+	check("usage is read from the completed payload", result and result.usage and result.usage.output_tokens == 5)
+	check("the lane is remembered", record.repairs ~= nil and f.env.require("provider/responses").remembered(record))
+	check("the next turn skips chat entirely", complete(f, record, { messages = { { role = "user", content = "again" } }, stream = true }) ~= nil and #chatBodies == 1 and #responsesBodies == 2)
+	f.healthy(); f.close()
+end)
+
+case("Responses function calls surface as normal tool calls", function()
+	local f = F.new(); local adapter = f.env.require("provider/responses")
+	local body = table.concat({
+		"event: response.completed",
+		'data: {"type":"response.completed","response":{"id":"resp_2","model":"m","status":"completed","output":['
+			.. '{"type":"function_call","call_id":"call_1","name":"fixture_tool","arguments":"{\\"value\\":\\"x\\"}"}]}}',
+		"",
+	}, "\n")
+	local parsed = adapter.parse(body)
+	check("the call is parsed", parsed.toolCalls and #parsed.toolCalls == 1)
+	check("with its id, name and arguments", parsed.toolCalls[1].id == "call_1" and parsed.toolCalls[1]["function"].name == "fixture_tool" and parsed.toolCalls[1]["function"].arguments == '{"value":"x"}')
+	check("and no stream error", parsed.streamError == nil)
+	f.healthy(); f.close()
+end)
+
 case("optional body controls respect explicit stream and tool choices", function()
 	local f = F.new(); local adapter = f.env.require("provider/openai"); local record = recordFor(f, "ollama")
 	local body = adapter.buildBody(record, { tools = TOOLS, stream = true, parallelToolCalls = false, toolChoice = "required" })

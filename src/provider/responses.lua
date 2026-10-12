@@ -1,0 +1,431 @@
+-- The OpenAI Responses adapter, for models that only speak /responses.
+--
+-- Zen serves some models (muse-spark contributor builds) exclusively on the
+-- Responses protocol: /chat/completions answers ModelProtocolUnsupported for
+-- them, while /inference/openai/v1/responses streams full reasoning and text.
+-- This adapter speaks that lane and returns the same normalised result the
+-- chat adapter does, so everything above it is unchanged.
+--
+-- Only ever entered two ways: the chat adapter delegates after a protocol
+-- refusal, or it delegates immediately when the record already learned this
+-- lane. It is never selected by provider/chat directly.
+return function(env)
+	local util = env.require("runtime/util")
+	local config = env.require("runtime/config")
+	local clock = env.require("runtime/clock")
+	local log = env.require("runtime/log")
+	local http = env.require("net/http")
+	local sse = env.require("net/sse")
+	local urls = env.require("net/url")
+	local headerMap = env.require("net/headers")
+	local registry = env.require("provider/registry")
+
+	local M = {}
+
+	local RESPONSES_KEY = "responses_protocol"
+	function M.key() return RESPONSES_KEY end
+
+	function M.eligible(record)
+		return registry.isOpencode(record)
+	end
+
+	function M.isProtocolRefusal(res)
+		if not res or tonumber(res.status) ~= 400 then return false end
+		local decoded = util.decode(tostring(res.body or ""))
+		if type(decoded) ~= "table" then return false end
+		local failure = decoded.error
+		if type(failure) == "string" then
+			return failure:find("does not support this protocol", 1, true) ~= nil
+		end
+		if type(failure) == "table" then
+			if tostring(failure.type or "") == "ModelProtocolUnsupported" then return true end
+			return tostring(failure.message or ""):find("does not support this protocol", 1, true) ~= nil
+		end
+		return false
+	end
+
+	function M.remembered(record)
+		local scope = registry.compatibilityKey(record)
+		if record.repairScope ~= nil and record.repairScope ~= scope then return false end
+		for _, existing in ipairs(record.repairs or {}) do
+			if existing == RESPONSES_KEY then return true end
+		end
+		return false
+	end
+
+	-- The lane a record's responses go to. Zen answers directly; records pointed
+	-- at the project proxy stay on it, which maps /responses too.
+	function M.endpointFor(record)
+		if registry.proxyProvider(record) then
+			return registry.endpoint(record, "/responses")
+		end
+		return "https://opencode.ai/inference/openai/v1/responses"
+	end
+
+	local function textOf(content)
+		if type(content) == "string" then return content end
+		if type(content) ~= "table" then return "" end
+		local parts = {}
+		for _, block in ipairs(content) do
+			if type(block) == "table" and type(block.text) == "string" and block.text ~= "" then
+				parts[#parts + 1] = block.text
+			end
+		end
+		return table.concat(parts, "")
+	end
+
+	-- Chat history into Responses input items. Text passes through; assistant
+	-- tool calls become function_call items and tool answers become
+	-- function_call_output items so multi-turn agent loops keep working.
+	function M.inputFor(messages)
+		local input, instructions = {}, {}
+		for _, message in ipairs(messages or {}) do
+			local role = message.role
+			if role == "system" or role == "developer" then
+				local text = textOf(message.content)
+				if util.trim(text) ~= "" then instructions[#instructions + 1] = text end
+			elseif role == "tool" then
+				input[#input + 1] = {
+					type = "function_call_output",
+					call_id = tostring(message.tool_call_id or message.id or ""),
+					output = textOf(message.content),
+				}
+			elseif role == "assistant" and message.toolCalls and #message.toolCalls > 0 then
+				if util.trim(textOf(message.content)) ~= "" then
+					input[#input + 1] = { role = "assistant", content = textOf(message.content) }
+				end
+				for _, call in ipairs(message.toolCalls) do
+					local fn = call["function"]
+					input[#input + 1] = {
+						type = "function_call",
+						call_id = tostring(call.id or ""),
+						name = tostring((type(fn) == "table" and fn.name) or call.name or ""),
+						arguments = tostring((type(fn) == "table" and fn.arguments) or call.arguments or "{}"),
+					}
+				end
+			elseif role == "user" or role == "assistant" then
+				local content = message.content
+				if type(content) == "table" then
+					local parts = {}
+					for _, block in ipairs(content) do
+						if type(block) == "table" then
+							if block.type == "input_image" then
+								parts[#parts + 1] = block
+							elseif block.type == "image_url" and type(block.image_url) == "table" then
+								parts[#parts + 1] = { type = "input_image", image_url = tostring(block.image_url.url or "") }
+							elseif type(block.text) == "string" and block.text ~= "" then
+								parts[#parts + 1] = { type = "input_text", text = block.text }
+							end
+						end
+					end
+					if #parts > 0 then input[#input + 1] = { role = role, content = parts } end
+				elseif util.trim(tostring(content or "")) ~= "" then
+					input[#input + 1] = { role = role, content = tostring(content) }
+				end
+			end
+		end
+		return input, table.concat(instructions, "\n\n")
+	end
+
+	-- Chat-shaped tool definitions into Responses shape: top-level name and
+	-- parameters rather than nested under a "function" key. Already-flat
+	-- definitions pass through untouched.
+	function M.toolsFor(tools)
+		if type(tools) ~= "table" or #tools == 0 then return nil end
+		local out = {}
+		for _, tool in ipairs(tools) do
+			if type(tool) == "table" then
+				local fn = tool["function"]
+				if type(fn) == "table" then
+					out[#out + 1] = {
+						type = "function",
+						name = tostring(fn.name or ""),
+						description = tostring(fn.description or ""),
+						parameters = type(fn.parameters) == "table" and fn.parameters or { type = "object", properties = {} },
+					}
+				elseif type(tool.name) == "string" then
+					out[#out + 1] = tool
+				end
+			end
+		end
+		if #out == 0 then return nil end
+		return out
+	end
+
+	function M.buildBody(record, request)
+		request = request or {}
+		local input, instructions = M.inputFor(request.messages)
+		local body = {
+			model = record.model,
+			input = input,
+			-- The lane is streamed, always: the free tier requires it and the
+			-- whole-body JSON shape is never what this route is asked for.
+			stream = true,
+		}
+		if instructions ~= "" then body.instructions = instructions end
+		-- The standard declarations travel with the request on this lane too.
+		-- They are what the compatibility check looks for, so they are merged
+		-- in even when the call carries real tools of its own.
+		local tools = M.toolsFor(request.tools) or {}
+		local names = {}
+		for _, tool in ipairs(tools) do names[tool.name] = true end
+		for _, tool in ipairs(M.toolsFor(env.require("provider/openai").opencodeTools) or {}) do
+			if not names[tool.name] then
+				tools[#tools + 1] = tool
+				names[tool.name] = true
+			end
+		end
+		if #tools > 0 then body.tools = tools end
+		if request.toolChoice ~= nil then body.tool_choice = request.toolChoice end
+		-- The lane has its own spelling and rejections: max_output_tokens rather
+		-- than max_tokens, and no reasoning_effort (the server answers unknown
+		-- parameter). Temperature is only sent when explicitly asked for.
+		local wanted = tonumber(request.maxTokens or config.get("agent.maxTokens", 4096)) or 0
+		local documented = env.require("provider/traits").maxOutput(record.model)
+		if documented and documented > 0 and wanted > documented then wanted = documented end
+		local ceiling = tonumber(request.outputCeiling)
+		if ceiling and ceiling >= 1 and ceiling < wanted then wanted = math.floor(ceiling) end
+		if wanted > 0 then body.max_output_tokens = wanted end
+		if request.temperature ~= nil then body.temperature = request.temperature end
+		for key, value in pairs(record.params or {}) do body[key] = value end
+		for key, value in pairs(request.extra or {}) do body[key] = value end
+		return body
+	end
+
+	-- One Responses object (streamed or whole) into the assembler shape the
+	-- chat adapter returns, so the loop cannot tell which lane answered.
+	local function assembleOutput(output)
+		local content, reasoning, calls = {}, {}, {}
+		for _, item in ipairs(type(output) == "table" and output or {}) do
+			if type(item) == "table" then
+				if item.type == "message" then
+					for _, part in ipairs(type(item.content) == "table" and item.content or {}) do
+						if type(part) == "table" and part.type == "output_text" and type(part.text) == "string" and part.text ~= "" then
+							content[#content + 1] = part.text
+						end
+					end
+				elseif item.type == "function_call" then
+					calls[#calls + 1] = {
+						id = tostring(item.call_id or item.id or ""),
+						type = "function",
+						["function"] = {
+							name = tostring(item.name or ""),
+							arguments = tostring(item.arguments or "{}"),
+						},
+					}
+				elseif item.type == "reasoning" then
+					for _, part in ipairs(type(item.summary) == "table" and item.summary or {}) do
+						if type(part) == "table" and type(part.text) == "string" and part.text ~= "" then
+							reasoning[#reasoning + 1] = part.text
+						end
+					end
+				end
+			end
+		end
+		return table.concat(content), table.concat(reasoning, "\n"), calls
+	end
+
+	function M.parse(body)
+		local content, reasoning, slots, order = {}, {}, {}, {}
+		local usage, model, id, streamError, frames = nil, nil, nil, nil, 0
+		local completed = false
+		local function slotFor(callId)
+			local key = tostring(callId or "")
+			if not slots[key] then
+				if #order >= sse.limits.calls then return nil end
+				slots[key] = { id = key ~= "" and key or nil, name = nil, args = {} }
+				order[#order + 1] = key
+			end
+			return slots[key]
+		end
+		local decoder = sse.decoder(function(frame)
+			frames = frames + 1
+			local payload = util.trim(frame.data)
+			if payload == "" or payload == "[DONE]" then return true end
+			local decoded = util.decode(payload)
+			local providerError = sse.providerError(decoded or payload, frame.event)
+			if providerError then streamError = streamError or providerError; return true end
+			if type(decoded) ~= "table" then
+				streamError = streamError or "malformed_stream: invalid JSON frame"
+				return true
+			end
+			local kind = tostring(decoded.type or "")
+			if kind == "response.output_text.delta" and type(decoded.delta) == "string" then
+				content[#content + 1] = decoded.delta
+			elseif kind == "response.function_call_arguments.delta" then
+				local slot = slotFor(decoded.item_id)
+				if slot and type(decoded.delta) == "string" then slot.args[#slot.args + 1] = decoded.delta end
+			elseif kind == "response.output_item.done" and type(decoded.item) == "table" then
+				local item = decoded.item
+				if item.type == "function_call" then
+					local slot = slotFor(item.call_id or item.id)
+					if slot then
+						if type(item.name) == "string" then slot.name = item.name end
+						if type(item.arguments) == "string" and item.arguments ~= "" then slot.args[#slot.args + 1] = item.arguments end
+					end
+				elseif item.type == "reasoning" then
+					for _, part in ipairs(type(item.summary) == "table" and item.summary or {}) do
+						if type(part) == "table" and type(part.text) == "string" and part.text ~= "" then
+							reasoning[#reasoning + 1] = part.text
+						end
+					end
+				end
+			elseif kind == "response.completed" and type(decoded.response) == "table" then
+				completed = true
+				local response = decoded.response
+				model = model or response.model
+				id = id or response.id
+				if type(response.usage) == "table" then usage = response.usage end
+				-- The completed payload is authoritative: done items repeat the
+				-- text already streamed as deltas, so a non-empty final output
+				-- replaces the accumulated partials rather than doubling them.
+				if type(response.output) == "table" then
+					local finalContent, finalReasoning, finalCalls = assembleOutput(response.output)
+					if finalContent ~= "" then content = { finalContent } end
+					if finalReasoning ~= "" then reasoning = { finalReasoning } end
+					if #finalCalls > 0 then
+						slots, order = {}, {}
+						for _, call in ipairs(finalCalls) do
+							local slot = slotFor(call.id)
+							if slot then slot.name, slot.args = call["function"].name, { call["function"].arguments } end
+						end
+					end
+				end
+			end
+			return true
+		end)
+		local ok, why = decoder.push(body)
+		if ok then ok, why = decoder.finish() end
+		streamError = streamError or (not ok and why or nil)
+		local calls = {}
+		for _, key in ipairs(order) do
+			local slot = slots[key]
+			if slot.name then
+				calls[#calls + 1] = {
+					id = slot.id or ("call_" .. tostring(#calls + 1)),
+					type = "function",
+					["function"] = { name = slot.name, arguments = table.concat(slot.args) },
+				}
+			end
+		end
+		return {
+			role = "assistant",
+			content = table.concat(content),
+			reasoning = table.concat(reasoning, "\n"),
+			toolCalls = calls,
+			finish = completed and "stop" or nil,
+			model = model,
+			id = id,
+			usage = usage,
+			frames = frames,
+			streamError = streamError or (not completed and "malformed_stream: stream ended before completion" or nil),
+		}
+	end
+
+	function M.fromResponse(decoded)
+		if type(decoded) ~= "table" then return nil end
+		local output = decoded.output
+		if type(decoded) == "table" and decoded.object == "response" and output == nil then output = {} end
+		local content, reasoning, calls = assembleOutput(output)
+		local usage = type(decoded.usage) == "table" and decoded.usage or nil
+		return {
+			role = "assistant",
+			content = content,
+			reasoning = reasoning,
+			toolCalls = calls,
+			finish = tostring(decoded.status or "completed") == "completed" and "stop" or nil,
+			model = decoded.model,
+			id = decoded.id,
+			usage = usage,
+			frames = 0,
+			streamError = nil,
+		}
+	end
+
+	local function requestTimeout(request)
+		if request.timeout then return request.timeout end
+		if config.get("agent.requestUnlimited", false) then return 86400 end
+		return config.get("agent.requestTimeout", 86400)
+	end
+
+	function M.complete(record, request)
+		local problem = registry.protocolProblem(record)
+		if problem then return nil, problem end
+		request = util.copy(request or {})
+		local body = M.buildBody(record, request)
+		local url = M.endpointFor(record)
+		-- The lane's proven identity: the desktop client's user agent and
+		-- client marker with no project or request headers, and the session id
+		-- generated per request. This is the exact set the live 200 was verified
+		-- with; the chat lane's cli fingerprint is not interchangeable here.
+		local sessionId = registry.opencodeSessionFor(record, request)
+		local headers = headerMap.merge(
+			registry.authHeaders(record),
+			{
+				["x-opencode-session"] = sessionId,
+				["x-opencode-client"] = "desktop",
+				["User-Agent"] = "opencode/latest/2.0.27/desktop",
+				["accept"] = "*/*",
+			},
+			record.headers)
+		local started = clock.ms()
+		local attemptsAllowed = request.attempts or config.get("agent.retries", 3)
+		local res, err = http.send({
+			url = url,
+			method = "POST",
+			headers = headers,
+			body = util.encode(body),
+			identity = registry.identityFor(record),
+			identityRequired = registry.requiresClaude(record),
+			attempts = attemptsAllowed,
+			aborted = request.aborted,
+			onRetry = request.onRetry,
+			tag = "responses:" .. record.id,
+			timeout = requestTimeout(request),
+		})
+		if request.aborted and request.aborted() then return nil, "aborted" end
+		if not res or not res.ok then
+			local message = env.require("provider/openai").errorText(res, err)
+			registry.markFail(record, message)
+			return nil, message, res
+		end
+		local parsed
+		if sse.looksStreamed(res.body) then
+			parsed = M.parse(res.body)
+		else
+			local decoded = util.decode(res.body)
+			if type(decoded) ~= "table" then
+				local message = "provider returned a body that is not JSON: " .. tostring(decoded)
+				registry.markFail(record, message)
+				return nil, message, res
+			end
+			if decoded.error then
+				local message = env.require("provider/openai").errorText(res, nil)
+				registry.markFail(record, message)
+				return nil, message, res
+			end
+			parsed = M.fromResponse(decoded)
+		end
+		if parsed.streamError then
+			registry.markFail(record, parsed.streamError)
+			return nil, "stream error: " .. parsed.streamError, res
+		end
+		local hasText = util.trim(parsed.content) ~= ""
+		local hasCalls = #(parsed.toolCalls or {}) > 0
+		if not hasText and not hasCalls and util.trim(parsed.reasoning) == "" then
+			local message = "the provider returned an empty completion"
+			registry.markFail(record, message)
+			return nil, message, res
+		end
+		parsed.ms = clock.since(started)
+		parsed.provider = record.id
+		parsed.providerLabel = record.label
+		parsed.via = res.via
+		parsed.requestId = res.inferenceId
+		parsed.streamed = parsed.frames and parsed.frames > 0 or false
+		registry.markOk(record, parsed.ms)
+		return parsed, nil, res
+	end
+
+	return M
+end

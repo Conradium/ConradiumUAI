@@ -403,7 +403,7 @@ calls and changes to the same file or runtime state run in successive steps.
 This is prompt guidance only; tool-call limits and concurrency are unchanged.
 
 Inputs over 8,000 UTF-8 bytes become verified files in `UAI/pastes/`, with a
-2 MiB maximum per file. Preserve the original bytes, including whitespace, and
+10 MiB maximum per file. Preserve the original bytes, including whitespace, and
 send only a compact path/size/line-count reference without a source preview.
 Short messages stay inline. The native composer separates a large inserted
 block from the surrounding editable text; attachment-only sends are valid.

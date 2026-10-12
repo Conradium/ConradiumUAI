@@ -47,7 +47,7 @@ enter that port in Roblox too.
   saved reply when it arrives. Switch in **Cowork** while work is idle.
 - **Attach text or code** with the paperclip, drag a file onto the composer, or
   paste long text. Large inputs become verified files that the agent can read.
-  Limits: 2 MiB per file/input, 16 text files and 8 MiB per draft.
+  Limits: 10 MiB per file/input, 16 text files and 16 MiB per draft.
 - **Attach pictures** with the image button, paste, or drop. PNG, JPEG and WebP
   are sent as **actual image content** to your selected model; choose one that
   supports vision. Reload the updated game client and restart the bridge first.

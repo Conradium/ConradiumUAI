@@ -13,7 +13,7 @@ let drafts={};try{const value=JSON.parse(stored('sessionStorage','uai.drafts')||
 const tools=new Map(),dirtyDrafts=new Set();
 let toastTimer,draftTimer,storageWarning=false,renderingSnapshot=false,eventBytes=0,sendOperation=null,connectionRetry,readingFiles=0,modalRefresh=null,panelRefreshPending=false,panelPointerActive=false,panelPointerTimer;
 const draftLoads=new Map();
-const MAX_DRAFT_BYTES=8*1024*1024,MAX_EVENTS_BYTES=8*1024*1024;
+const MAX_DRAFT_BYTES=16*1024*1024,MAX_EVENTS_BYTES=8*1024*1024;
 // Explicit operation state machine (contract): the visible/label state is derived
 // from link + sendPhase + busy rather than a tangle of loose booleans.
 document.body.dataset.page='chat';
@@ -638,9 +638,9 @@ async function submit(){
   if(!text.trim()&&!uploads.length&&!pictureIds.length)return;
   if(UAI.pictures.busy()){toast('Wait for pictures to finish uploading.');return;}
   if(UAI.pictures.hasErrors()){toast('Retry or remove the picture that could not be attached.');return;}
-  const encode=new TextEncoder(),max=state.attachments?.maxBytes||2*1024*1024;
-  if(encode.encode(text).length>max){toast('This message exceeds 2 MiB. Split it into smaller files.');return;}
-  if(draftBytes(text,uploads)>MAX_DRAFT_BYTES){toast('Use up to 8 MiB of text and code per message.');return;}
+  const encode=new TextEncoder(),max=state.attachments?.maxBytes||10*1024*1024;
+  if(encode.encode(text).length>max){toast('This message exceeds 10 MiB. Split it into smaller files.');return;}
+  if(draftBytes(text,uploads)>MAX_DRAFT_BYTES){toast('Use up to 16 MiB of text and code per message.');return;}
   saveDraft();
   const original=text,files=uploads.slice(),sentSession=sessionId;
   const operation={sessionId:sentSession,commandId:uuid(),sawTurn:false,instance,createdAt:Date.now(),sentVersion:drafts[sentSession]?.version,fileIds:files.map(f=>f.id)};
@@ -699,8 +699,8 @@ async function checkDelivery(){
   finally{if(sendOperation)persistOperation();$('deliveryCheck').disabled=false;refresh();}
 }
 async function uploadText(text,name,target){
-  const encode=new TextEncoder(),max=state.attachments?.maxBytes||2*1024*1024;
-  if(encode.encode(text).length>max)throw Error(name+' exceeds 2 MiB. Split it into smaller files.');
+  const encode=new TextEncoder(),max=state.attachments?.maxBytes||10*1024*1024;
+  if(encode.encode(text).length>max)throw Error(name+' exceeds 10 MiB. Split it into smaller files.');
   const uploadId=uuid();let offset=0,result;
   for(let at=0;at<text.length;){
     let end=Math.min(at+32768,text.length);
@@ -717,8 +717,8 @@ function pasteInput(event){
   const text=event.clipboardData?.getData('text/plain');
   if(!text||!sessionId||new TextEncoder().encode(text).length<=(state.attachments?.inlineLimit||8000))return;
   event.preventDefault();
-  if(new TextEncoder().encode(text).length>(state.attachments?.maxBytes||2*1024*1024)){toast('This paste exceeds 2 MiB. Split it into smaller files.');return;}
-  if(uploads.length>=16||draftBytes($('input').value,uploads)+new TextEncoder().encode(text).length>MAX_DRAFT_BYTES){toast('Use up to 16 text files and 8 MiB per message.');return;}
+  if(new TextEncoder().encode(text).length>(state.attachments?.maxBytes||10*1024*1024)){toast('This paste exceeds 10 MiB. Split it into smaller files.');return;}
+  if(uploads.length>=16||draftBytes($('input').value,uploads)+new TextEncoder().encode(text).length>MAX_DRAFT_BYTES){toast('Use up to 16 text files and 16 MiB per message.');return;}
   const input=$('input');input.setRangeText('',input.selectionStart,input.selectionEnd,'end');
   uploads.push({id:uuid(),name:'pasted-input.txt',text});renderAttachments();grow();
 }
@@ -730,13 +730,13 @@ async function attachFiles(source){
   saveDraft();
   readingFiles++;refresh();
   try{for(const file of selected.slice(0,16)){
-    if(file.size>(state.attachments?.maxBytes||2*1024*1024)){toast(file.name+' exceeds 2 MiB');continue;}
+    if(file.size>(state.attachments?.maxBytes||10*1024*1024)){toast(file.name+' exceeds 10 MiB');continue;}
     if(/^(image|audio|video)\//.test(file.type)){toast(file.name+': attach a text or code file.');continue;}
     try{
       const text=await file.text();
       if(text.includes('\0')){toast(file.name+': binary files are not supported.');continue;}
       const draft=sessionId===target?{text:$('input').value,uploads}:drafts[target]||{};
-      if((draft.uploads?.length||0)>=16||draftBytes(draft.text,draft.uploads)+new TextEncoder().encode(text).length>MAX_DRAFT_BYTES){toast('Use up to 16 text files and 8 MiB per message.');break;}
+      if((draft.uploads?.length||0)>=16||draftBytes(draft.text,draft.uploads)+new TextEncoder().encode(text).length>MAX_DRAFT_BYTES){toast('Use up to 16 text files and 16 MiB per message.');break;}
       const item={id:uuid(),name:file.name,text};
       if(sessionId===target){uploads.push(item);renderAttachments();saveDraft();setBusy(busy);}
       else{const previous=drafts[target]||{text:'',version:0,uploads:[]};drafts[target]={...previous,uploads:[...(previous.uploads||[]),item],updatedAt:Date.now()};dirtyDrafts.add(target);persistDrafts();}

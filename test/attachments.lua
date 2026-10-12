@@ -64,7 +64,7 @@ scenario("failed or unavailable storage never falls back to a huge request", fun
 		elseif mode == "refused" then caps.fn.writefile = function() return false end
 		elseif mode == "corrupt" then caps.fn.writefile = function(path, text) h.files[path] = text:sub(1, 10) end
 		elseif mode == "disabled" then registry.setGroupEnabled("fs", false) end
-		local input = mode == "oversize" and ("x"):rep(2 * 1024 * 1024 + 1) or body
+		local input = mode == "oversize" and ("x"):rep(10 * 1024 * 1024 + 1) or body
 		local ok, err = session.send(input); h.sched.advance(0.2)
 		check(mode .. " reports a recoverable failure", ok == false and type(err) == "string")
 		check(mode .. " never reaches the model or adds a turn", #sent == 0 and session.turns == 0 and not session.busy and not session.preparing)
@@ -121,6 +121,31 @@ scenario("browser chunks commit one verified file and retries do not append twic
 	check("uploaded bytes are exact", env.require("runtime/fsx").readUser(entry.path) == body)
 	check("final retry returns the same file", assert(store.upload("one", final)).path == entry.path)
 	check("completed ID cannot be reused for other content", store.upload("one", { uploadId = first.uploadId, content = "changed", offset = 0, final = true }) == nil)
+end)
+
+scenario("uploads accept files above the old 2 MiB ceiling", function()
+	local h, env = fixture()
+	local store, fs = env.require("runtime/attachments"), env.require("runtime/fsx")
+	check("the ceiling is 10 MiB", store.MAX_BYTES == 10 * 1024 * 1024)
+	local big = ("A"):rep(3 * 1024 * 1024)
+	local entry, err = store.save(big)
+	check("a 3 MiB attachment is accepted", entry ~= nil and entry.bytes == #big)
+	check("and verified on disk", fs.readUser(entry.path) == big)
+	local over, why = store.save(("A"):rep(store.MAX_BYTES + 1))
+	check("above the ceiling is refused with the new wording", over == nil and has(why, "10 MiB"))
+
+	-- A chunked upload larger than the old 8 MiB pending budget must still commit,
+	-- or the per-file raise would be unusable through the browser path.
+	local chunked = ("B"):rep(9 * 1024 * 1024)
+	local uploadId, offset, last = "upload-big-1", 0, nil
+	while offset < #chunked do
+		local chunk = chunked:sub(offset + 1, math.min(offset + 128 * 1024, #chunked))
+		last = store.upload("one", { uploadId = uploadId, name = "big.txt", offset = offset, content = chunk, final = offset + #chunk >= #chunked })
+		assert(last, store.upload and "chunk refused")
+		offset = offset + #chunk
+	end
+	check("a 9 MiB chunked upload commits", last.path ~= nil and last.bytes == #chunked)
+	check("and its bytes are exact", fs.readUser(last.path) == chunked)
 end)
 
 scenario("paste detection preserves surrounding instructions", function()

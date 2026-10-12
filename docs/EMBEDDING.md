@@ -1134,7 +1134,7 @@ reference in the text, as above, so the agent knows which file to read. An empty
 message with only this Lua `files` argument is rejected; the native/browser
 composers supply their own attachment message text.
 
-Saved text attachments support up to 2 MiB per file. These are files in the
+Saved text attachments support up to 10 MiB per file. These are files in the
 executor workspace under `UAI/pastes/`, read with UAI file tools. A rejected send
 does not automatically delete a file already saved by the host. Preserve its
 reference for retry instead of creating a new duplicate on every attempt.

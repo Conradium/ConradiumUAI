@@ -3,7 +3,7 @@ return function(env)
 	local util = env.require("runtime/util")
 	local fsx = env.require("runtime/fsx")
 	local clock = env.require("runtime/clock")
-	local M = { INLINE_LIMIT = 8000, MAX_BYTES = 2 * 1024 * 1024, READ_BYTES = 6000 }
+	local M = { INLINE_LIMIT = 8000, MAX_BYTES = 10 * 1024 * 1024, PENDING_BYTES = 32 * 1024 * 1024, READ_BYTES = 6000 }
 	local pending = {}
 	local SCOPE = { scope = "pastes" }
 
@@ -27,7 +27,7 @@ return function(env)
 
 	function M.save(content, name)
 		if type(content) ~= "string" or #content == 0 then return nil, "the attachment is empty" end
-		if #content > M.MAX_BYTES then return nil, "attachments support up to 2 MiB; split this input into smaller files" end
+		if #content > M.MAX_BYTES then return nil, "attachments support up to 10 MiB; split this input into smaller files" end
 		if content:find("\0", 1, true) then return nil, "attach a text or code file; binary files are not supported" end
 		if not fsx.enabled then return nil, "file storage is unavailable on this host; long input was kept in your draft" end
 		name = filename(name)
@@ -84,7 +84,7 @@ return function(env)
 			pending[id] = item
 		end
 		if offset ~= item.bytes then return nil, "upload offset does not match received bytes" end
-		if item.bytes + #content > M.MAX_BYTES or retained + #content > 8 * 1024 * 1024 then return nil, "upload exceeds the file or pending upload budget" end
+		if item.bytes + #content > M.MAX_BYTES or retained + #content > M.PENDING_BYTES then return nil, "upload exceeds the file or pending upload budget" end
 		item.parts[#item.parts + 1], item.bytes, item.at = content, item.bytes + #content, now
 		item.lastOffset, item.lastContent, item.final = offset, content, args.final == true
 		if args.final ~= true then return { received = item.bytes } end

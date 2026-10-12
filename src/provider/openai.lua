@@ -15,6 +15,7 @@ return function(env)
 	local registry = env.require("provider/registry")
 	local proxy = env.require("provider/proxy")
 	local traits = env.require("provider/traits")
+	local responses = env.require("provider/responses")
 	local urls = env.require("net/url")
 	local headerMap = env.require("net/headers")
 
@@ -200,6 +201,10 @@ return function(env)
 		},
 	}
 
+	-- The declarations are shared with the Responses adapter, which must carry
+	-- them too so the same compatibility check passes on that lane.
+	M.opencodeTools = OPENCODE_TOOLS
+
 	function M.buildBody(record, request)
 		local body = {
 			messages = M.wireMessages(request.messages),
@@ -347,6 +352,9 @@ return function(env)
 				if errType == "FreeTierError" or errMsg:find("free tier can only be used from within OpenCode", 1, true) then
 					message = (errMsg ~= "" and errMsg or "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode")
 						.. " -- the OpenCode server restricts free-tier models (like big-pickle) to its official app; use paid credits or an OpenCode Go subscription."
+				elseif errType == "ModelProtocolUnsupported" or errMsg:find("does not support this protocol", 1, true) then
+					message = (errMsg ~= "" and errMsg or "Model does not support this protocol")
+						.. " -- the model does not answer on this route"
 				else
 					message = decoded.error.message or decoded.error.type or decoded.error.code
 				end
@@ -916,6 +924,11 @@ return function(env)
 		applyRemembered(record, body)
 		local requestScope = registry.compatibilityKey(record)
 
+		-- A record that already learned the Responses lane skips chat entirely.
+		if responses.remembered(record) and responses.eligible(record) then
+			return responses.complete(record, request)
+		end
+
 		local url = registry.endpoint(record, "/chat/completions")
 		local pool = registry.keysOf(record)
 		local currentKey = nil
@@ -1033,6 +1046,20 @@ return function(env)
 		end
 
 		local res, err = fireWithRotation(body)
+		-- Some Zen models only speak the Responses protocol: /chat/completions
+		-- answers ModelProtocolUnsupported for them. Switch lanes and retry there;
+		-- when that lane also fails, the original refusal falls through below to
+		-- the normal repair and failure path.
+		if res and registry.compatibilityKey(record) == requestScope
+			and responses.eligible(record) and responses.isProtocolRefusal(res) then
+			remember(record, responses.key())
+			log.info("provider", record.label .. ": chat protocol refused, retrying on the Responses lane")
+			if request.onRetry then
+				request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = "model needs the Responses protocol", status = res.status })
+			end
+			local switched, switchErr, switchRes = responses.complete(record, request)
+			if switched then return switched, nil, switchRes end
+		end
 		-- A gateway names a bad field in a 400, and a NewAPI gateway names a bad
 		-- content variant in a 422. Both are repairable, and both can chain: a
 		-- gateway that multiplexes backends can refuse the very shape a sibling

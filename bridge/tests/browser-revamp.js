@@ -28,7 +28,7 @@ const { makePng } = require('./helpers/images');
     activeProvider: 'local', theme: { canvas: '#111914', surface: '#18211a', text: '#edf0e7' },
     settings: { ui: { density: 'comfortable', transcriptWidth: 'medium' }, agent: { effort: 'high', temperature: 1, maxTurns: 24 } },
     permissions: { mode: 'ask' }, tools: [], todos: [], loops: [], logs: [], requests: [], subagents: [], questions: [], pendingPermissions: [],
-    usage: { total: 2480, requests: 3, cost: .004 }, attachments: { inlineLimit: 8000, maxBytes: 2 * 1024 * 1024, available: true },
+    usage: { total: 2480, requests: 3, cost: .004 }, attachments: { inlineLimit: 8000, maxBytes: 10 * 1024 * 1024, available: true },
   };
   try {
     await push({ sessionId: 's1', snapshot: [], state });

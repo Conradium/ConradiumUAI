@@ -584,7 +584,16 @@ return function(env)
 	function M.markFail(record, message)
 		local state = health(record)
 		state.fail = state.fail + 1
-		state.streak = state.streak + 1
+		-- Account- or model-scope refusals are not endpoint health: free-tier
+		-- lockout and unsupported-protocol refusals persist past any cooldown,
+		-- so benching on them only delays the inevitable message.
+		local text = tostring(message or "")
+		local scopeError = text:find("free tier can only be used from within OpenCode", 1, true) ~= nil
+			or text:find("does not support this protocol", 1, true) ~= nil
+			or text:find("ModelProtocolUnsupported", 1, true) ~= nil
+		if not scopeError then
+			state.streak = state.streak + 1
+		end
 		state.lastError = util.ellipsis(message or "request failed", 200)
 		if state.streak >= COOLDOWN_AFTER then
 			state.cooldownUntil = clock.ms() + COOLDOWN_SECONDS * 1000
