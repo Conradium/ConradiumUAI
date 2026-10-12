@@ -123,11 +123,36 @@ return function(env)
 			if #targets > MAX_SELECT and idAction then return nil, "selection would exceed Gravity's 512-part limit" end
 			if #targets > MAX_SELECT then capped = true end
 			if not guard() then return nil, "Gravity selection changed; inspect it before retrying" end
+			local targetCount = math.min(#targets, MAX_SELECT)
+			for index = 1, targetCount do
+				local entry = targets[index]
+				if x6.a[entry.part] ~= entry.record then return nil, "A requested part is no longer held; read gravity_parts again" end
+			end
 			-- Build a replacement using the native selection methods, preserving
-			-- their highlight and UI notifications without releasing overrides.
-			x6.pc_clear()
-			for index = 1, math.min(#targets, MAX_SELECT) do x6.pc_select(targets[index].part, true) end
-			return { action = action, selected = math.min(#targets, MAX_SELECT), capped = capped }
+			-- highlights and notifications. Native failures must not masquerade as
+			-- success after clearing the old selection; restore it where possible.
+			local function replace(list, count)
+				if not gravity.valid(context, ctx) then return false end
+				local cleared, result = pcall(x6.pc_clear)
+				if not cleared or result == false then return false end
+				local expected = {}
+				for index = 1, count do
+					local entry = list[index]
+					if not gravity.valid(context, ctx) or x6.a[entry.part] ~= entry.record then return false end
+					local applied, value = pcall(x6.pc_select, entry.part, true)
+					if not applied or value == false or not x6.pc_selected[entry.part] then return false end
+					expected[entry.part] = true
+				end
+				for part in pairs(x6.pc_selected) do if x6.a[part] and not expected[part] then return false end end
+				for part in pairs(expected) do if not x6.pc_selected[part] then return false end end
+				return gravity.valid(context, ctx)
+			end
+			if not replace(targets, targetCount) then
+				local restored = replace(selection, #selection)
+				return nil, restored and "Gravity selection update failed; the previous selection was restored"
+					or "Gravity selection update failed and restoration was incomplete; inspect gravity_parts before retrying"
+			end
+			return { action = action, selected = targetCount, capped = capped }
 		end
 		if action == "clear" then x6.pc_clear(); return { action = action, selected = 0 } end
 		if action == "release_all" then return { action = action, affected = x6.pc_release_all() } end

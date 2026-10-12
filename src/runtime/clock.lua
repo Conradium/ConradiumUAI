@@ -2,30 +2,44 @@
 --
 -- os.clock reports processor time, which stops advancing while a thread is
 -- yielded, so anything measuring a request or a backoff has to use a wall clock.
--- DateTime is the modern one; os.time is the fallback for hosts that lack it and
--- costs us sub-second resolution, which only ever affects display.
+-- DateTime supplies the epoch; Roblox time() preserves sub-second deadlines when
+-- DateTime is temporarily unavailable. Hosts without either use coarse os.time.
 return function(env)
 	local util = env.require("runtime/util")
 	local caps = env.require("runtime/caps")
 
 	local M = {}
 
-	local epochBase = 0
+	local epochBase, tickBase = 0, nil
+	local function finite(value) return type(value) == "number" and value == value and math.abs(value) < math.huge end
+	local function runtimeTime()
+		if type(time) ~= "function" then return nil end
+		local ok, value = pcall(time)
+		return ok and finite(value) and value or nil
+	end
+	local function wallTime()
+		local ok, value = pcall(function() return os.time() end)
+		return ok and finite(value) and value * 1000 or epochBase
+	end
 	do
 		local ok, value = pcall(function()
 			return DateTime.now().UnixTimestampMillis
 		end)
-		M.precise = ok and type(value) == "number"
-		if not M.precise then epochBase = (os.time() or 0) * 1000 end
+		M.precise = ok and finite(value)
+		epochBase, tickBase = M.precise and value or wallTime(), runtimeTime()
 	end
 
 	function M.ms()
+		-- A transient host failure must not permanently disable the precise clock.
+		local ok, value = pcall(function() return DateTime.now().UnixTimestampMillis end)
+		M.precise = ok and finite(value)
 		if M.precise then
-			local ok, value = pcall(function() return DateTime.now().UnixTimestampMillis end)
-			if ok then return value end
-			M.precise = false
+			epochBase, tickBase = value, runtimeTime()
+			return value
 		end
-		return (os.time() or 0) * 1000
+		local current = runtimeTime()
+		if current and tickBase then return epochBase + math.max(0, current - tickBase) * 1000 end
+		return wallTime()
 	end
 
 	function M.since(startMs)
@@ -38,6 +52,7 @@ return function(env)
 			return DateTime.fromUnixTimestamp(seconds):FormatLocalTime("HH:mm:ss", "en-us")
 		end)
 		if ok and type(text) == "string" then return text end
+		seconds = seconds + M.offsetMinutes() * 60
 		return string.format("%02d:%02d:%02d",
 			math.floor(seconds / 3600) % 24, math.floor(seconds / 60) % 60, seconds % 60)
 	end
@@ -130,7 +145,12 @@ return function(env)
 	function M.dayNumberOfKey(key)
 		local year, month, day = tostring(key or ""):match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
 		if not year then return nil end
-		return M.daysFromCivil(tonumber(year), tonumber(month), tonumber(day))
+		year, month, day = tonumber(year), tonumber(month), tonumber(day)
+		if month < 1 or month > 12 or day < 1 or day > 31 then return nil end
+		local days = M.daysFromCivil(year, month, day)
+		local actualYear, actualMonth, actualDay = M.civilFromDays(days)
+		if actualYear ~= year or actualMonth ~= month or actualDay ~= day then return nil end
+		return days
 	end
 
 	function M.hourOf(ms)
@@ -161,7 +181,7 @@ return function(env)
 		local days = M.dayNumberOfKey(key)
 		if not days then return tostring(key) end
 		local year, month, day = M.civilFromDays(days)
-		local thisYear = M.civilFromDays(M.dayNumberOfKey(todayKey or M.dayKey()) or days)
+		local thisYear = M.civilFromDays(M.dayNumberOfKey(todayKey) or M.dayNumber())
 		local head = string.format("%s %d %s", WEEKDAYS[M.weekdayOfDayNumber(days)], day, MONTHS[month])
 		if year == thisYear then return head end
 		return head .. " " .. tostring(year)
@@ -222,9 +242,9 @@ return function(env)
 		local function wrapped(...)
 			generation = generation + 1
 			local mine = generation
-			local args = { ... }
+			local args = { n = select("#", ...), ... }
 			task.delay(seconds, scheduled(function()
-				if mine == generation then fn(unpack(args)) end
+				if mine == generation then fn((table.unpack or unpack)(args, 1, args.n)) end
 			end))
 		end
 		return wrapped, function() generation = generation + 1 end
@@ -290,13 +310,15 @@ return function(env)
 			ok, result = pcall(fn)
 			done = true
 		end))
+		local cancelled = false
 		if not done then
 			local elapsed = 0
 			repeat
 				elapsed = elapsed + (task.wait() or 0)
-			until done or (aborted and aborted()) or elapsed >= seconds
+				cancelled = not done and aborted and aborted() or false
+			until done or cancelled or elapsed >= seconds
 		end
-		if not done then return false, false, nil, aborted and aborted() and "aborted" or "timeout" end
+		if not done then return false, false, nil, cancelled and "aborted" or "timeout" end
 		return true, ok, result
 	end
 

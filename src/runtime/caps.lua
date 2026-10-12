@@ -37,6 +37,14 @@ return function(env)
 	end
 
 	local requestFn, requestName = findRequest()
+	local compiler = callable(loadstring)
+	if not compiler and callable(getgenv) then
+		local ok, globals = pcall(getgenv)
+		if ok and type(globals) == "table" then
+			local readOk, candidate = pcall(function() return globals.loadstring end)
+			if readOk then compiler = callable(candidate) end
+		end
+	end
 
 	M.fn = {
 		request = requestFn,
@@ -49,7 +57,7 @@ return function(env)
 		listfiles = callable(listfiles),
 		delfile = callable(delfile),
 		delfolder = callable(delfolder),
-		loadstring = callable(loadstring) or (callable(getgenv) and callable(getgenv().loadstring)) or nil,
+		loadstring = compiler,
 		getgenv = callable(getgenv),
 		gethui = callable(gethui),
 		clipboard = findClipboard(),
@@ -92,10 +100,10 @@ return function(env)
 		M.http = "executor"
 		M.uaSupported = true
 	else
-		local ok = pcall(function()
+		local ok, available = pcall(function()
 			return env.services.HttpService ~= nil
 		end)
-		M.http = ok and "roblox" or "none"
+		M.http = ok and available and "roblox" or "none"
 		M.uaSupported = false
 	end
 

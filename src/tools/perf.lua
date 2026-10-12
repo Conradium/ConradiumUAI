@@ -3,8 +3,7 @@ return function(env)
 	local util = env.require("runtime/util")
 	local clock = env.require("runtime/clock")
 	local H = env.require("tools/helpers")
-
-	local SCAN_CAP = 60000
+	local scan = env.require("runtime/instance_scan")
 
 	return {
 		{
@@ -67,19 +66,16 @@ return function(env)
 				},
 				required = {},
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local root, err = H.resolve(args.root or "Workspace")
 				if not root then return H.fail(err) end
 
-				local ok, descendants = pcall(function() return root:GetDescendants() end)
-				if not ok then return H.fail("could not read that subtree") end
-
 				local counts, total = {}, 0
-				for _, node in ipairs(descendants) do
+				local scanned = scan.descendants(root, ctx, function(node)
 					total = total + 1
-					if total > SCAN_CAP then break end
 					counts[node.ClassName] = (counts[node.ClassName] or 0) + 1
-				end
+				end, 20000)
+				local note = not scanned.complete and ("\nScan incomplete: " .. tostring(scanned.reason or "unreadable objects") .. ". Counts are lower bounds.") or ""
 
 				local rows = {}
 				for class, count in pairs(counts) do rows[#rows + 1] = { class = class, count = count } end
@@ -88,16 +84,16 @@ return function(env)
 					return a.class < b.class
 				end)
 
-				if total == 0 then return H.pathOf(root) .. " is empty." end
+				if total == 0 then return H.pathOf(root) .. (scanned.complete and " is empty." or " has no readable counted descendants.") .. note end
 				return string.format("%s contains %s across %d classes:\n%s",
 					H.pathOf(root), util.pluralise(total, "instance"), #rows,
 					H.list(rows, H.limit(args.limit, 20, 40), function(row)
 						return string.format("%-28s %s", row.class, util.formatNumber(row.count))
-					end))
+					end)) .. note
 			end,
 		},
 		{
-			name = "agent_status",
+			name = "client_status",
 			risk = "read",
 			description = "Report the agent's own state: provider, model, token spend this session, context size, host capabilities and how many tools are available.",
 			parameters = { type = "object", properties = util.emptyObject(), required = {} },

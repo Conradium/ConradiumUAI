@@ -1,4 +1,5 @@
 -- Deterministic content identity, independent of checkout path, time and CRLF.
+-- End-of-file whitespace is ignored; interior whitespace remains significant.
 -- Two integer rolling hashes stay below Lua's exact integer limit throughout.
 return function(version, modules, bootstrap)
 	local first, second = 5381, 2166136261

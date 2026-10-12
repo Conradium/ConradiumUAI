@@ -197,7 +197,7 @@ return function(env)
 	return {
 		{
 			name = "todo_write",
-			risk = "read",
+			risk = "write",
 			description = "Replace the full task list. Use when substantial work benefits from a tracked plan; keep one item active while work remains. Routine tool sequences need no list.",
 			parameters = {
 				type = "object",
@@ -446,7 +446,7 @@ return function(env)
 			-- not offer this tool in a named conversation, and the handler refuses as
 			-- the second line of defence.
 			name = "conversation_rename",
-			risk = "read",
+			risk = "write",
 			description = "Rename this conversation to a short, specific title based on what it is actually about, so the user can pick the thread out of their list later. Call it once the subject is clear -- usually after the first exchange -- and again only when the work has genuinely moved on. Name the job, not the tools used. Never use it to replace a name the user set themselves; a conversation the user has named is not offered this tool.",
 			parameters = {
 				type = "object",
@@ -558,7 +558,7 @@ return function(env)
 		},
 		{
 			name = "memory_write",
-			risk = "read",
+			risk = "write",
 			description = "Save a durable fact about this user or project under a short key. Survives context compaction and restarts. Use for preferences, paths and goals, not for transcript chatter.",
 			parameters = {
 				type = "object",
@@ -589,7 +589,7 @@ return function(env)
 				required = {},
 			},
 			run = function(args)
-				local key, query = util.trim(args.key or ""), util.trim(args.query or ""):lower()
+				local key, query = state.resolveMemoryKey(args.key or ""), util.trim(args.query or ""):lower()
 				if key ~= "" and query ~= "" then return H.fail("use key or query, not both") end
 				if key ~= "" then
 					local value = state.recall(key)
@@ -611,7 +611,7 @@ return function(env)
 		},
 		{
 			name = "memory_forget",
-			risk = "read",
+			risk = "write",
 			description = "Delete one remembered key.",
 			parameters = {
 				type = "object",

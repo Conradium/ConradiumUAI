@@ -9,6 +9,7 @@ return function(env)
 	local M = {}
 	local serial = 0
 	function M.arguments(args)
+		if type(args) ~= "table" then return nil, "Remote arguments must be an object" end
 		if args.args ~= nil and args.arguments ~= nil then return nil, "Provide legacy args or packed arguments, not both" end
 		if args.arguments ~= nil then return values.decode(args.arguments) end
 		local list = args.args or {}
@@ -16,7 +17,7 @@ return function(env)
 		local out = { n = #list }
 		local examples = { vec3 = Vector3.new(), vector3 = Vector3.new(), vec2 = Vector2.new(), color3 = Color3.new(), cframe = CFrame.new() }
 		for i, item in ipairs(list) do
-			local prefix, rest; if type(item) == "string" then prefix, rest = item:match("^(%a+):(.*)$"); prefix = prefix and prefix:lower() end
+			local prefix, rest; if type(item) == "string" then prefix, rest = item:match("^([%a][%w_]*):(.*)$"); prefix = prefix and prefix:lower() end
 			if prefix == "instance" then local value, why = H.resolve(rest); if not value then return nil, why end; out[i] = value
 			elseif prefix == "number" then out[i] = tonumber(rest); if not values.finite(out[i]) then return nil, "Invalid numeric argument" end
 			elseif prefix == "string" then out[i] = rest

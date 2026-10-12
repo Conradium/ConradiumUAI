@@ -1,6 +1,6 @@
 # Provider compatibility and WebSockets
 
-Applies to **2.7.0**, October 9, 2026.
+Applies to **2.8.0**, October 12, 2026.
 
 UAI implements two inference protocols: **Chat Completions** and **Anthropic
 Messages**. A provider works through one of these APIs, including when it is a

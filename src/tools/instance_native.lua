@@ -66,11 +66,16 @@ return function(env)
 			if args.parent_id and args.parent then return nil, "Choose parent_id or parent path" end
 			if args.parent_id then local object, err = refs.resolve(args.parent_id); if not object then return nil, err end; bound.parentId = refs.id(object)
 			elseif args.parent and args.parent:lower() ~= "nil" then local parent, err = H.resolve(args.parent); if not parent then return nil, err end; bound.parentId = refs.id(parent) end
-			if name == "instance_clone" and not args.parent and not args.parent_id then local target = refs.resolve(bound.instanceId); bound.parentId = target.Parent and refs.id(target.Parent); bound.detachedParent = target.Parent == nil end
+			if name == "instance_clone" and not args.parent and not args.parent_id then
+				local target, err = refs.resolve(bound.instanceId); if not target then return nil, err end
+				local readable, parent = pcall(function() return target.Parent end); if not readable then return nil, "Could not read the source parent" end
+				bound.parentId, bound.detachedParent = parent and refs.id(parent), parent == nil
+			end
 			return bound
 		end
 	end
 	function M.prepare.instance_create(args)
+		if args.parent_id and args.parent then return nil, "Choose parent_id or parent path" end
 		local parent, why
 		if args.parent_id then parent, why = refs.resolve(args.parent_id) else parent, why = H.resolve(args.parent or "Workspace") end
 		if not parent then return nil, why end; return { parentId = refs.id(parent) }

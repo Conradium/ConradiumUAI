@@ -1,6 +1,6 @@
 -- Shared syntax overlay for native selectable code fields, including read-only previews.
 return function(env)
-	local lexer = env.require("runtime/code_lexer")
+	local lexer = env.require("ui/code/highlight")
 	local text = env.require("runtime/code_text")
 	local metrics = env.require("ui/code/metrics")
 	local theme = env.require("ui/theme")

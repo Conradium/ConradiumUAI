@@ -2,6 +2,7 @@
 return function(env)
 	local util = env.require("runtime/util")
 	local H = env.require("tools/helpers")
+	local scan = env.require("runtime/instance_scan")
 
 	local LIGHTING_FIELDS = {
 		"ClockTime", "TimeOfDay", "Brightness", "Ambient", "OutdoorAmbient",
@@ -77,7 +78,7 @@ return function(env)
 				},
 				required = {},
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local centre = rootPosition() or Vector3.new(0, 0, 0)
 				if args.position and util.trim(args.position) ~= "" then
 					local parsed = H.coerce(args.position, Vector3.new(0, 0, 0))
@@ -86,23 +87,32 @@ return function(env)
 				end
 				local radius = util.clamp(tonumber(args.radius) or 20, 1, 500)
 
-				local found
+				local found, scanStats
 				local ok = pcall(function()
 					found = env.services.Workspace:GetPartBoundsInRadius(centre, radius)
 				end)
 				if not ok or type(found) ~= "table" then
-					-- Older hosts lack the spatial query; a descendant sweep is slower
-					-- but produces the same answer.
+					-- Older hosts lack the spatial query. Walk incrementally and make
+					-- incomplete results explicit; a capped scan cannot prove absence.
 					found = {}
-					for _, node in ipairs(env.services.Workspace:GetDescendants()) do
-						if node:IsA("BasePart") and (node.Position - centre).Magnitude <= radius then
+					local unreadableParts = 0
+					scanStats = scan.descendants(env.services.Workspace, ctx, function(node)
+						local readable, nearby = pcall(function()
+							return node:IsA("BasePart") and (node.Position - centre).Magnitude <= radius
+						end)
+						if not readable then unreadableParts = unreadableParts + 1
+						elseif nearby then
 							found[#found + 1] = node
 						end
+					end, 20000)
+					if unreadableParts > 0 then
+						scanStats.complete, scanStats.reason = false, scanStats.reason or "unreadable parts"
 					end
 				end
+				local note = scanStats and not scanStats.complete and ("\nScan incomplete: " .. tostring(scanStats.reason or "unreadable objects") .. ". Unvisited or unreadable parts may also match.") or ""
 
 				if #found == 0 then
-					return string.format("No parts within %.0f studs of %s.", radius, H.show(centre))
+					return string.format("No parts found within %.0f studs of %s.", radius, H.show(centre)) .. note
 				end
 				table.sort(found, function(a, b)
 					return (a.Position - centre).Magnitude < (b.Position - centre).Magnitude
@@ -112,7 +122,7 @@ return function(env)
 					H.list(found, H.limit(args.limit, 25, 80), function(part)
 						return string.format("%s [%s] %.1f studs, size %s",
 							H.pathOf(part), part.ClassName, (part.Position - centre).Magnitude, H.show(part.Size))
-					end))
+					end)) .. note
 			end,
 		},
 		{

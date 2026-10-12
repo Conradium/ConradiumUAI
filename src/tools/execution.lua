@@ -10,6 +10,7 @@ return function(env)
 	local active = {}
 	local OUTPUT_BYTES, OUTPUT_LINES = 16000, 120
 	local STOP = {}
+	local unpackValues = table.unpack or unpack
 
 	local function pack(...)
 		return { n = select("#", ...), ... }
@@ -119,14 +120,16 @@ return function(env)
 		if not caps.fn.loadstring then return nil, caps.reason("exec") end
 		local ok, fn, err = pcall(caps.fn.loadstring, code, "UAI run_luau")
 		if not ok then return nil, tostring(fn) end
+		if type(fn) ~= "function" then return nil, err or "The host compiler returned no function." end
 		return fn, err
 	end
 
 	function M.check(code)
-		if util.trim(code) == "" then return { ok = false, text = "Nothing to compile." } end
+		if type(code) ~= "string" or util.trim(code) == "" then return { ok = false, text = "Nothing to compile.", data = { status = "source_error" } } end
+		if #code > W.MAX_BYTES then return { ok = false, text = "Source exceeds the 2 MiB execution limit.", data = { status = "source_error" } } end
 		local fn, err = compile(code)
-		if not fn then return { ok = false, text = "Compile error: " .. tostring(err) } end
-		return { ok = true, text = "Luau compiled successfully. No code was executed." }
+		if not fn then return { ok = false, text = "Compile error: " .. tostring(err), data = { status = "compile_error" } } end
+		return { ok = true, text = "Luau compiled successfully. No code was executed.", data = { status = "compiled" } }
 	end
 
 	-- Tables are useful results, not the opaque "{table}" that used to reach the
@@ -141,7 +144,7 @@ return function(env)
 		local function show(item, depth)
 			visited = visited + 1
 			if visited > 128 then omitted = true; return "..." end
-			if type(item) == "table" and typeof(item) == "table" then
+			if type(item) == "table" and (typeof or type)(item) == "table" then
 				if seen[item] then return "<cycle>" end
 				if depth >= 4 then omitted = true; return "{...}" end
 				seen[item] = true
@@ -172,40 +175,45 @@ return function(env)
 	-- ever crossing the model's context -- a file it just wrote does not need to be
 	-- read back and pasted in to be executed.
 	local function sourceFor(args)
-		if type(args.path) == "string" and util.trim(args.path) ~= "" then
-			if type(args.code) == "string" and util.trim(args.code) ~= "" then
-				return nil, "Pass either code or path, not both."
-			end
-			local path = util.trim(args.path)
+		if type(args) ~= "table" then return nil, "Provide source arguments with either code or path." end
+		if args.path ~= nil and args.code ~= nil then return nil, "Pass either code or path, not both." end
+		if args.path ~= nil then
+			if type(args.path) ~= "string" or util.trim(args.path) == "" then return nil, "path must be a nonempty string." end
+			-- Let the shared resolver preserve or reject spaces without changing paths.
+			local path = args.path
 			local content, err = W.read(path)
 			if not content then return nil, "Could not read '" .. path .. "': " .. tostring(err) end
+			if #content > W.MAX_BYTES then return nil, "'" .. path .. "' exceeds the 2 MiB execution limit." end
 			if util.trim(content) == "" then return nil, "'" .. path .. "' is empty." end
 			return content
 		end
 		if type(args.code) ~= "string" or util.trim(args.code) == "" then
-			return nil, "Provide inline code, or a path to a workspace file."
+			return nil, "Provide inline code, or a files/... or pastes/... path."
 		end
 		return tostring(args.code)
 	end
 
 	function M.checkSource(args)
 		local code, err = sourceFor(args)
-		if not code then return { ok = false, text = err } end
+		if not code then return { ok = false, text = err, data = { status = "source_error" } } end
 		return M.check(code)
 	end
 
 	function M.run(args, ctx, onReturn)
 		local code, sourceErr = sourceFor(args)
-		if not code then return { ok = false, text = sourceErr } end
+		if not code then return { ok = false, text = sourceErr, data = { status = "source_error" } } end
+		if args.parameters ~= nil and type(args.parameters) ~= "table" then
+			return { ok = false, text = "Execution parameters must be a table.", data = { status = "source_error" } }
+		end
 		local checked = M.check(code)
 		if not checked.ok then return checked end
 		local patched, guard = M.instrument(code)
 		-- Parameters provide capture and managed scheduling even on hosts where
 		-- setfenv is absent. No extra leading newline: error line numbers stay useful.
 		local factory, err = compile("return function(print, warn, task, wait, " .. guard .. ", ...) " .. patched .. "\nend")
-		if not factory then return { ok = false, text = "Compile error: " .. tostring(err) } end
+		if not factory then return { ok = false, text = "Compile error: " .. tostring(err), data = { status = "compile_error" } } end
 		local built, fn = pcall(factory)
-		if not built then return { ok = false, text = "Compile error: " .. tostring(fn) } end
+		if not built or type(fn) ~= "function" then return { ok = false, text = "Execution wrapper error: " .. tostring(fn), data = { status = "runtime_error" } } end
 
 		local started, seconds = clock.ms(), M.timeout(args)
 		local deadline = started + seconds * 1000
@@ -215,7 +223,12 @@ return function(env)
 		local children = {}
 		local cancelled = setmetatable({}, { __mode = "k" })
 		local owned = setmetatable({}, { __mode = "k" })
-		local logs, bytes, truncated = {}, 0, false
+		local logs, bytes, truncated, omittedCalls = {}, 0, false, 0
+		local function recordFailure(why)
+			local text, cropped = display(why)
+			failure = failure or text
+			truncated = truncated or cropped
+		end
 		local execution = {}
 		-- Never close a coroutine that Roblox or the executor may still resume.
 		-- task.cancel can leave an engine/HTTP continuation targeting a dead thread;
@@ -254,7 +267,7 @@ return function(env)
 				if onReturn then if prefix == "[warn]" then warn(...) else print(...) end end
 				return
 			end
-			if #logs >= OUTPUT_LINES or bytes >= OUTPUT_BYTES then truncated = true; return end
+			if #logs >= OUTPUT_LINES or bytes >= OUTPUT_BYTES then truncated = true; omittedCalls = omittedCalls + 1; return end
 			local parts = { prefix }
 			for index = 1, math.min(select("#", ...), 32) do
 				local text, cropped = display((select(index, ...)))
@@ -304,13 +317,13 @@ return function(env)
 				local ok, why = pcall(function()
 					check()
 					if kind == "delay" then wait(delay) end
-					callback(unpack(values, 1, values.n))
+					callback(unpackValues(values, 1, values.n))
 				end)
 				children[current] = nil
 				owned[current] = nil
 				if not ok and why ~= STOP then
 					if released then error(why, 0) end
-					failure = display(why)
+					recordFailure(why)
 				end
 			end
 			-- A sliced delay can exit promptly on Stop without closing its thread or
@@ -335,10 +348,10 @@ return function(env)
 			local result = pack(pcall(function()
 				check()
 				return fn(function(...) capture("", ...) end, function(...) capture("[warn]", ...) end,
-					managed, wait, checkpoint, unpack(args.parameters or {}, 1, args.parameters and (args.parameters.n or #args.parameters) or 0))
+					managed, wait, checkpoint, unpackValues(args.parameters or {}, 1, args.parameters and (args.parameters.n or #args.parameters) or 0))
 			end))
 			if result[1] then returns = result
-			elseif result[2] ~= STOP then failure = display(result[2]) end
+			elseif result[2] ~= STOP then recordFailure(result[2]) end
 			owned[root] = nil
 			done = true
 		end)
@@ -349,6 +362,7 @@ return function(env)
 			if stopped or failure then break end
 			task.wait()
 		end
+		local pendingOnFailure = failure and (not done or next(children) ~= nil)
 		if stopped or failure then execution.stop(stopped or "error") end
 		active[execution] = nil
 
@@ -375,18 +389,18 @@ return function(env)
 				output[#output + 1] = "Returned: " .. table.concat(values, "\t")
 			end
 		end
-		if stopped or not fullyCancelled then
+		if stopped == "aborted" or stopped == "timeout" or pendingOnFailure or not fullyCancelled then
 			output[#output + 1] = fullyCancelled and "Managed Luau tasks were stopped cooperatively."
 				or "Cooperative cancellation requested. Code blocked outside managed waits may still resume before its next checkpoint. Its thread was left alive so Roblox can finish the pending callback. Do not retry the same code."
 		end
 		if #logs > 0 then output[#output + 1] = "Output:\n" .. table.concat(logs, "\n") end
-		if truncated then output[#output + 1] = "(output truncated to the capture limit)" end
+		if truncated then output[#output + 1] = "(output truncated to the capture limit" .. (omittedCalls > 0 and "; " .. omittedCalls .. " print/warn calls omitted" or "") .. ")" end
 		released = status == "completed"
 		-- Internal callers can consume a validated module table without serialising
 		-- its closures. Future plugin callbacks use ordinary, released execution.
-		if released and onReturn and returns then onReturn(unpack(returns, 2, returns.n)) end
+		if released and onReturn and returns then onReturn(unpackValues(returns, 2, returns.n)) end
 		return { ok = status == "completed", text = table.concat(output, "\n"),
-			data = { status = status, ms = clock.since(started), outputTruncated = truncated } }
+			data = { status = status, ms = clock.since(started), outputTruncated = truncated, outputOmittedCalls = omittedCalls } }
 	end
 
 	-- Callable operations share deadlines, cancellation and the unload registry.
@@ -413,7 +427,7 @@ return function(env)
 		if not result then return { ok = false, text = "Stopped before dispatch", data = { status = "aborted", dispatched = false } } end
 		if not result[1] then return { ok = false, text = "Native call error: " .. tostring(result[2]), data = { status = "errored", dispatched = dispatched, ms = clock.since(started) } } end
 		local returns = { n = result.n - 1 }; for i = 2, result.n do returns[i - 1] = result[i] end
-		if args.onReturn then pcall(args.onReturn, unpack(returns, 1, returns.n)) end
+		if args.onReturn then pcall(args.onReturn, unpackValues(returns, 1, returns.n)) end
 		return { ok = true, text = "Native call returned", data = { status = "returned", dispatched = dispatched, resultCount = returns.n, ms = clock.since(started) }, returns = returns }
 	end
 	return M

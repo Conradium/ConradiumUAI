@@ -115,8 +115,20 @@ return function(env)
 		return config.get("memory.enabled", true) ~= false
 	end
 
+	function M.normalizeMemoryKey(key)
+		return (util.trim(key):gsub("%s+", "_"))
+	end
+
+	function M.resolveMemoryKey(key)
+		local exact = util.trim(key)
+		for _, entry in ipairs(entries()) do
+			if entry.key == exact then return exact end
+		end
+		return M.normalizeMemoryKey(exact)
+	end
+
 	function M.remember(key, value)
-		local cleanKey = util.trim(key):gsub("%s+", "_")
+		local cleanKey = M.normalizeMemoryKey(key)
 		if cleanKey == "" then return false, "a memory needs a key" end
 		if not M.memoryEnabled() then return false, "memory is disabled in settings" end
 		local list = entries()
@@ -146,18 +158,20 @@ return function(env)
 	end
 
 	function M.recall(key)
+		local cleanKey = M.resolveMemoryKey(key)
 		for _, entry in ipairs(entries()) do
-			if entry.key == util.trim(key) then return entry.value end
+			if entry.key == cleanKey then return entry.value end
 		end
 		return nil
 	end
 
 	function M.forget(key)
+		local cleanKey = M.resolveMemoryKey(key)
 		local list = entries()
 		local kept = {}
 		local removed = 0
 		for _, entry in ipairs(list) do
-			if entry.key == util.trim(key) then
+			if entry.key == cleanKey then
 				removed = removed + 1
 			else
 				kept[#kept + 1] = entry

@@ -46,7 +46,7 @@ return function(env)
 		local visible = props.visible ~= false
 		local reading, chunkReading, disclosureReading
 		local previousY = 0
-		local unread = 0
+		local unread, unreadFailures = 0, 0
 		local viewport = env.require("ui/chat/viewport").new(scroll, { defer = function() return view.replaying end })
 		props = util.copy(props); props.viewport = viewport
 		view.viewport = viewport
@@ -167,7 +167,7 @@ return function(env)
 			onClick = function()
 				view.pinned = true
 				reading, chunkReading, disclosureReading = nil, nil, nil
-				unread = 0
+				unread, unreadFailures = 0, 0
 				move(math.max(scroll.instance.AbsoluteCanvasSize.Y - scroll.instance.AbsoluteWindowSize.Y, 0))
 				view.repin()
 			end,
@@ -175,7 +175,10 @@ return function(env)
 		latest.instance.Visible = false
 		local function updateLatest()
 			latest.instance.Visible = not view.pinned and not view.welcomeCard
-			latest.setText(unread > 0 and (util.pluralise(unread, "new message") .. " - Jump to latest") or "Jump to latest")
+			local counts = {}
+			if unread > 0 then counts[#counts + 1] = util.pluralise(unread, "new message") end
+			if unreadFailures > 0 then counts[#counts + 1] = util.pluralise(unreadFailures, "failure") end
+			latest.setText(#counts > 0 and (table.concat(counts, ", ") .. " - Jump to latest") or "Jump to latest")
 		end
 
 		-- Use the layout's measured height rather than a circular automatic canvas
@@ -216,7 +219,7 @@ return function(env)
 
 		local function follow(force)
 			if destroyed or not visible then return end
-			if force then view.pinned = true; reading, chunkReading, disclosureReading = nil, nil, nil; unread = 0 end
+			if force then view.pinned = true; reading, chunkReading, disclosureReading = nil, nil, nil; unread, unreadFailures = 0, 0 end
 			if layoutQueued then return end
 			layoutQueued = true
 			clock.delay(0, function()
@@ -243,7 +246,7 @@ return function(env)
 			-- Even a small upward scroll means read here. A generous bottom threshold
 			-- otherwise grabs the wheel back and snaps the reader down on the next row.
 			view.pinned = view.welcomeCard ~= nil or (not upward and scroll.atBottom(theme.space.hair))
-			if view.pinned then unread = 0 end
+			if view.pinned then unread, unreadFailures = 0, 0 end
 			updateLatest()
 			remember()
 		end)
@@ -395,7 +398,7 @@ return function(env)
 			view.rows, view.runs = {}, {}
 			view.historyNotice, view.issue, view.retentionRevision = nil, nil, nil
 			reading, chunkReading, disclosureReading = nil, nil, nil
-			unread = 0
+			unread, unreadFailures = 0, 0
 			adjusting = true
 			scroll.instance.CanvasSize = UDim2.fromOffset(0, 0)
 			move(0)
@@ -578,19 +581,20 @@ return function(env)
 				if handle and handle.progress then handle.progress(event.text) end
 				follow()
 			elseif event.kind == "tool:result" or event.kind == "tool:error" then
+				local failed = event.kind == "tool:error" or event.ok == false
 				local handle = view.tools[event.id]
 				if handle then
 					handle.finish(event)
 					track(handle, event)
-					if handle.run then handle.run.closed(event.kind ~= "tool:error" and event.ok ~= false, event.at) end
+					if handle.run then handle.run.closed(not failed, event.at, handle) end
 					view.tools[event.id] = nil
 				else
-					local into, order = target()
-					message.notice(into, {
-						tone = event.kind == "tool:error" and "bad" or "info",
-						text = string.format("%s: %s", tostring(event.name), util.ellipsis(event.text, 200)),
-					}, order)
+					local run = openRun(event.name)
+					handle = message.toolCall(run.rows, { name = event.name, arguments = "" }, run.slot(), activityOptions)
+					handle.run = run
+					run.opened(); handle.finish(event); track(handle, event); run.closed(not failed, event.at, handle)
 				end
+				if failed and not view.replaying and not view.pinned then unreadFailures = unreadFailures + 1 end
 				follow()
 			elseif event.kind == "subagent:start" then
 				-- Nested under the call that started it while that row is still tracked,
@@ -623,6 +627,7 @@ return function(env)
 			elseif event.kind == "subagent:tool:done" then
 				local handle = agentFor(event)
 				if handle then track(handle.toolDone(event), event) end
+				if event.ok == false and not view.replaying and not view.pinned then unreadFailures = unreadFailures + 1; follow() end
 			elseif event.kind == "subagent:done" then
 				local handle = agentFor(event)
 				if handle then
@@ -665,6 +670,7 @@ return function(env)
 					tone = "bad",
 					text = tostring(event.message),
 				}, nextOrder())
+				if not view.replaying and not view.pinned then unreadFailures = unreadFailures + 1 end
 				follow()
 			elseif event.kind == "abort" then
 				clearPreview()
@@ -692,6 +698,11 @@ return function(env)
 				if event.text and (event.kind == "user" or event.kind == "assistant:text") then
 					track({ root = P.text(scroll.instance, { name = "RecoveredText", text = event.text, role = "body",
 						wrap = true, auto = "Y", layoutOrder = nextOrder() }) }, event)
+				elseif event.kind == "tool:result" or event.kind == "tool:error" then
+					local failed = event.kind == "tool:error" or event.ok == false
+					track({ root = P.text(scroll.instance, { name = "RecoveredToolResult", text = tostring(event.name or "Tool") .. ": " .. tostring(event.text or event.error or "No result text retained."),
+						role = "monoSmall", wrap = true, auto = "Y", color = failed and theme.color.danger or theme.color.textSecondary, layoutOrder = nextOrder() }) }, event)
+					if failed and not view.replaying and not view.pinned then unreadFailures = unreadFailures + 1; follow() end
 				end
 			end
 		end
@@ -744,7 +755,7 @@ return function(env)
 					render(event); follow(); return
 				end
 				if view.replaying then
-					if event.kind == "user" then view.pinned = true; reading, chunkReading, disclosureReading = nil, nil, nil; unread = 0 end
+					if event.kind == "user" then view.pinned = true; reading, chunkReading, disclosureReading = nil, nil, nil; unread, unreadFailures = 0, 0 end
 					if event.transcriptId then
 						local saved = session.transcript and session.transcript.get(event.transcriptId) or event
 						if saved then replay.pending[#replay.pending + 1] = saved end

@@ -83,7 +83,7 @@ case("the ByteFall fallback sends base64 bytecode and never returns a service er
 	caps.fn.getscriptbytecode = function() return "ABC" end
 	check("a bytecode reader and HTTP offer the service", bytefall.available())
 	local key = refs.id(object(f, "LocalScript", "Remote"))
-	f.h.http.queue({ StatusCode = 200, Body = "-- Decompiled using ByteFall\nreturn 1", Headers = {} })
+	f.h.http.queue({ StatusCode = 200, Body = "-- Decompiled using ByteFall\nreturn 1", Headers = { ["content-type"] = "text/plain" } })
 	local item = assert(f.run(function() return sources.inspect(key, nil, { decompile = true }) end))
 	local entry = f.h.http.log[#f.h.http.log]
 	check("the request is the JSON envelope on the ByteFall endpoint", entry.url == bytefall.URL and entry.method == "POST"
@@ -93,7 +93,7 @@ case("the ByteFall fallback sends base64 bytecode and never returns a service er
 	f.h.http.queue({ StatusCode = 500, Body = "-- decompile error: bytecode parse: bad version", Headers = {} })
 	local failed, message, detail = f.run(function() return sources.inspect(key, nil, { refresh = true, decompile = true }) end)
 	check("a refused decompile is a failure that names the reason without the service body", not failed
-		and detail.code == "decompiler_unavailable" and has(message, "ByteFall")
+		and detail.code == "decompiler_failure" and has(message, "ByteFall")
 		and has(detail.diagnostics, "ByteFall request failed (HTTP 500)") and not has(detail.diagnostics, "bytecode parse"))
 	f.healthy(); f.close()
 end)
@@ -175,6 +175,10 @@ case("a decompile finishing at its deadline cannot populate the source cache", f
 	check("throwing cancellation callbacks fail closed without leaking host errors", ok and not cancelled and failure.code == "stale_request" and not has(failure.diagnostics, "private"))
 	f.healthy(); f.close()
 end)
+
+-- Source/decompiler changes can verify their existing contracts without running
+-- unrelated editor, Explorer, remotes, provider and subagent scenarios.
+if arg and arg[1] == "--source-only" then suite.finish() end
 
 case("read-only source survives persistence and requires editable extraction", function()
 	local f = F.new(); local sources, docs, store = f.env.require("runtime/script_sources"), f.env.require("tools/source_documents"), f.env.require("runtime/code_store")

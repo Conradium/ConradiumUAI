@@ -16,6 +16,7 @@ return function(env)
 	local P = env.require("ui/primitives")
 	local C = env.require("ui/controls")
 	local overlay = env.require("ui/overlay")
+	local message = env.require("ui/chat/message")
 
 	local M = { queue = {}, showing = false }
 
@@ -32,11 +33,13 @@ return function(env)
 
 		local remember = false
 		local resolved = false
+		local modal
 
 		local function answer(allowed)
 			if resolved then return end
 			resolved = true
 			pcall(request.resolve, allowed, remember)
+			if modal then modal.close(true) end
 			M.showing = false
 			-- Drain the next prompt on the same frame so a batch of tool calls does
 			-- not make the user wait between decisions.
@@ -44,7 +47,7 @@ return function(env)
 			if next_request then present(next_request) end
 		end
 
-		local modal = overlay.modal({
+		modal = overlay.modal({
 			title = "Allow " .. tostring(request.name) .. "?",
 			description = RISK_TEXT[request.risk or "write"] or RISK_TEXT.write,
 			width = theme.size.modalWide,
@@ -98,27 +101,28 @@ return function(env)
 
 		-- The arguments are the whole point of the prompt: "allow run_luau" means
 		-- nothing without seeing the code.
-		local argsText = ""
-		local ok, encoded = pcall(util.encode, request.args or {})
-		if ok then argsText = encoded end
-		if util.trim(argsText) ~= "" and argsText ~= "[]" and argsText ~= "{}" then
-			local box = P.frame(modal.content, {
-				size = UDim2.new(1, 0, 0, 0),
-				auto = "Y",
-				bg = theme.color.codeSurface,
-				radius = theme.radius.md,
-				padding = theme.space.sm,
-				layoutOrder = 3,
-			})
-			P.stroke(box, theme.color.codeBorder)
-			local label = P.text(box, {
-				text = (util.truncate(argsText, 900)),
-				role = "monoSmall",
-				color = theme.color.textSecondary,
-				wrap = true,
-				auto = "Y",
-			})
-			label.Size = UDim2.new(1, 0, 0, 0)
+		local arguments = P.column(modal.content, { name = "PermissionArguments", size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.sm, layoutOrder = 3 })
+		local args = request.args or {}
+		local parts, facts = message.splitArguments(args)
+		local order = 0
+		for _, fact in ipairs(facts) do
+			order = order + 1
+			P.text(arguments, { name = "ArgumentName", text = fact.key, role = "label", layoutOrder = order })
+			order = order + 1
+			message.codeBlock(arguments, { text = fact.value, lang = "text", numbers = false, maxLines = 12, layoutOrder = order })
+		end
+		for _, part in ipairs(parts) do
+			order = order + 1
+			message.codeBlock(arguments, { text = part.text, lang = part.lang or "text", label = part.label or part.key, maxLines = 12, layoutOrder = order })
+		end
+		if order == 0 then
+			P.text(arguments, { name = "NoArguments", text = "No arguments.", role = "small", color = theme.color.textSecondary })
+		else
+			P.button(arguments, { name = "ReviewPermissionArguments", text = "View full arguments", variant = "ghost", size = "sm", layoutOrder = order + 1,
+				onClick = function()
+					local ok, encoded = pcall(util.encode, args)
+					if ok then overlay.code({ title = tostring(request.name) .. " arguments", code = encoded, language = "json" }) end
+				end })
 		end
 
 		local rememberRow = P.row(modal.content, {
@@ -159,7 +163,7 @@ return function(env)
 			size = "sm",
 			layoutOrder = 1,
 			onClick = function()
-				modal.close()
+				answer(false)
 			end,
 		})
 		P.button(modal.footer, {
@@ -170,8 +174,6 @@ return function(env)
 			layoutOrder = 2,
 			onClick = function()
 				answer(true)
-				modal.closed = true
-				pcall(function() modal.scrim:Destroy() end)
 			end,
 		})
 	end

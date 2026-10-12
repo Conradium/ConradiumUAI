@@ -80,6 +80,14 @@ return function(env)
 			head.label.Name, head.state.Name = "RunSummary", "RunState"
 			local rows = column(card, "Calls", 2)
 			local handle = { root = holder, rows = rows, calls = 0, settled = 0, names = {}, failures = 0 }
+			local failedCalls = {}
+			local showFailures = P.button(card, { name = "ShowFailures", text = "Show failures", variant = "ghost", size = "sm", layoutOrder = 3,
+				onClick = function(button)
+					if opts and opts.beforeToggle then opts.beforeToggle(button.instance) end
+					handle.setOpen(true)
+					for call in pairs(failedCalls) do if call.root.Parent then call.setOpen(true) end end
+				end })
+			showFailures.instance.Visible = false
 			local started = tonumber(startedAt) or clock.ms()
 			local slot, stop = 0, nil
 			handle.setOpen, handle.isOpen = bindToggle(head, rows, opts)
@@ -111,8 +119,15 @@ return function(env)
 				if not stop then stop = clock.interval(1, function() if handle.settled < handle.calls then paint() end end) end
 				paint()
 			end
-			function handle.closed(ok, finishedAt)
-				if ok == false then handle.failed = true; handle.failures = handle.failures + 1 end
+			function handle.closed(ok, finishedAt, call)
+				if ok == false then
+					handle.failed = true; handle.failures = handle.failures + 1
+					if call then
+						failedCalls[call] = true
+						call.root.Destroying:Connect(function() failedCalls[call] = nil; showFailures.instance.Visible = next(failedCalls) ~= nil end)
+						showFailures.instance.Visible = true
+					end
+				end
 				handle.settled = handle.settled + 1
 				if handle.settled >= handle.calls then
 					handle.ms = math.max(0, (tonumber(finishedAt) or clock.ms()) - started)
@@ -162,7 +177,7 @@ return function(env)
 					or (result.denied and "Permission declined" or "Execution failed")))), 1, "label",
 					result.ok and theme.color.textTertiary or (quiet and theme.color.warn or theme.color.danger))
 				if value:find("\n") or (not isAnswer and #value > 300) then
-					render.codeBlock(resultHolder, { text = value, lang = "output", maxLines = 12, layoutOrder = 2 })
+					render.codeBlock(resultHolder, { text = value, lang = "output", maxLines = 12, expanded = result.ok ~= true, layoutOrder = 2 })
 				else
 					text(resultHolder, "ResultText", isAnswer and util.trim(value:sub(#"The user answered:" + 1)) or value,
 						2, isAnswer and "small" or "monoSmall", result.ok and theme.color.textSecondary or theme.color.danger)

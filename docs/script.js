@@ -259,8 +259,8 @@
         rows: [...element.querySelectorAll('.tool-row')].map(row => ({
           element: row,
           text: (label + ' ' + row.textContent).toLowerCase(),
-          risk: row.classList.contains('risk-danger') ? 'danger'
-            : row.classList.contains('risk-write') ? 'write' : 'read',
+          risk: row.querySelector('.risk-danger') ? 'danger'
+            : row.querySelector('.risk-write') ? 'write' : 'read',
         })),
       };
     });

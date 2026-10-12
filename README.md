@@ -4,13 +4,17 @@ A universal AI agent that runs inside a Roblox client. It works in any game,
 with Chat Completions and Anthropic Messages endpoints, including compatible
 local servers and relays.
 
-**Version 2.7.0 — October 9, 2026.** File tools, search, compilation and execution
-share one path contract. New game folders use portable ASCII names; accessible
-existing folders retain their paths. Routine work uses lighter reasoning defaults,
-stable prompt prefixes and deferred formatting of folded thinking. Stream failures
-show the provider's actionable reason, and the ProjectUAI menu and support modal
-carry the existing brand mark. UI LIB remains 1.3.0 and the embedding SDK 1.0.0.
-See the [release notes](CHANGELOG.md) and [UI library guide](docs/UI_LIBRARY.md).
+**Version 2.8.0 — October 12, 2026.** More reliable script execution, clearer tool
+failures, and focused fixes from the client audit. Luau guidance follows the
+available tools; read-only subagents keep read-only scopes. The OpenCode extra
+tools introduction and declarations remain available for the provider workaround.
+Runtime fixes cover input results, typed arguments, capability detection and
+credential redaction. UI LIB remains 1.3.0 and the embedding SDK 1.0.0.
+See the [release notes](CHANGELOG.md), [script development manual](docs/SCRIPT_DEVELOPMENT.md)
+and [UI library guide](docs/UI_LIBRARY.md). The client exposes the scripting
+manual through `scripting_docs`: start with `quickstart`, then read only the
+sections relevant to the task. It covers exact tool calls, writing and checking
+saved scripts, debugging, cleanup and decompilation.
 
 New configurations default to **Low** reasoning effort for faster responses. Existing
 saved effort stays unchanged; choose **Settings → Agent → Effort → Low** to lower
@@ -18,7 +22,7 @@ it. The model modal edits the same global effort setting, including for other
 models when **Options → Reasoning support** is enabled. The Thinking row estimates
 visible text only. A long retained trace is labelled
 **Excerpt**, not a 5,999-token model limit. See [provider behavior](docs/PROVIDER_COMPATIBILITY.md).
-Use the [2.7.0 test checklist](docs/TESTING_2.7.0.md) for focused offline checks and
+Use the [2.8.0 test checklist](docs/TESTING_2.8.0.md) for focused offline checks and
 the features to exercise in Roblox.
 
 ```lua
@@ -721,9 +725,11 @@ agent to use them; prompt text alone does not install capabilities. The returned
 handle exposes `env`, `app`, `sessions`, `config`, `providers`, `tools`, `caps`,
 `bridge`, and `log`. Runtime methods use dots; UI LIB methods use colons.
 
-The full client always mounts its standard app. UI LIB is independent and mounts
-nothing until `CreateWindow`. A same-build client loader rerun toggles the live
-instance and ignores new context; reuse a saved handle or `getgenv().UAI` when
+The full client mounts its standard app unless `context.ui = false`. An explicit
+`show`, `toggle`, or `openSession` can mount it later. UI LIB is independent and
+mounts nothing until `CreateWindow`. A same-build client loader rerun toggles the
+live instance unless `context.reuse = true`, and ignores new context; reuse a saved
+handle or `getgenv().UAI` when
 attaching another view. Changed builds replace the client only after active and
 unsaved work is protected. Pin all bundle/module URLs to one reviewed commit SHA
 for reproducible host releases.

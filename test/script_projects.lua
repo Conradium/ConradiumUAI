@@ -194,6 +194,37 @@ return {
 	f.healthy(); f.close()
 end)
 
+suite.case("invalid test exports do not discard results from other modules", function()
+	local f = fixture(); f.start()
+	local manifest = f.h.json.decode(f.read("Example/uai.project.json"))
+	manifest.modules["tests/more"] = "tests/more.lua"; manifest.tests = { "tests/settings", "tests/more" }
+	f.write("Example/uai.project.json", f.h.json.encode(manifest))
+	f.write("Example/tests/settings.lua", "return { invalid = 42 }")
+	f.write("Example/tests/more.lua", "return { works = function(t) t.truthy(true) end }")
+	local tested = f.call("script_test", { manifest = "Example/uai.project.json" })
+	check("discovery failure and later success are both retained", not tested.ok and tested.data.failed == 1 and tested.data.passed == 1 and tested.data.total == 2)
+	check("invalid export is attributed to its module", tested.data.cases[1].module == "tests/settings" and tested.data.cases[1].name == "discovery")
+	f.healthy(); f.close()
+end)
+
+suite.case("test case limits preserve partial reports and cannot claim success", function()
+	local f = fixture(); f.start()
+	local manifest = f.h.json.decode(f.read("Example/uai.project.json"))
+	manifest.modules["tests/more"] = "tests/more.lua"; manifest.tests = { "tests/settings", "tests/more" }
+	f.write("Example/uai.project.json", f.h.json.encode(manifest))
+	local function cases(count)
+		return "local tests = {}\nfor i=1," .. count .. " do tests[string.format('case%03d',i)] = function(t) _G.projectCases = (_G.projectCases or 0) + 1; t.truthy(true) end end\nreturn tests"
+	end
+	f.write("Example/tests/settings.lua", cases(60)); f.write("Example/tests/more.lua", cases(60))
+	local limited = f.call("script_test", { manifest = "Example/uai.project.json" })
+	check("only 100 cases execute", f.h.sandbox.projectCases == 100)
+	check("partial passing run remains a failure with an explanation", not limited.ok and limited.text:find("100 passed, 0 failed", 1, true) and limited.text:find("remaining cases were not executed", 1, true))
+	f.h.sandbox.projectCases = 0; f.write("Example/tests/more.lua", cases(40))
+	local complete = f.call("script_test", { manifest = "Example/uai.project.json" })
+	check("exactly 100 declared cases can succeed", complete.ok and f.h.sandbox.projectCases == 100)
+	f.healthy(); f.close()
+end)
+
 suite.case("test preparation binds source across approval", function()
 	local f = fixture(); f.start()
 	local tool = f.registry.get("script_test")

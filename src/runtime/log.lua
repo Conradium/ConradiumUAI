@@ -34,9 +34,32 @@ return function(env)
 	-- a user can still tell two keys apart.
 	local function redact(text)
 		text = tostring(text)
+		local function masked(value)
+			return #value > 4 and ("..." .. value:sub(-4)) or "..."
+		end
+		local function secretField(key)
+			key = key:lower():gsub("[_%-]", "")
+			return key == "key" or key == "apikey" or key == "xapikey" or key == "token"
+				or key == "accesstoken" or key == "refreshtoken" or key == "password"
+				or key == "secret" or key == "clientsecret" or key == "authorization"
+		end
+		text = text:gsub('("([%w_%-]+)"%s*:%s*")([^"]*)(")', function(open, key, value, close)
+			return open .. (secretField(key) and masked(value) or value) .. close
+		end)
+		text = text:gsub("([?&]([%w_%-]+)=)([^&#%s]+)", function(open, key, value)
+			return open .. (secretField(key) and masked(value) or value)
+		end)
+		text = text:gsub("([%w_%-]+)(%s*[:=]%s*)([^%s,;]+)", function(key, separator, value)
+			if secretField(key) and value:lower() ~= "bearer" then return key .. separator .. masked(value) end
+			return key .. separator .. value
+		end)
 		text = text:gsub("(sk%-[%w%-_]*)([%w%-_][%w%-_][%w%-_][%w%-_])", function(_, tail)
 			return "sk-..." .. tail
 		end)
+		for _, prefix in ipairs({ "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "xox[baprs]%-", "AKIA" }) do
+			text = text:gsub(prefix .. "[%w_%-]+", function(value) return masked(value) end)
+		end
+		text = text:gsub("eyJ[%w_%-]+%.eyJ[%w_%-]+%.[%w_%-]+", masked)
 		text = text:gsub("([Bb]earer%s+)[%w%.%-_]+([%w%.%-_][%w%.%-_][%w%.%-_][%w%.%-_])", "%1...%2")
 		text = text:gsub('("api[_%-]?key"%s*:%s*")[^"]*([^"][^"][^"][^"])(")', "%1...%2%3")
 		return text
@@ -49,7 +72,7 @@ return function(env)
 			at = env.require("runtime/clock").ms(),
 			stamp = env.require("runtime/clock").stamp(),
 			level = level,
-			source = tostring(source or "app"),
+			source = redact(source or "app"),
 			message = redact(message),
 			detail = detail ~= nil and redact(type(detail) == "table" and util.concatKeys(detail) or tostring(detail)) or nil,
 		}
@@ -63,7 +86,7 @@ return function(env)
 		end
 		if M.mirror then
 			local line = string.format("[uai:%s] %s: %s", entry.level, entry.source, entry.message)
-			if level == "error" or level == "warn" then warn(line) else print(line) end
+			if level == "error" or level == "warn" then pcall(warn, line) else pcall(print, line) end
 		end
 		M.changed:fire(entry)
 		return entry

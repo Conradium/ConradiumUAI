@@ -49,12 +49,17 @@ return function(env)
 		return tostring(value)
 	end
 
-	local function numbers(text, count)
+	local function numbers(text, count, maximum)
 		local out = {}
-		for piece in tostring(text):gmatch("%-?%d+%.?%d*") do
-			out[#out + 1] = tonumber(piece)
+		-- Parse whole numeric tokens so exponents and leading decimal points do
+		-- not silently turn into extra coordinates. The range separator is '..'.
+		local body = tostring(text):gsub("%.%.", ","):gsub("[%(%)]", " ")
+		for piece in body:gmatch("[^,%s]+") do
+			local value = tonumber(piece)
+			if not value or value ~= value or value == math.huge or value == -math.huge then return nil end
+			out[#out + 1] = value
 		end
-		if count and #out < count then return nil end
+		if #out < count or #out > (maximum or count) then return nil end
 		return out
 	end
 
@@ -142,7 +147,7 @@ return function(env)
 			return UDim.new(list[1], list[2])
 		end
 		if wanted == "NumberRange" then
-			local list = numbers(text, 1)
+			local list = numbers(text, 1, 2)
 			if not list then return nil, "expected one or two numbers" end
 			return NumberRange.new(list[1], list[2] or list[1])
 		end

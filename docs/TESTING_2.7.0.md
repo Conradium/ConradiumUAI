@@ -1,5 +1,8 @@
 # Project UAI 2.7.0 verification
 
+Historical release report. Current release checks are in
+[TESTING_2.8.0.md](TESTING_2.8.0.md).
+
 Release date: October 9, 2026. These checks cover this release's changes. They do
 not invoke the full native suite, a browser, image previews, live models or paid
 inference. Offline fixtures cannot establish native Roblox rendering, executor
@@ -43,7 +46,8 @@ one named scenario; neither invokes the full suite.
 
 ## Recorded offline results
 
-Built artifact: [`dist/uai.lua`](../dist/uai.lua), build
+Historical October 9 artifact (the current bundle may include later fixes):
+[`dist/uai.lua`](../dist/uai.lua), build
 `2.7.0-b205fea716f3a534`, 3,130,474 bytes.
 SHA-256: `f0e2155e5f80aef1347cad201cc92594dcf24c2485df747b82194eeae9ae5219`.
 

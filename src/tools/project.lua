@@ -135,9 +135,9 @@ return function(env)
 			local run = execution.run({ code = code, timeout = args.timeout, parameters = { n = 1, fixtures } }, ctx, function(value) report = value end)
 			if type(report) ~= "table" then return run end
 			local unchanged = project.current(prepared)
-			report.ok, report.sourcesCurrent, report.locations = run.ok and report.failed == 0 and unchanged, unchanged, locations
+			report.ok, report.sourcesCurrent, report.locations = run.ok and report.failed == 0 and report.complete ~= false and unchanged, unchanged, locations
 			report.execution, report.coverage = run.data, "Managed client tests; native game state is shared; host input/rendering not validated"
-			return result(report, string.format("%d passed, %d failed; source versions %s.\n%s", report.passed, report.failed, unchanged and "unchanged" or "changed during tests", run.text))
+			return result(report, string.format("%d passed, %d failed; source versions %s.%s\n%s", report.passed, report.failed, unchanged and "unchanged" or "changed during tests", report.reason and (" " .. report.reason .. ".") or "", run.text))
 		end, load, { "fs", "exec" })
 	testTool.timeout = function(args) return execution.timeout(args) + 5 end
 	add("project_build", "write", "Compile/check a saved project and export one deterministic .lua bundle without running it. Module-local require resolves declared IDs only. Refuses output paths that overwrite project inputs. Existing output requires expected_hash; new output is created. Returns source line locations and a recovery checkpoint. Review inputs before building and output before tests.",

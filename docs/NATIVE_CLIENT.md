@@ -1,6 +1,6 @@
 # Native client features and limits
 
-Current native feature contract for **2.7.0**, October 9, 2026.
+Current native feature contract for **2.8.0**, October 12, 2026.
 Internal APIs are described in
 [SPEC.md](../SPEC.md); verification and native-device scenarios are in
 [CODE_WORKSPACE_TESTING.md](CODE_WORKSPACE_TESTING.md).
@@ -9,7 +9,17 @@ In-game release notes are under **App menu → What's new**, also available from
 **About → What's new**. Reload the updated native bundle to see the latest notes.
 Revised notes restore the unread marker even when the client version stays the same.
 
-Version 2.7.0 uses portable ASCII names for new game folders and one unchanged
+Version 2.8.0 improves execution diagnostics, project-test failure reporting,
+read-only delegation and runtime tool reliability. The OpenCode extra tools
+introduction remains part of its provider compatibility workaround. See the
+[release notes](../CHANGELOG.md) for the complete changes.
+
+The [script development manual](SCRIPT_DEVELOPMENT.md) is also bundled for
+models through the read-only `scripting_docs` tool. Its quickstart leads into
+task-specific instructions and examples for saved scripts, Code documents,
+source inspection, debugging, cleanup and script-owned interfaces.
+
+The client uses portable ASCII names for new game folders and one unchanged
 `files/...` path across file tools, search, compilation and execution. Existing
 accessible folders retain their names and locations; incomplete host listings
 return usable entries with an explicit warning.
@@ -23,7 +33,7 @@ traces say **Excerpt**. Folded traces defer Markdown formatting and measurement
 until opened, reuse parsed text during resizing, and retain plain text if formatting
 fails. Provider stream errors retain useful bounded details without
 retrying an uncertain dispatch. See [provider behavior](PROVIDER_COMPATIBILITY.md)
-and the [release test checklist](TESTING_2.7.0.md).
+and the [release test checklist](TESTING_2.8.0.md).
 
 New access settings default to **Allow everything**, allowing reads, writes and
 execution unless an explicit tool rule says otherwise. Saved access modes and

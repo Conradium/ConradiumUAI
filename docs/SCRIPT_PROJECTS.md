@@ -10,7 +10,7 @@ LSP, Luau type inference, Roblox API type definitions or an isolated test proces
 
 ## Start a project
 
-In client 2.7.0, use the canonical Current game files path supplied to the agent.
+Use the canonical Current game files path supplied to the agent.
 File tools, search, `check_luau`, `run_luau` and project tools accept the same
 `files/...` prefix once. Preserve returned legacy paths exactly, even when they
 contain a real nested `files/` folder. New automatic game folders use ASCII names

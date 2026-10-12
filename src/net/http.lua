@@ -1,4 +1,5 @@
--- The only module that performs an HTTP request.
+-- Shared inference and general-purpose HTTP transport. Bundled decompilers use
+-- direct executor transports owned by runtime/script_sources (see SPEC).
 --
 -- Centralising it buys three things the client depends on: the Claude Code
 -- identity cannot be omitted by a forgetful caller, every request lands in one
@@ -417,9 +418,11 @@ return function(env)
 		if res.ok then
 			local payload = errorPayload(body)
 			if payload then
-				local text = type(payload.error) == "table" and tostring(payload.error.message or "")
-					or tostring(payload.error or payload.message or "")
-				if transient(text) or transient(body) then return true, "error inside a 200" end
+				local detail = type(payload.error) == "table" and payload.error or payload
+				local text = type(payload.error) == "string" and payload.error or tostring(detail.message or "")
+				if transient(text) or transient(tostring(detail.code or "")) or transient(tostring(detail.type or "")) then
+					return true, "error inside a 200"
+				end
 			end
 			return false
 		end

@@ -342,6 +342,7 @@ return function(env)
 		local doc, why = M.resolve(ref); if not doc then return nil, why end
 		if doc.readOnly then return nil, "Read-only source snapshot; extract an editable copy first" end
 		if not integer(revision) or not sourceValid(source) then return nil, "A base revision and bounded UTF-8 source are required" end
+		if revision ~= doc.revision then return nil, "stale_revision: read the current document before proposing a change" end
 		if #M.proposals(doc.id) >= limits.proposals then return nil, "Resolve or discard a pending proposal first (3 per document)" end
 		local proposal = { id = id("proposal"), documentId = doc.id, baseRevision = revision, source = source, name = util.ellipsis(name or "Proposed change", 120), at = clock.ms() }
 		state.proposals[#state.proposals + 1] = proposal; changed("proposal", doc, "tool"); return proposal

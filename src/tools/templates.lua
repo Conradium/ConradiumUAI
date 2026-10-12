@@ -8,9 +8,9 @@
 -- user sees exactly what a template will run before it runs.
 --
 -- Every template stores an `arguments` table. A {FIELD} token inside a string is
--- replaced with the value the model supplies. Substitution is plain token
--- replacement, not code generation, so what the user approves in the permission
--- prompt is exactly the code that executes.
+-- replaced with the value the model supplies. Data strings are quoted as Lua
+-- literals; expression parameters are explicitly described. The expanded tool
+-- call goes through the permission decision before its source executes.
 return function(env)
 	local util = env.require("runtime/util")
 	local registry = env.require("agent/registry")
@@ -20,7 +20,7 @@ return function(env)
 	-- value in. A missing value is a failure rather than an empty string, because
 	-- code that runs with a literal "{PATH}" inside it fails somewhere far from
 	-- the cause, in a way the model cannot read back.
-	local function fill(source, values)
+	local function fill(source, values, literals)
 		if type(source) ~= "string" or type(values) ~= "table" then return source end
 		local missing = {}
 		local filled = source:gsub("{(%w+)}", function(token)
@@ -29,6 +29,16 @@ return function(env)
 				missing[#missing + 1] = token
 				return "{" .. token .. "}"
 			end
+			local kind = type(value)
+			if kind ~= "string" and kind ~= "number" and kind ~= "boolean" then
+				missing[#missing + 1] = token .. " (expected text, number or boolean)"
+				return "{" .. token .. "}"
+			end
+			if kind == "number" and (value ~= value or math.abs(value) == math.huge) then
+				missing[#missing + 1] = token .. " (expected a finite number)"
+				return "{" .. token .. "}"
+			end
+			if literals and literals[token] and kind == "string" then return string.format("%q", value) end
 			return tostring(value)
 		end)
 		if #missing > 0 then
@@ -43,6 +53,7 @@ return function(env)
 	--   tool      the tool this template invokes
 	--   arguments the call's arguments; {TOKEN}s are filled from `values`
 	--   params    parameter descriptions shown by template_list
+	--   literals  tokens whose string values must be quoted as data
 	--   notes     limitations worth knowing before running
 	local TEMPLATES = {
 		{
@@ -86,9 +97,6 @@ for _, p in ipairs(Players:GetPlayers()) do
 		hl.OutlineColor = Color3.fromRGB(255, 255, 255)
 		hl.Parent = p.Character
 		made = made + 1
-		p.Character.AncestryChanged:Connect(function()
-			if hl.Parent ~= p.Character then hl:Destroy() end
-		end)
 	end
 end
 return "Highlighted " .. made .. " character(s). Re-run to refresh."
@@ -103,13 +111,13 @@ return "Highlighted " .. made .. " character(s). Re-run to refresh."
 			arguments = { code = [[
 local RunService = game:GetService("RunService")
 local times = {}
-local t0 = os.clock()
 local connection
 connection = RunService.RenderStepped:Connect(function(dt)
 	times[#times + 1] = dt
 end)
-while os.clock() - t0 < 5 do task.wait(0.25) end
+local ok, why = pcall(function() task.wait(5) end)
 connection:Disconnect()
+if not ok then error(why, 0) end
 table.sort(times)
 if #times == 0 then return "No frames rendered." end
 local total = 0
@@ -140,10 +148,11 @@ end
 return "Fired " .. count .. " times."
 ]] },
 			params = {
-				REMOTE = "Dotted path to the RemoteEvent, e.g. ReplicatedStorage.Remotes.Purchase",
-				ACTION = "What to send each time, e.g. an item name or id",
+				REMOTE = "Luau expression for the RemoteEvent, e.g. game:GetService(\"ReplicatedStorage\").Remotes.Purchase",
+				ACTION = "String, number or boolean to send each time. Strings are quoted as data.",
 				SECONDS = "How long to keep firing, in seconds",
 			},
+			literals = { ACTION = true },
 			notes = "A real server call every 0.5s. Repeated firing can be logged by anticheat.",
 		},
 		{
@@ -151,7 +160,7 @@ return "Fired " .. count .. " times."
 			title = "Validate and re-encode a JSON string",
 			tool = "run_luau",
 			arguments = { code = [[
-local raw = [==[{JSON}]==]
+local raw = {JSON}
 local HttpService = game:GetService("HttpService")
 local data = HttpService:JSONDecode(raw)
 return HttpService:JSONEncode(data)
@@ -159,6 +168,7 @@ return HttpService:JSONEncode(data)
 			params = {
 				JSON = "The JSON text to check",
 			},
+			literals = { JSON = true },
 			notes = "Decodes then re-encodes: a syntax error in the JSON is the failure you get.",
 		},
 	}
@@ -237,7 +247,7 @@ return HttpService:JSONEncode(data)
 				local final = {}
 				for key, pattern in pairs(t.arguments) do
 					if type(pattern) == "string" and pattern:find("{", 1, true) then
-						local filled, err = fill(pattern, values)
+						local filled, err = fill(pattern, values, t.literals)
 						if not filled then return H.fail(err) end
 						final[key] = filled
 					else
@@ -249,9 +259,7 @@ return HttpService:JSONEncode(data)
 					["function"] = { name = t.tool, arguments = util.encode(final) },
 				}
 				local result = registry.dispatch(call, ctx)
-				if type(result) == "table" then
-					return result.text or tostring(result)
-				end
+				if type(result) == "table" then return result end
 				return tostring(result)
 			end,
 		},

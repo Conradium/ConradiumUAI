@@ -43,12 +43,17 @@ local MAX_CONTEXT_ENTRIES = 64
 local MAX_CONTEXT_PARENTS = 16
 local MAX_CONTEXT_NAME_BYTES = 128
 local MAX_CONTEXT_PATH_BYTES = 512
-
-local responseCache = {}
+local MAX_BYTECODE_BYTES = 2 * 1024 * 1024
 
 local function errorMessage(title, detail)
     local text = tostring(detail or "unknown error"):gsub("\r\n?", "\n")
     return "-- " .. title .. "\n-- " .. text:gsub("\n", "\n-- ")
+end
+
+local function stopped(control)
+    if type(control) ~= "table" or type(control.aborted) ~= "function" then return false end
+    local ok, value = pcall(control.aborted)
+    return not ok or value == true
 end
 
 local function buildUrl()
@@ -181,11 +186,16 @@ local function buildRuntimeInfo(src, bytecode)
     return CONTEXT_MAGIC .. string.pack("<I4", #json) .. json .. bytecode
 end
 
-getgenv().decompile = function(src)
+-- Project UAI owns the bounded snapshot cache. Keeping another response cache
+-- here would retain full bytecode/source indefinitely and defeat explicit Refresh.
+getgenv().decompile = function(src, control)
+    if stopped(control) then return errorMessage("Decompiler API request failed", "request cancelled") end
     local ok, bytecode = pcall(getscriptbytecode, src)
-    if not ok then
-        return errorMessage("Failed to read script bytecode", bytecode)
+    if not ok or type(bytecode) ~= "string" or bytecode == "" then
+        return errorMessage("Failed to read script bytecode", "the host returned no readable bytecode")
     end
+    if #bytecode > MAX_BYTECODE_BYTES then return errorMessage("Failed to read script bytecode", "bytecode exceeds 2 MiB") end
+    if stopped(control) then return errorMessage("Decompiler API request failed", "request cancelled") end
 
     local url = buildUrl()
     local hasKey = _G.DecompilerKey and _G.DecompilerKey ~= ""
@@ -199,13 +209,6 @@ getgenv().decompile = function(src)
             body = info
             contentType = CONTEXT_CONTENT_TYPE
         end
-    end
-
-    local cacheKey = url .. "\0" .. body
-    local cached = responseCache[cacheKey]
-
-    if cached then
-        return cached
     end
 
     local headers = {
@@ -226,37 +229,48 @@ getgenv().decompile = function(src)
     local waited = 0
 
     for attempt = 0, MAX_RETRIES do
+        if stopped(control) then return errorMessage("Decompiler API request failed", "request cancelled") end
         local sent, response = pcall(request, {
             Url = url,
             Method = "POST",
             Headers = headers,
             Body = body,
-        })
+        }, control)
 
-        local status = sent and response and response.StatusCode
+        if stopped(control) then return errorMessage("Decompiler API request failed", "request cancelled") end
+        local status = sent and type(response) == "table" and tonumber(response.StatusCode) or nil
 
         if status == 200 then
-            local source = tostring(response.Body)
-            responseCache[cacheKey] = source
-            if waited > 0 and not hasKey then
-                return string.format("-- Rate limited: %.0fs spent waiting. Key raises your limits: %s\n\n", waited, KEY_URL) .. source
+            local source = response.Body
+            if type(source) == "string" and source ~= "" then
+                if waited > 0 and not hasKey then
+                    return string.format("-- Rate limited: %.0fs spent waiting. Key raises your limits: %s\n\n", waited, KEY_URL) .. source
+                end
+                return source
             end
-            return source
+            status = 502
         end
 
         local retryable = not status or status == 429 or status >= 500
         if attempt == MAX_RETRIES or not retryable then
-            return errorMessage("Decompiler API request failed", if status then `HTTP {status}\n{tostring(response.Body)}` else response)
+            return errorMessage("Decompiler API request failed", if status then `HTTP {status}` else "no valid response")
         end
 
-        local responseHeaders = response and response.Headers or {}
-        local delay = tonumber(responseHeaders["Retry-After"]) or 2 ^ attempt
+        local responseHeaders = type(response) == "table" and type(response.Headers) == "table" and response.Headers or {}
+        local delay = tonumber(responseHeaders["Retry-After"] or responseHeaders["retry-after"])
+        if not delay or delay ~= delay or delay < 0 or delay == math.huge then delay = 2 ^ attempt end
+        delay = math.min(delay, 5)
         if status == 429 then
             waited += delay
         end
 
         warn(string.format("[Luacid] Request failed; retrying in %.1f seconds", delay))
-        task.wait(delay)
+        local remaining = delay
+        while remaining > 0 and not stopped(control) do
+            local slice = math.min(remaining, 0.1)
+            task.wait(slice)
+            remaining -= slice
+        end
     end
 
     return errorMessage("Decompiler API request failed", "unknown error")

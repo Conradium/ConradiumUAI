@@ -10,12 +10,22 @@ return function(env)
 		end
 	end
 	local function keep(data, text, group)
+		local size = #encoded(data) + #text
+		if size > 4 * 1024 * 1024 then return nil end
 		serial = serial + 1; local key = "native-result:" .. serial .. ":" .. clock.ms()
-		local entry = { data = util.deepCopy(data), text = text, group = group or "coding", at = clock.ms(), bytes = #encoded(data) + #text }
+		local entry = { data = util.deepCopy(data), text = text, group = group or "coding", at = clock.ms(), bytes = size }
 		snapshots[key] = entry; order[#order + 1] = key; retained = retained + entry.bytes; prune(); return snapshots[key] and key
 	end
 	function M.fail(why) return { ok = false, text = tostring(why), data = { status = "rejected" } } end
 	local readers = { coding = "workspace_result_read", instance = "instance_result_read", remotes = "remote_result_read", script = "script_result_read" }
+	function M.reader(group) return readers[group] end
+	function M.reference(data)
+		if type(data) ~= "table" then return nil end
+		prune()
+		local entry = snapshots[data.resultId]
+		if entry and readers[entry.group] == data.readTool then return { resultId = data.resultId, readTool = data.readTool, group = entry.group } end
+	end
+	function M.retain(data, text, group) return keep(data, text, group) end
 	function M.result(data, text, group)
 		if not data then return M.fail(text) end
 		text = tostring(text or data.text or data.status or "Completed")
@@ -25,7 +35,7 @@ return function(env)
 			local summary = { resultId = key, readTool = key and reader, expiresInSeconds = 300 }
 			for _, field in ipairs({ "status", "ok", "sessionId", "revision", "documentId", "batchId", "patchId", "snapshotId", "nextCursor", "nextOffset", "changedCount", "omittedOutcomes", "retained", "monitored", "ruleCount" }) do if data[field] ~= nil then summary[field] = data[field] end end
 			if not key then summary.detailsUnavailable = "Result exceeded retained-detail budget; inspect the affected object or batch directly" end
-			return { ok = data.ok ~= false, text = util.ellipsis(text, 1200) .. (key and ("\nDetailed fields are available through " .. reader .. ".") or "\nDetails exceeded retention; inspect the affected object or operation directly."), data = summary }
+			return { ok = data.ok ~= false, text = util.ellipsis(text, 1200) .. (key and "\nDetailed fields were retained." or "\nDetails exceeded retention; inspect the affected object or operation directly."), data = summary }
 		end
 		return { ok = data.ok ~= false, text = text, data = data }
 	end
@@ -34,6 +44,10 @@ return function(env)
 		if not entry then return M.fail("expired: inspect the affected object or operation again") end
 		if entry.group ~= (group or "coding") then return M.fail("Use the result reader in the originating tool group") end
 		local value = args.section == "text" and entry.text or entry.data
+		local budget = tonumber(env.require("runtime/config").get("agent.resultCap", 4000)) or 4000
+		if budget ~= budget or budget < 256 then return M.fail("Increase the tool result budget to at least 256 bytes before reading retained details") end
+		budget = math.min(5400, budget)
+		local function fits(data, message) return #encoded(data) + #message + 16 <= budget end
 		local path = args.path or {}
 		if type(path) ~= "table" or #path > 16 then return M.fail("Use a path array with at most 16 keys") end
 		for _, key in ipairs(path) do
@@ -44,22 +58,33 @@ return function(env)
 			local offset = math.max(1, math.floor(tonumber(args.offset) or 1))
 			if offset > #value + 1 then return M.fail("Offset is outside retained text") end
 			local byte = value:byte(offset); if byte and byte >= 128 and byte < 192 then return M.fail("Offset splits UTF-8") end
-			local last = math.min(#value, offset + 599)
-			while last > offset and value:byte(last + 1) and value:byte(last + 1) >= 128 and value:byte(last + 1) < 192 do last = last - 1 end
-			return M.result({ value = value:sub(offset, last), offset = offset, nextOffset = last < #value and last + 1 or nil, totalBytes = #value }, "Retained text page")
+			local count = math.min(600, math.max(4, budget - 160))
+			while count >= 1 do
+				local last = math.min(#value, offset + count - 1)
+				while last >= offset and value:byte(last + 1) and value:byte(last + 1) >= 128 and value:byte(last + 1) < 192 do last = last - 1 end
+				local page = { value = value:sub(offset, last), offset = offset, nextOffset = last < #value and last + 1 or nil, totalBytes = #value }
+				if (last >= offset or offset == #value + 1) and fits(page, "Retained text page") then return M.result(page, "Retained text page") end
+				count = math.floor(count / 2)
+			end
+			return M.fail("The tool result budget cannot fit this retained text page; increase it")
 		end
 		if type(value) ~= "table" then return M.result({ value = value }, "Retained value") end
-		local keys, items, offset, used = util.keys(value, true), {}, math.max(1, math.floor(tonumber(args.offset) or 1)), 0
+		local keys, items, offset = util.keys(value, true), {}, math.max(1, math.floor(tonumber(args.offset) or 1))
 		local nextOffset
+		local message = "Retained fields; follow path arrays for larger values"
 		for i = offset, #keys do
 			local key, item = keys[i], value[keys[i]]
 			local subpath = util.copy(path); subpath[#subpath + 1] = tostring(key)
 			local projected = #encoded(item) > 500 and { type = type(item), path = subpath, count = type(item) == "table" and util.count(item) or nil, bytes = type(item) == "string" and #item or nil } or item
-			local row = { key = key, value = projected }; local size = #encoded(row)
-			if used + size > 4000 or #items >= 20 then nextOffset = i; break end
-			items[#items + 1], used = row, used + size
+			local row = { key = key, value = projected }
+			items[#items + 1] = row
+			if #items > 20 or not fits({ resultId = args.result_id, path = path, items = items, nextOffset = i + 1 }, message) then
+				items[#items] = nil
+				if #items == 0 then return M.fail("The tool result budget cannot fit this retained field path; increase it") end
+				nextOffset = i; break
+			end
 		end
-		return M.result({ resultId = args.result_id, path = path, items = items, nextOffset = nextOffset }, "Retained result fields; follow path arrays for larger values")
+		return M.result({ resultId = args.result_id, path = path, items = items, nextOffset = nextOffset }, message)
 	end
 	function M.add(tools, name, risk, description, properties, required, run, prepare)
 		tools[#tools + 1] = { name = name, risk = risk, description = description,

@@ -1,5 +1,98 @@
 # Changelog
 
+## 2.8.0 — October 12, 2026
+
+Reliable scripting, clearer failures, and focused audit fixes.
+
+### Script execution and projects
+
+- Distinguish source, compilation, wrapper and stale-revision failures in
+  structured tool results. Preserve canonical source paths and reject oversized
+  sources before instrumentation. Capture managed-task arguments and multiple
+  returns on hosts that expose `table.unpack` without the legacy global.
+- Preserve runtime errors and disclose omitted output. Ordinary script errors
+  no longer receive a blanket do-not-retry warning when no work remains pending;
+  native calls and unmanaged continuations retain their cooperative limits.
+- Report project test discovery failures per module and retain completed results
+  when the case limit is reached. Invalid test exports no longer erase earlier
+  results or prevent unrelated modules from reporting their failures.
+- Validate template values, quote string data, clean up temporary monitoring
+  connections, and preserve the dispatched tool's success or failure status.
+  Reject stale Code proposals before storing them and isolate action inputs.
+
+### Agent and provider behavior
+
+- Deliver structured tool results to the model, including instance/source IDs,
+  listings, revisions and continuation cursors. Previously, native tools could
+  return those fields successfully while the model saw only a generic sentence.
+  Preserve bounded result delivery and retained-detail access.
+- Add an on-demand scripting reference with a short quickstart, exact tool
+  examples, saved-file and editor workflows, focused debugging, cleanup,
+  source inspection and UI LIB guidance. Main and subagents can read the
+  relevant sections without adding the whole manual to every request.
+- Preserve the required OpenCode compatibility tool declarations and streaming.
+  Add clear guidance explaining which declared names are compatibility
+  placeholders and point failed calls to the available Project UAI tools,
+  without treating them as aliases or expanding a conversation's permissions.
+- Give main and subagents concise Luau and source-path guidance matched to their
+  available tools. Distinguish syntax compilation from API or behavior checks,
+  and stop suggesting memory, naming or task-list tools outside their scope.
+- Restrict the default read subagent preset to read-risk tools. Reject unknown
+  presets, classify conversation/memory/task-list mutations as writes, and keep
+  client diagnostics under `client_status` without replacing `agent_status`.
+- Reject truncated JSON arguments for every tool instead of guessing missing
+  targets or filters. Normalize memory keys consistently when writing, reading
+  and deleting them.
+- Keep token-truncated batches out of the repeated-call streak because they did
+  not execute. A later complete, repaired call can run instead of being blocked
+  as a repeated action.
+- Honor supported sampling settings in the Messages adapter. Limit transient
+  retry classification inside successful HTTP responses to explicit error
+  fields, so ordinary response text cannot accidentally trigger a retry.
+
+### Readable results and permission review
+
+- Keep Code editing and previews readable when syntax highlighting fails;
+  render run output literally so logs do not depend on the Lua lexer.
+- Show complete permission arguments and source with expandable previews and
+  a full-argument viewer. Allow, Deny and dismissal settle once and release
+  the prompt before presenting the next queued request.
+- Retain complete orphaned tool results, count unread failures in Latest, and
+  provide Show failures to open the relevant result bodies. Existing disclosure
+  and scroll choices remain under the reader's control.
+
+### Source inspection and decompilation
+
+- Validate decompiler output before accepting or caching it. Reject empty or
+  comment-only notices, invalid UTF-8, oversized source and service documents;
+  continue to the next available fallback when native output is unusable.
+- Stop starting fallbacks after a source request expires or all its readers
+  cancel. Bound bytecode requests and retry waits, discard late completions,
+  and keep native operations counted until they actually return.
+- Install luacid in a private environment without replacing executor globals.
+  Remove its unbounded response cache so explicit Refresh can obtain fresh
+  source. Distinguish an unavailable decompiler from a service that was tried
+  and failed, without exposing raw service or host error bodies.
+
+### Runtime tools and release maintenance
+
+- Correct typed remote prefixes such as `vec3:` and document `string:` for
+  literal prefix text. Parse numeric components as complete finite values,
+  including exponents, without silently accepting extra coordinates.
+- Report failed input adapters accurately, verify hierarchy changes, and restore
+  the previous Gravity selection when an update fails where restoration is possible.
+  Bound fallback world/performance scans and disclose incomplete results.
+- Protect executor capability probes, retain fractional wall-clock deadlines
+  during temporary clock failures, preserve nil callback arguments, and validate
+  calendar keys. Redact more credential formats in logs, including source labels.
+- Add bundle-to-source line ranges to the generated manifest, fix website risk
+  filtering and the bulk-read example, and synchronize animated catalog counts
+  with their generated text. Update active release references to 2.8.0 while
+  preserving historical reports. UI LIB remains 1.3.0 and embedding SDK 1.0.0.
+
+Verification scope and recorded results are in
+[the 2.8.0 checklist](docs/TESTING_2.8.0.md).
+
 ## 2.7.0 — October 9, 2026
 
 Portable files, faster routine work, and clearer reasoning and provider feedback.

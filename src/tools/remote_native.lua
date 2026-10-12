@@ -39,6 +39,7 @@ return function(env)
 			tool.prepare = prepare; tool.timeout = 65
 			tool.parameters.properties.instance_id = { type = "string" }
 			tool.parameters.properties.arguments = { type = "object", description = "Packed typed graph: count, slots, nodes. Explicit nil slots preserve argument arity." }
+			tool.parameters.properties.args.description = "Legacy arguments: strings, numbers, booleans, or vec3:/vector3:/vec2:/color3:/cframe:/instance:/number: prefixes. Use string: to preserve literal prefix text (e.g. string:instance:hello), or use packed arguments for exact typed values."
 			tool.parameters.properties.timeout = { type = "number", minimum = 1, maximum = 60 }
 			tool.parameters.required = {}
 		end

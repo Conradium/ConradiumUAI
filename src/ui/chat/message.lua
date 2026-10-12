@@ -324,7 +324,7 @@ return function(env)
 			auto = "X",
 		})
 
-		local expanded = false
+		local expanded = props.expanded == true
 		local foldRow
 		-- Where this block folds. A reply's code gets the generous default; a tool
 		-- call's listing passes its own, because there are several of them per turn.
@@ -1102,6 +1102,7 @@ return function(env)
 		splitArguments = splitArguments, summarise = summarise,
 	})
 	M.toolRun, M.toolCall, M.subagent = activity.toolRun, activity.toolCall, activity.subagent
+	M.splitArguments = splitArguments
 
 	-- An inline note: a retry, a provider switch, a compaction, an error.
 	--

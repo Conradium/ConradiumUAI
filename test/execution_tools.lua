@@ -60,6 +60,97 @@ scenario("compilation is read-only and execution failures are failures", functio
 	check("no unexpected scheduler errors", #h.sched.errors == 0)
 end)
 
+scenario("execution reports source, compile and output failures precisely", function()
+	local h, env, registry, run = fixture()
+	local execution = env.require("tools/execution")
+	check("missing arguments are a source error", execution.run(nil).data.status == "source_error")
+	check("invalid parameters are rejected before execution", execution.run({ code = "_G.invalidParametersRan=true", parameters = "bad" }).data.status == "source_error" and h.sandbox.invalidParametersRan == nil)
+	check("syntax errors have compile status", run("run_luau", { code = "local =" }).data.status == "compile_error")
+	local failure = run("run_luau", { code = "error('ordinary failure')" })
+	check("a finished failing script has no cancellation warning", failure.data.status == "runtime_error" and not contains(failure.text, "cooperativ") and not contains(failure.text, "Do not retry"))
+	local cropped = run("run_luau", { code = "error(string.rep('x',10000))" })
+	check("truncated errors retain the omission flag", not cropped.ok and cropped.data.outputTruncated)
+	local child = run("run_luau", { code = "task.spawn(function() error(string.rep('y',10000)) end)" })
+	check("truncated child errors retain the omission flag", not child.ok and child.data.outputTruncated)
+	local output = run("run_luau", { code = "for i=1,125 do print('short') end" })
+	check("capture reports omitted call count", output.ok and output.data.outputOmittedCalls == 5 and contains(output.text, "5 print/warn calls omitted"))
+	check("no unexpected scheduler errors", #h.sched.errors == 0)
+end)
+
+scenario("source paths preserve spaces and oversized source never reaches the compiler", function()
+	local h, env, registry, run = fixture()
+	local fsx, execution, caps = env.require("runtime/fsx"), env.require("tools/execution"), env.require("runtime/caps")
+	assert(fsx.write(" leading.lua", "return 'exact path'", { scope = "files" }))
+	local result = run("run_luau", { path = " leading.lua" })
+	check("workspace path keeps meaningful leading spaces", result.ok and contains(result.text, "exact path"))
+	check("canonical path also resolves unchanged", run("check_luau", { path = "files/ leading.lua" }).ok)
+	check("even blank conflicting code is refused", not execution.checkSource({ path = "files/ leading.lua", code = "" }).ok)
+	local compiled = 0
+	caps.fn.loadstring = function() compiled = compiled + 1; error("oversized source reached compiler") end
+	local source = "--" .. string.rep("x", 2 * 1024 * 1024)
+	h.files["UAI/files/large.lua"] = source
+	check("oversized inline source is refused", execution.check(source).data.status == "source_error")
+	check("oversized saved source is refused", execution.checkSource({ path = "files/large.lua" }).data.status == "source_error")
+	check("no compiler call before size validation", compiled == 0)
+end)
+
+scenario("capability inspection tolerates broken globals and a missing HTTP service", function()
+	local h = envMock.new({ executor = false })
+	h.sandbox.loadstring = false
+	h.sandbox.getgenv = function() error("global access denied") end
+	local file = assert(io.open("src/runtime/caps.lua", "rb")); local source = file:read("*a"); file:close()
+	local chunk = assert(luau.load(source, "runtime/caps")); setfenv(chunk, h.sandbox)
+	local caps = chunk()({ services = {} })
+	check("broken getgenv leaves compilation unavailable without crashing", caps.exec == false)
+	check("missing HttpService is not reported as transport", caps.http == "none" and caps.available.http == false)
+	h.sandbox.getgenv = function() return { loadstring = function() return function() end end } end
+	local resolved = chunk()({ services = h.services })
+	check("valid fallback compiler and service remain available", resolved.exec and resolved.http == "roblox")
+end)
+
+scenario("clock fallback retains deadlines, recovers and rejects corrupt day keys", function()
+	local h, env = fixture()
+	local clock = env.require("runtime/clock")
+	local baseline = clock.ms()
+	local now = h.sandbox.DateTime.now
+	h.sandbox.DateTime.now = function() error("temporarily unavailable") end
+	h.sched.advance(0.25)
+	check("fallback clock advances by sub-second elapsed time", math.abs(clock.ms() - baseline - 250) < 1)
+	h.sandbox.DateTime.now = now
+	check("precise clock recovers after one failure", clock.ms() >= baseline + 250 and clock.precise)
+	check("leap day accepted only in leap years", clock.dayNumberOfKey("2024-02-29") ~= nil and clock.dayNumberOfKey("2025-02-29") == nil)
+	for _, key in ipairs({ "2026-99-99", "2026-00-01", "2026-04-31", "2026-01-00" }) do check("invalid day key rejected: " .. key, clock.dayNumberOfKey(key) == nil) end
+	local captured
+	local wrapped = clock.debounce(function(...) captured = { n = select("#", ...), ... } end, 0.1)
+	wrapped(1, nil, false, nil); h.sched.advance(0.2)
+	check("debounced callbacks retain trailing nil positions", captured and captured.n == 4 and captured[1] == 1 and captured[3] == false)
+end)
+
+scenario("templates preserve data, execution failures and temporary connection cleanup", function()
+	local h, env, registry, run, ctx = fixture()
+	for _, tool in ipairs(env.require("tools/templates")) do tool.group = "templates"; registry.register(tool) end
+	local payload = h.json.encode({ text = ']==]; _G.templateInjected=true; --' })
+	local result = run("template_run", { id = "json_roundtrip", values = { JSON = payload } })
+	check("JSON terminators remain data", result.ok and h.sandbox.templateInjected == nil and contains(result.text, "templateInjected"))
+	local invalid = run("template_run", { id = "json_roundtrip", values = { JSON = "not JSON" } })
+	check("nested runtime errors remain failures", not invalid.ok and invalid.data.status == "runtime_error")
+	check("unsupported placeholder types are refused", not run("template_run", { id = "json_roundtrip", values = { JSON = {} } }).ok)
+	local original = h.services.RunService.RenderStepped.Connect
+	local connected, disconnected = 0, 0
+	-- Synthetic signal spy: tracks ownership without asserting native rendering.
+	h.services.RunService.RenderStepped.Connect = function(signal, callback)
+		connected = connected + 1
+		local connection = original(signal, callback)
+		return { Disconnect = function() disconnected = disconnected + 1; connection:Disconnect() end }
+	end
+	local aborted = false; ctx.aborted = function() return aborted end
+	h.sched.delay(0.1, function() aborted = true end)
+	local stopped = run("template_run", { id = "fps_monitor" }, 0.4)
+	h.sched.advance(0.2)
+	check("stopped FPS measurement disconnects its listener", not stopped.ok and connected == 1 and disconnected == 1)
+	check("template failures leave no scheduler error", #h.sched.errors == 0)
+end)
+
 scenario("run_luau executes a workspace file by path without inlining it", function()
 	local h, env, registry, run = fixture()
 	local fsx = env.require("runtime/fsx")
@@ -384,7 +475,7 @@ scenario("interrupted write arguments never apply a partial edit or script", fun
 	end
 	check("unfinished execution has no side effects", h.sandbox.partialRan == nil)
 	local read = raw("file_read", '{"path":"edit.lua","limit":')
-	check("read-only missing options can still be repaired", read.ok and contains(read.text, "first=1"))
+	check("incomplete read options are refused without guessing", not read.ok and read.error == "bad arguments")
 	local source = 'print("True False None ,} ,]")'
 	local repaired = raw("file_write", '```json\n{"path":"valid.lua","content":' .. h.json.encode(source) .. ',}\n```')
 	check("complete writes retain harmless formatting repair", repaired.ok and fsx.read("valid.lua", { scope = "files" }) == source)

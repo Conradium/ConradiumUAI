@@ -9,6 +9,10 @@ return function(env)
 	local clock = env.require("runtime/clock")
 	local M = { changed = env.require("runtime/signal").new("code-runs"), runs = {} }
 	local alive = true
+	local function rejected(snapshot, status, text)
+		if M.active == snapshot and (type(snapshot) ~= "table" or snapshot.status ~= "running") then M.active = nil end
+		return { ok = false, text = text, data = { status = status, dispatched = false } }
+	end
 	function M.snapshot(ref, expected, origin)
 		local doc, why = store.resolve(ref); if not doc then return nil, why end
 		if doc.readOnly then return nil, "Read-only source snapshot; extract an editable copy before Run" end
@@ -23,28 +27,30 @@ return function(env)
 		return { id = store.id("run"), actionId = item.id, revision = item.revision, source = item.source, name = item.name, bindingId = item.bindingId, origin = origin or "action", parameters = { n = 1, params } }
 	end
 	function M.run(snapshot, ctx, timeout)
-		if not alive then return { ok = false, text = "Workspace unloaded" } end
+		if not alive then return rejected(snapshot, "aborted", "Workspace unloaded") end
+		if type(snapshot) ~= "table" or type(snapshot.id) ~= "string" then return rejected(snapshot, "source_error", "Prepare a source snapshot before Run") end
 		local running = 0
 		for _, item in ipairs(M.runs) do
-			if item.id == snapshot.id then return { ok = false, text = "This run was already dispatched; prepare a new Run before executing again" } end
+			if item.id == snapshot.id then return rejected(snapshot, "already_dispatched", "This run was already dispatched; prepare a new Run before executing again") end
 			if item.status == "running" then running = running + 1 end
 		end
-		if running >= 4 then return { ok = false, text = "At most four workspace runs may be active" } end
-		if snapshot.origin ~= "tool" and M.active and M.active ~= snapshot then return { ok = false, text = "A workspace run is already active; use Stop or inspect Output" } end
-		if snapshot.cancelled or (ctx and ctx.aborted and ctx.aborted()) then if M.active == snapshot then M.active = nil end; return { ok = false, text = "Stopped before Run" } end
+		if running >= 4 then return rejected(snapshot, "limited", "At most four workspace runs may be active") end
+		if snapshot.origin ~= "tool" and M.active and M.active ~= snapshot then return rejected(snapshot, "busy", "A workspace run is already active; use Stop or inspect Output") end
+		if snapshot.cancelled or (ctx and ctx.aborted and ctx.aborted()) then return rejected(snapshot, "aborted", "Stopped before Run") end
 		if snapshot.documentId then
 			local doc = store.resolve(snapshot.documentId)
-			if not doc or doc.revision ~= snapshot.revision then if M.active == snapshot then M.active = nil end; return { ok = false, text = "stale_revision: source changed before dispatch" } end
-			if doc.readOnly then if M.active == snapshot then M.active = nil end; return { ok = false, text = "Read-only source snapshot; extract an editable copy before Run" } end
+			if not doc or doc.revision ~= snapshot.revision then return rejected(snapshot, "stale_revision", "stale_revision: source changed before dispatch") end
+			if doc.readOnly then return rejected(snapshot, "read_only", "Read-only source snapshot; extract an editable copy before Run") end
 		end
 		if snapshot.actionId then
 			local action = store.action(snapshot.actionId)
-			if not action or action.revision ~= snapshot.revision then if M.active == snapshot then M.active = nil end; return { ok = false, text = "stale_revision: action changed before dispatch" } end
+			if not action or action.revision ~= snapshot.revision then return rejected(snapshot, "stale_revision", "stale_revision: action changed before dispatch") end
 		end
 		local run = util.copy(snapshot); run.startedAt, run.status, run.output = clock.ms(), "running", {}
+		if run.parameters then run.parameters = util.deepCopy(run.parameters) end
 		local runContext = { origin = snapshot.origin, runId = run.id, aborted = function() return not alive or run.cancelled or (ctx and ctx.aborted and ctx.aborted()) end }
 		if snapshot.bindingId then
-			local binding, why = sources.binding(snapshot.bindingId); if not binding then if M.active == snapshot then M.active = nil end; return { ok = false, text = why } end
+			local binding, why = sources.binding(snapshot.bindingId); if not binding then return rejected(snapshot, "expired", why) end
 			local scoped = util.copy(binding)
 			if binding.call then scoped.call = function() return binding.call(runContext) end end
 			run.parameters = { n = 1, scoped }
@@ -57,7 +63,7 @@ return function(env)
 			if #run.output < 500 and run.outputBytes <= 128000 then run.output[#run.output + 1] = line else run.outputOmitted = (run.outputOmitted or 0) + 1 end
 			M.changed:fire({ kind = "output", runId = run.id })
 		end }, runContext)
-		if not ok then result = { ok = false, text = tostring(result), data = { status = "runtime_error" } } end
+		if not ok then result = { ok = false, text = "Execution harness error: " .. tostring(result), data = { status = "runtime_error" } } end
 		run.finishedAt, run.result, run.status = clock.ms(), result, result.data and result.data.status or (result.ok and "completed" or "compile_error")
 		if M.active == run then M.active = nil end
 		while #M.runs > limits.runs do
@@ -73,14 +79,14 @@ return function(env)
 		local snapshot, why = M.snapshot(ref); if not snapshot then return nil, why end
 		-- Reserve immediately; task.defer must not admit two activations.
 		M.active = snapshot
-		clock.spawn(function() local result = M.run(snapshot, nil, timeout); if M.active == snapshot then M.active = nil end; if not result.ok and not result.data then M.changed:fire({ kind = "rejected", text = result.text }) end end)
+		clock.spawn(function() local result = M.run(snapshot, nil, timeout); if M.active == snapshot then M.active = nil end; if not result.ok and not (result.data and result.data.runId) then M.changed:fire({ kind = "rejected", text = result.text }) end end)
 		return snapshot.id
 	end
 	function M.startAction(key, expected, inputs, timeout)
 		if M.active then return nil, "A workspace run is already active" end
 		local snapshot, why = M.actionSnapshot(key, expected, inputs); if not snapshot then return nil, why end
 		M.active = snapshot
-		clock.spawn(function() local result = M.run(snapshot, nil, timeout); if M.active == snapshot then M.active = nil end; if not result.ok and not result.data then M.changed:fire({ kind = "rejected", text = result.text }) end end)
+		clock.spawn(function() local result = M.run(snapshot, nil, timeout); if M.active == snapshot then M.active = nil end; if not result.ok and not (result.data and result.data.runId) then M.changed:fire({ kind = "rejected", text = result.text }) end end)
 		return snapshot.id
 	end
 	function M.busy()

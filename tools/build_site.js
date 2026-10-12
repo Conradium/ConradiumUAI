@@ -97,6 +97,12 @@ function build() {
     catalog: '\n' + groupMarkup + '\n          ',
     categories: options,
   })) html = replaceRegion(html, name, content);
+  // Animated counters must use the same generated values as their fallback text.
+  for (const [name, count] of [['tool-count', catalog.tools.length], ['group-count', groups.length]]) {
+    const expression = new RegExp('(data-count=")\\d+("[^>]*><!-- site:' + name + ':start -->)');
+    if (!expression.test(html)) throw new Error('Missing generated counter: ' + name);
+    html = html.replace(expression, (_, before, after) => before + count + after);
+  }
   for (const match of html.matchAll(/data-tool-ref="([^"]+)"/g)) {
     if (!toolNames.has(match[1])) throw new Error('Website references an unknown tool: ' + match[1]);
   }

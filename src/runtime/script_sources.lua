@@ -7,37 +7,13 @@ return function(env)
 	local clock = env.require("runtime/clock")
 	local limits = env.require("runtime/code_limits")
 	local text = env.require("runtime/code_text")
+	local decompileResult = env.require("runtime/decompile_result")
 	local M = {}
 	local sources, bindings, cache, flights, generations, owners = {}, {}, {}, {}, {}, {}
 	local serial, bytes, workers, alive = 0, 0, 0, true
 	local function id(prefix) serial = serial + 1; return prefix .. ":" .. refs.epoch .. ":" .. serial end
 	local function hash(source) local value = 5381; for i = 1, #source do value = (value * 33 + source:byte(i)) % 4294967296 end; return string.format("%08x", value) end
 	M.hash = hash
-	-- A decompiler, and the bundled luacid service, report a failed decompile as
-	-- a comment notice rather than an error, so a returned string is not proof of
-	-- source. Real decompiled code carries at least one statement, so blank or
-	-- entirely comment text is a failure notice that must not be cached, shown,
-	-- or allowed to displace a working fallback. Only decompiler output is
-	-- checked: the host-readable path can legitimately read an empty Source.
-	local function notice(source)
-		if type(source) ~= "string" then return true end
-		for line in source:gmatch("[^\n]+") do
-			if line:match("%S") and not line:match("^%s*%-%-") then return false end
-		end
-		return true
-	end
-	-- The bundled service's own failure titles, surfaced without its detail text:
-	-- a notice can carry a remote response body, which does not belong in
-	-- diagnostics. Its titles are pinned to the vendored asset and this client's
-	-- own ByteFall notices.
-	local NOTICE_TITLES = { ["Failed to read script bytecode"] = true, ["Decompiler API request failed"] = true }
-	local function noticeTitle(source)
-		if type(source) ~= "string" then return nil end
-		local first = (source:match("^%s*([^\n]*)") or ""):gsub("^%-%-%s*", ""):gsub("%s+$", "")
-		if NOTICE_TITLES[first] then return first end
-		if first:find("^ByteFall request failed") then return first:sub(1, 80) end
-		return nil
-	end
 	local function failure(code, message, instanceId, method)
 		return { id = id("source"), instanceId = instanceId, runtimeEpoch = refs.epoch, method = method or "source",
 			status = (code == "expired_snapshot" and "expired") or ((code == "decompiler_failure" or code == "invalid_source" or code == "source_failure") and "error") or "unavailable",
@@ -84,7 +60,7 @@ return function(env)
 			runtimeEpoch = refs.epoch, method = method, status = #source == 0 and "empty" or "available", code = #source == 0 and "empty_source" or "available",
 			readOnly = method == "source" or method == "decompiled", liveBinding = false, writeBack = false, sourceHash = hash(source),
 			instanceId = metadata.instanceId, instancePath = metadata.instancePath, origin = metadata.origin or method, generation = metadata.generation,
-			diagnostics = #source == 0 and "The host returned an empty source string" or nil }
+			diagnostics = #source == 0 and "The host returned an empty source string" or metadata.diagnostics }
 		if existingPath then item.path = existingPath end
 		sources[#sources + 1], bytes = item, bytes + #source
 		return item
@@ -148,65 +124,84 @@ return function(env)
 			if workers >= limits.sourceWorkers then if ctx.requestOwner then owners[ctx.requestOwner] = nil end; return reject("unavailable_source", "Source workers are busy; retry after an active request completes") end
 			flight = { generation = generation, epoch = refs.epoch, status = "pending", waiters = {} }; flights[key] = flight
 			flight.waiters[request] = stale; workers = workers + 1
+			local function wanted()
+				if not alive or flight.epoch ~= refs.epoch or generation ~= (generations[instanceId] or 0) or not refs.resolve(instanceId) then return false end
+				for _, cancelled in pairs(flight.waiters) do if not cancelled() then return true end end
+				return false
+			end
+			flight.control = { aborted = function() return not wanted() end, deadlineMs = deadline }
 			clock.spawn(function()
 				local ok, result, problem, detail = pcall(function()
+					if not wanted() then return reject("stale_request", "Source request was cancelled before capture") end
 					local source, read, origin
 					if not options.decompile then read, source = pcall(function() return object.Source end); origin = "host-readable" end
-					local used = "source"
+					local used, diagnostics = "source", nil
 					if options.decompile or not read or type(source) ~= "string" then
 						-- The host's own decompiler first, then the bundled fallbacks in
 						-- order: luacid (compiled in the executor) and ByteFall (plain
 						-- HTTP), so a client whose executor has no native decompiler still
 						-- reaches source. Results are checked for failure notices, because
 						-- a broken decompiler reports them as a string instead of raising.
-						local decompiled, from, attempts = nil, nil, {}
+						local decompiled, from, attempts, attempted = nil, nil, {}, false
+						local function accept(okRead, value, label)
+							local invalid
+							if okRead then invalid = decompileResult.problem(value) else invalid = "raised an error; host error text was omitted" end
+							if not invalid then decompiled, from = value, label; return end
+							attempts[#attempts + 1] = label .. ": " .. (okRead and decompileResult.noticeTitle(value) or invalid)
+						end
 						if caps.fn.decompile then
+							attempted = true
 							local okRead, value = pcall(caps.fn.decompile, object)
-							if okRead and not notice(value) then decompiled, from = value, "decompiled" end
+							accept(okRead, value, "decompiled")
 						end
 						if not decompiled then
-							local fallback, why = env.require("runtime/luacid").install()
-							if fallback then
-								local okRead, value = pcall(fallback, object)
-								if okRead and not notice(value) then decompiled, from = value, "luacid"
-								else attempts[#attempts + 1] = "luacid: " .. ((okRead and noticeTitle(value)) or "returned no source") end
+							if not wanted() then return reject("stale_request", "Source request expired before fallback") end
+							local installed, fallback = pcall(env.require("runtime/luacid").install)
+							if installed and type(fallback) == "function" then
+								attempted = true
+								if not wanted() then return reject("stale_request", "Source request expired before fallback") end
+								local okRead, value = pcall(fallback, object, flight.control)
+								accept(okRead, value, "luacid")
 							else
-								attempts[#attempts + 1] = "luacid: " .. tostring(why)
+								attempts[#attempts + 1] = "luacid: " .. (installed and "not available on this host" or "initialisation failed; host error text was omitted")
 							end
 						end
 						if not decompiled then
+							if not wanted() then return reject("stale_request", "Source request expired before fallback") end
 							local bytefall = env.require("runtime/bytefall")
 							if bytefall.available() then
-								local okRead, value = pcall(bytefall.decompile, object)
-								if okRead and not notice(value) then decompiled, from = value, "bytefall"
-								else attempts[#attempts + 1] = "ByteFall: " .. ((okRead and noticeTitle(value)) or "returned no source") end
+								attempted = true
+								local okRead, value = pcall(bytefall.decompile, object, flight.control)
+								accept(okRead, value, "bytefall")
 							else
 								attempts[#attempts + 1] = "ByteFall: this host has no HTTP function or bytecode reader"
 							end
 						end
 						if not decompiled then
 							local reason = " Decompilers tried -- " .. table.concat(attempts, "; ") .. "."
-							if caps.fn.decompile then
+							if attempted then
 								return nil, "Decompiler failed to return source." .. reason, failure("decompiler_failure", "Decompiler failed to return source; host error text was omitted." .. reason, instanceId, "decompiled")
 							end
 							return nil, "Decompiler unavailable on this host." .. reason, failure("decompiler_unavailable", "Source is unreadable and no decompiler is available." .. reason, instanceId)
 						end
 						source, read, used, origin = decompiled, true, "decompiled", from
+						if #attempts > 0 then diagnostics = "Recovered after " .. table.concat(attempts, "; ") end
 					end
-					local wanted = false; for _, cancelled in pairs(flight.waiters) do if not cancelled() then wanted = true end end
-					if not wanted or not alive or flight.epoch ~= refs.epoch or generation ~= (generations[instanceId] or 0) or not refs.resolve(instanceId) then return reject("stale_request", "Discarded stale source completion") end
+					if not wanted() then return reject("stale_request", "Discarded stale source completion") end
 					local info = refs.describe(object)
 					return M.keep(source, origin .. " · " .. instanceId .. " · " .. info.displayPath, info.name .. ".lua", nil,
-						{ method = used, origin = origin, instanceId = instanceId, instancePath = info.displayPath, generation = generation })
+						{ method = used, origin = origin, instanceId = instanceId, instancePath = info.displayPath, generation = generation, diagnostics = diagnostics })
 				end)
 				workers = math.max(0, workers - 1)
-				flight.result, flight.problem = ok and result or nil, ok and problem or "Source request failed safely"
-				flight.detail = detail or (not flight.result and failure("source_failure", flight.problem or "Source request failed safely", instanceId))
+				if ok then flight.result, flight.problem = result, problem
+				else flight.result, flight.problem = nil, "Source request failed safely" end
+				flight.detail = detail
+				if not flight.result and not flight.detail then flight.detail = failure("source_failure", flight.problem or "Source request failed safely", instanceId) end
 				flight.status = "completed"
 				if alive and flight.result then cache[key] = flight.result.id end
 				if flights[key] == flight then flights[key] = nil end
 			end)
-		else flight.waiters[request] = stale end
+		else flight.waiters[request] = stale; flight.control.deadlineMs = math.max(flight.control.deadlineMs, deadline) end
 		while flight.status == "pending" and not stale() and clock.ms() < deadline do clock.wait(0.01) end
 		flight.waiters[request] = nil
 		local cancelled = stale()

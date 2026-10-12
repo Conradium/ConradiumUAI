@@ -8,10 +8,8 @@
 -- conversion lives here so the context store, the loop and the transcript keep
 -- speaking one internal shape.
 --
--- Deliberately absent from the body: `temperature`, `top_p` and `top_k`. They were
--- removed on Opus 4.7 and answer 400 on every model since, and this client's
--- default is an Opus 5. A record that needs them on an older Claude can set them
--- through `record.params`, which is spread in last.
+-- Sampling follows the same documented model traits as chat completions. Raw
+-- provider and request parameters remain explicit overrides, spread in last.
 return function(env)
 	local util = env.require("runtime/util")
 	local config = env.require("runtime/config")
@@ -205,6 +203,12 @@ return function(env)
 		local tools = M.wireTools(request.tools)
 		if #tools > 0 then body.tools = tools end
 		if request.stream then body.stream = true end
+
+		local temperature = request.temperature
+		if temperature == nil then temperature = config.get("agent.temperature", 0.4) end
+		if temperature and traits.allowsSampling(record.model) then
+			body.temperature = temperature
+		end
 
 		-- Reasoning. Adaptive is the only shape the current generations accept: a
 		-- fixed `budget_tokens` was removed after 4.6 and answers 400 on everything

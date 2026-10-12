@@ -100,6 +100,8 @@ return function(env)
 			if action == "reparent" and not parent then return fail("invalid_arguments", "Choose a parent") end
 			if parent and (parent == target or parent:IsDescendantOf(target)) then return fail("invalid_arguments", "Cannot move an object inside itself") end
 			local ok, err = pcall(function() target.Parent = parent end); if not ok then return fail("partial", tostring(err)) end
+			local observed, actual = pcall(function() return target.Parent end)
+			if not observed or actual ~= parent then return fail("partial", "Parent assignment could not be verified; inspect the object before retrying") end
 			return { ok = true, status = "completed", text = action == "detach" and "Detached locally; outside Undo coverage" or "Moved locally; outside Undo coverage", item = refs.describe(target) }
 		elseif action == "delete" then
 			if not target or target == game then return fail("invalid_arguments", "Choose an object to delete") end
@@ -126,6 +128,7 @@ return function(env)
 				end
 				if ctx and ctx.aborted and ctx.aborted() then error("aborted") end
 				object.Parent = parent
+				if object.Parent ~= parent then error("Parent assignment could not be verified") end
 			end)
 			if not configured then pcall(function() object:Destroy() end); return fail("unavailable", tostring(err)) end
 			return { ok = true, status = "completed", text = "Created locally; outside Undo coverage", item = refs.describe(object) }

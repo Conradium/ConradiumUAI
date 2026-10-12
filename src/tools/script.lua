@@ -10,16 +10,46 @@ return function(env)
 
 	local tools = {
 		{
+			name = "scripting_docs",
+			risk = "read",
+			description = "Read the bundled guide for developing Roblox scripts quickly with UAI. Start with quickstart, then only task-relevant sections: paths/tool arguments, inspection/decompilation, Luau, execution/cleanup, UI scripts, debugging, projects, editor/actions and verification. Reuse retained sections. No network, filesystem access or execution required.",
+			parameters = {
+				type = "object",
+				properties = {
+					section = { type = "string", enum = { "index", "quickstart", "task_routing", "paths_and_tool_calls", "inspection", "luau", "execution_and_cleanup", "ui_scripts", "debugging", "projects", "editor_and_actions", "verification", "tool_reference", "maintaining_the_guide" }, description = "index lists topics; quickstart supplies the short normal workflow. Read other sections only as needed." },
+					offset = { type = "integer", minimum = 1, description = "Continue the same section from the returned nextOffset until eof." },
+					limit = { type = "integer", minimum = 256, maximum = 16000, description = "Bytes in this page, also bounded by the result budget. Default 3500." },
+				},
+				required = {},
+			},
+			run = function(args)
+				local docs = env.require("runtime/script_development_docs")
+				local section = args.section or "index"
+				if section == "index" then
+					local rows = { "Project UAI scripting guide", "Guide: " .. docs.url,
+						"Read quickstart once, then select only sections needed for this task. Reuse retained instructions.", "Sections:" }
+					for _, key in ipairs(docs.order) do rows[#rows + 1] = key .. " - " .. docs.titles[key] end
+					rows[#rows + 1] = "Pages use one-based UTF-8 byte offsets. Continue with nextOffset as offset until eof; do not read all topics by default."
+					local result = H.readSlice("Scripting guide / index", table.concat(rows, "\n"), args, 3500)
+					if result.data then result.data.sections, result.data.url = util.copy(docs.order), docs.url end
+					return result
+				end
+				local source = docs.sections[section]
+				if not source then return H.fail("unknown scripting guide section; request index") end
+				return H.readSlice("Scripting guide / " .. section, source, args, 3500)
+			end,
+		},
+		{
 			name = "run_luau",
 			risk = "danger",
 			needs = { "exec" },
 			description = "Run bounded Luau on the local client. Provide inline source in 'code', or 'path' to run a workspace file directly without reading it back first. Captures print/warn, tables and all return values; waits for functions started with task.spawn/defer/delay. Stop or the deadline cancels managed tasks. Loop checkpoints yield automatically. Prefer a specific tool when one exists. This is not a security sandbox; dynamically loaded code and engine calls can bypass cooperative guards.",
-			timeout = function(args) return execution.timeout(args) + 1 end,
+			timeout = function(args) return execution.timeout(args) + 5 end,
 			parameters = {
 				type = "object",
 				properties = {
 					code = { type = "string", minLength = 1, maxLength = 256000, description = "The source to run inline. Use print() for output; return values or tables to report results. Provide this or 'path', not both." },
-					path = { type = "string", description = "Use the same files/... path returned by file tools, unchanged. Runs the saved source locally without reading it into the conversation. Provide this or code, not both." },
+					path = { type = "string", minLength = 1, description = "Use the same files/... or pastes/... path returned by file tools, unchanged (up to 2 MiB). Runs the saved source locally without reading it into the conversation. Provide this or code, not both." },
 					timeout = { type = "number", minimum = 1, maximum = 60, description = "Execution deadline in seconds, including spawned tasks. Default 10. Use managed chat tools for persistent chat automation." },
 				},
 				required = {},

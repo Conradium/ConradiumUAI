@@ -111,16 +111,13 @@ return function(env)
 
 	local function sendKeyVim(vim, keyCode, action, duration)
 		if action == "press" then
-			vim:SendKeyEvent(true, keyCode, false, game)
+			if vim:SendKeyEvent(true, keyCode, false, game) == false then return false end
 			clock.wait(duration)
-			vim:SendKeyEvent(false, keyCode, false, game)
-			return true
+			return vim:SendKeyEvent(false, keyCode, false, game) ~= false
 		elseif action == "down" then
-			vim:SendKeyEvent(true, keyCode, false, game)
-			return true
+			return vim:SendKeyEvent(true, keyCode, false, game) ~= false
 		elseif action == "up" then
-			vim:SendKeyEvent(false, keyCode, false, game)
-			return true
+			return vim:SendKeyEvent(false, keyCode, false, game) ~= false
 		end
 		return false
 	end
@@ -134,31 +131,28 @@ return function(env)
 
 		local value = keyCode.Value
 		if action == "press" then
-			keypress(value)
+			if keypress(value) == false then return false end
 			clock.wait(duration)
-			keyrelease(value)
-			return true
+			return keyrelease(value) ~= false
 		elseif action == "down" then
-			keypress(value)
-			return true
+			return keypress(value) ~= false
 		elseif action == "up" then
-			keyrelease(value)
-			return true
+			return keyrelease(value) ~= false
 		end
 		return false
 	end
 
-	local function sendKeyVu(vu, keyCode, action)
-		pcall(function() vu:CaptureController() end)
+	local function sendKeyVu(vu, keyCode, action, duration)
+		if vu:CaptureController() == false then return false end
 		local name = keyCode.Name
 		if action == "down" or action == "press" then
-			pcall(function() vu:SetKeyDown(name) end)
+			if vu:SetKeyDown(name) == false then return false end
 		end
 		if action == "press" then
-			clock.wait(0.05)
+			clock.wait(duration)
 		end
 		if action == "up" or action == "press" then
-			pcall(function() vu:SetKeyUp(name) end)
+			if vu:SetKeyUp(name) == false then return false end
 		end
 		return true
 	end
@@ -194,32 +188,33 @@ return function(env)
 				if not keyCode then return H.fail(keyErr) end
 
 				local action = args.action or "press"
+				if action ~= "press" and action ~= "down" and action ~= "up" then return H.fail("unknown keyboard action") end
 				local duration = util.clamp(tonumber(args.duration) or 0.05, 0.01, 2.0)
 
 				local vim = getVim()
 				local ok = false
 
 				if vim and vim.SendKeyEvent then
-					local okVim = pcall(function()
+					local okVim, sent = pcall(function()
 						return sendKeyVim(vim, keyCode, action, duration)
 					end)
-					if okVim then ok = true end
+					ok = okVim and sent == true
 				end
 
 				if not ok then
-					local okExec = pcall(function()
+					local okExec, sent = pcall(function()
 						return sendKeyExecutor(keyCode, action, duration)
 					end)
-					if okExec then ok = true end
+					ok = okExec and sent == true
 				end
 
 				if not ok then
 					local vu = getVu()
 					if vu then
-						local okVu = pcall(function()
-							return sendKeyVu(vu, keyCode, action)
+						local okVu, sent = pcall(function()
+							return sendKeyVu(vu, keyCode, action, duration)
 						end)
-						if okVu then ok = true end
+						ok = okVu and sent == true
 					end
 				end
 
@@ -261,6 +256,8 @@ return function(env)
 			run = function(args)
 				local button = args.button or "left"
 				local action = args.action or "click"
+				if button ~= "left" and button ~= "right" and button ~= "middle" then return H.fail("unknown mouse button") end
+				if action ~= "click" and action ~= "down" and action ~= "up" and action ~= "move" then return H.fail("unknown mouse action") end
 				local x, y = getMousePos(args.x, args.y)
 
 				local vim = getVim()
@@ -271,56 +268,54 @@ return function(env)
 				if button == "right" then btnIndex = 1 end
 				if button == "middle" then btnIndex = 2 end
 
-				if vim and vim.SendMouseButtonEvent then
-					local okVim = pcall(function()
+				if vim then
+					local okVim, sent = pcall(function()
 						if action == "move" then
-							if vim.SendMouseMoveEvent then
-								vim:SendMouseMoveEvent(x, y, game)
-							end
+							return vim.SendMouseMoveEvent ~= nil and vim:SendMouseMoveEvent(x, y, game) ~= false
 						elseif action == "click" then
-							vim:SendMouseButtonEvent(x, y, btnIndex, true, game, 0)
+							if vim:SendMouseButtonEvent(x, y, btnIndex, true, game, 0) == false then return false end
 							clock.wait(0.05)
-							vim:SendMouseButtonEvent(x, y, btnIndex, false, game, 0)
+							return vim:SendMouseButtonEvent(x, y, btnIndex, false, game, 0) ~= false
 						elseif action == "down" then
-							vim:SendMouseButtonEvent(x, y, btnIndex, true, game, 0)
+							return vim:SendMouseButtonEvent(x, y, btnIndex, true, game, 0) ~= false
 						elseif action == "up" then
-							vim:SendMouseButtonEvent(x, y, btnIndex, false, game, 0)
+							return vim:SendMouseButtonEvent(x, y, btnIndex, false, game, 0) ~= false
 						end
-						return true
+						return false
 					end)
-					if okVim then ok = true end
+					ok = okVim and sent == true
 				end
 
 				if not ok and action == "click" then
 					local hasM1 = pcall(function() return mouse1click end)
 					local hasM2 = pcall(function() return mouse2click end)
 					if button == "left" and hasM1 and type(mouse1click) == "function" then
-						pcall(mouse1click)
-						ok = true
+						local succeeded, sent = pcall(mouse1click); ok = succeeded and sent ~= false
 					elseif button == "right" and hasM2 and type(mouse2click) == "function" then
-						pcall(mouse2click)
-						ok = true
+						local succeeded, sent = pcall(mouse2click); ok = succeeded and sent ~= false
 					end
 				end
 
-				if not ok and vu then
-					local okVu = pcall(function()
-						vu:CaptureController()
+				if not ok and vu and action ~= "move" and button ~= "middle" then
+					local okVu, sent = pcall(function()
+						if vu:CaptureController() == false then return false end
 						local pos = Vector2.new(x, y)
 						if action == "click" then
 							if button == "right" then
-								vu:ClickButton2(pos)
+								return vu:ClickButton2(pos) ~= false
 							else
-								vu:ClickButton1(pos)
+								return vu:ClickButton1(pos) ~= false
 							end
 						elseif action == "down" then
-							vu:Button1Down(pos)
+							if button == "right" then return vu:Button2Down(pos) ~= false end
+							return vu:Button1Down(pos) ~= false
 						elseif action == "up" then
-							vu:Button1Up(pos)
+							if button == "right" then return vu:Button2Up(pos) ~= false end
+							return vu:Button1Up(pos) ~= false
 						end
-						return true
+						return false
 					end)
-					if okVu then ok = true end
+					ok = okVu and sent == true
 				end
 
 				if not ok then

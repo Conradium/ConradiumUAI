@@ -14,8 +14,7 @@ return function(env)
 		local label = P.text(scroll.instance, { name = "OutputText", text = "Run a document to see its output here.", role = "mono", auto = "Y", wrap = true, color = theme.color.codeText })
 		local handle = { root = root, visible = true, alive = true }
 		local rawOutput = label.Text
-		local palette = {}; for _, key in ipairs({ "keyword", "string", "number", "comment", "call" }) do palette[key] = "#" .. theme.code[key]:ToHex() end
-		label.RichText = true
+		label.RichText = false
 		local function render()
 			if not handle.alive or not handle.visible then return end
 			local run
@@ -26,7 +25,7 @@ return function(env)
 			picker.setText(run.name .. " · r" .. run.revision .. " · " .. run.status)
 			rawOutput = "Run " .. run.id .. (doc and doc.revision ~= run.revision and ("\nRan revision " .. run.revision .. "; current revision " .. doc.revision) or "")
 				.. "\n" .. (run.result and run.result.text or table.concat(run.output, "\n")) .. (#run.output == 0 and run.status ~= "running" and "\nNo printed output." or "")
-			label.Text = env.require("runtime/code_lexer").highlight(rawOutput, palette)
+			label.Text = rawOutput
 			if follow then scroll.toBottom() end
 		end
 		picker = header.add("Run output", function()

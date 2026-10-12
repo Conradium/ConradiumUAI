@@ -2,10 +2,10 @@
 --
 --   luajit tools/bundle.lua
 --
--- Each module's source is emitted verbatim inside an immediately-invoked function,
--- so what ships is the code that was written and reviewed -- no rewriting, no
--- minification, and a stack trace still names the module it came from. A header
--- comment records the manifest so the artifact can be identified after the fact.
+-- Module source keeps its authored lines inside an immediately-invoked function,
+-- with CRLF and end-of-file whitespace normalized. The JSON manifest records
+-- inclusive source ranges so bundle stack traces can be mapped to source files.
+-- A header comment identifies the build and each module's content hash.
 package.path = "test/?.lua;" .. package.path
 local luau = require("luau")
 local excluded = dofile("tools/native_scope.lua")
@@ -15,6 +15,8 @@ for _, option in ipairs(arg or {}) do
 	elseif option == "--native" then nativeOnly = true
 	else error("Unknown bundle option: " .. tostring(option)) end
 end
+
+dofile("tools/build_script_docs.lua")(checkOnly)
 
 do
 	local fh = io.open("tools/pack_icons.lua", "r")
@@ -105,21 +107,25 @@ do
 	end
 end
 
-local version = bootSource:match('local VERSION = "([^"]+)"') or "0.0.0"
+local version = bootSource:match('local VERSION = "([^"]+)"')
+if not version then
+	io.stderr:write('bundle refused: init.lua must declare local VERSION = "<version>"\n')
+	os.exit(1)
+end
 local identify = dofile("tools/build_id.lua")
 local buildId = identify(version, modules, bootSource)
-local manifest = { '{"format":"uai-build","version":1,"hashAlgorithm":"uai-dual32-v1",',
-	'"buildId":' .. string.format("%q", buildId) .. ',"bootstrapHash":' .. string.format("%q", identify("init", {}, bootSource)) .. ',"modules":[' }
-for index, module in ipairs(modules) do
+for _, module in ipairs(modules) do
 	module.hash = identify("module", { module }, "")
-	manifest[#manifest + 1] = (index > 1 and "," or "") .. string.format('{"id":%q,"bytes":%d,"hash":%q}', module.id, module.bytes, module.hash)
 end
-manifest[#manifest + 1] = "]}\n"
-manifest = table.concat(manifest)
 
 local out = {}
+local nextLine = 1
 local function emit(line)
 	out[#out + 1] = line
+	local startLine = nextLine
+	local _, lineBreaks = line:gsub("\n", "")
+	nextLine = nextLine + lineBreaks + 1
+	return startLine, nextLine - 1
 end
 
 local total = 0
@@ -147,7 +153,7 @@ for _, module in ipairs(modules) do
 	emit("-- " .. module.id)
 	emit(("-- "):rep(1) .. ("="):rep(74))
 	emit(string.format('__UAI_MODULES["%s"] = (function()', module.id))
-	emit(module.source:gsub("\r\n", "\n"):gsub("%s+$", ""))
+	module.sourceStartLine, module.sourceEndLine = emit(module.source)
 	emit("end)()")
 	emit("")
 end
@@ -155,10 +161,20 @@ end
 emit(("-- "):rep(1) .. ("="):rep(74))
 emit("-- bootstrap")
 emit(("-- "):rep(1) .. ("="):rep(74))
-emit(bootSource:gsub("\r\n", "\n"):gsub("%s+$", ""))
+local bootstrapStartLine, bootstrapEndLine = emit(bootSource:gsub("\r\n", "\n"):gsub("%s+$", ""))
 emit("")
 
 local bundle = table.concat(out, "\n")
+local manifest = { '{"format":"uai-build","version":1,"hashAlgorithm":"uai-dual32-v1",',
+	'"buildId":' .. string.format("%q", buildId) .. ',"bootstrapHash":' .. string.format("%q", identify("init", {}, bootSource)),
+	string.format(',"bootstrap":{"sourceStartLine":%d,"sourceEndLine":%d},"modules":[', bootstrapStartLine, bootstrapEndLine) }
+for index, module in ipairs(modules) do
+	manifest[#manifest + 1] = (index > 1 and "," or "") .. string.format(
+		'{"id":%q,"bytes":%d,"hash":%q,"sourceStartLine":%d,"sourceEndLine":%d}',
+		module.id, module.bytes, module.hash, module.sourceStartLine, module.sourceEndLine)
+end
+manifest[#manifest + 1] = "]}\n"
+manifest = table.concat(manifest)
 
 -- The bundle has to parse as one chunk, or a syntax error in one module becomes a
 -- mystery at load time in a game.

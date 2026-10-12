@@ -351,6 +351,7 @@ return function(env)
 				local model, provider = candidate and candidate.model, candidate and candidate.label
 				if systemText == nil or candidate ~= promptRecord or model ~= promptModel or provider ~= promptProvider then
 					local options = { tools = definitions, model = model, provider = provider, session = session }
+					options.opencodeCompatibility = candidate and candidate.api ~= "anthropic" and providers.isOpencode(candidate) or false
 					if type(session.systemPrompt) == "function" then
 						systemText = session.systemPrompt(options)
 					elseif type(session.systemPrompt) == "string" and util.trim(session.systemPrompt) ~= "" then
@@ -436,7 +437,9 @@ return function(env)
 				-- turn budget, the results are replaced with a refusal that names the
 				-- problem, which is enough for most models to change tack.
 				local signature = callSignature(result.toolCalls)
-				if waitingForSubagents(result.toolCalls) then
+				-- A token-limited batch is never dispatched. It cannot count as an
+				-- executed repeat and prevent a later complete version from running.
+				if result.finish == "length" or waitingForSubagents(result.toolCalls) then
 					lastSignature, streak = "", 0
 				elseif signature == lastSignature then
 					streak = streak + 1
@@ -499,7 +502,7 @@ return function(env)
 							ok = false,
 							text = "The tool produced no result.",
 						}
-						ctx.pushToolResult(call.id, outcome.name, outcome.text)
+						ctx.pushToolResult(call.id, outcome.name, outcome.modelText or outcome.text)
 					end
 					if session.aborted() then
 						if session.persist then session.persist() end

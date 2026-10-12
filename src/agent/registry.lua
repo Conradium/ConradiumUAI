@@ -247,6 +247,40 @@ return function(env)
 		return { total = #M.order, byGroup = byGroup, byRisk = byRisk, unavailable = unavailable }
 	end
 
+	-- OpenCode's required declarations are not local aliases. If a model still
+	-- calls one, point it at real tools without widening this conversation's scope.
+	local COMPATIBILITY_TOOLS = {
+		bash = { "run_luau", "check_luau", "code_run" },
+		read = { "file_read", "file_read_many", "code_read" },
+		edit = { "file_edit", "file_edit_many", "file_write", "code_edit", "code_write" },
+		glob = { "file_list", "file_search" },
+		grep = { "file_search", "code_search" },
+		list = { "file_list", "code_tabs" },
+	}
+	local function unknownToolMessage(name, ctx)
+		local owner = ctx and ctx.session or {}
+		local definitions = M.definitions({ only = owner.toolFilter, groups = owner.toolGroups, exclude = owner.toolExclude })
+		local available, names, seen = {}, {}, {}
+		for _, definition in ipairs(definitions) do available[definition["function"].name] = true end
+		local function add(candidate)
+			if available[candidate] and not seen[candidate] and #names < 12 then
+				names[#names + 1], seen[candidate] = candidate, true
+			end
+		end
+		for _, candidate in ipairs(COMPATIBILITY_TOOLS[name] or {}) do add(candidate) end
+		for _, definition in ipairs(definitions) do add(definition["function"].name) end
+		local message = string.format("No local tool named '%s'. This call did not run.", name)
+		if COMPATIBILITY_TOOLS[name] then
+			message = message .. " OpenCode may advertise this name only for provider compatibility."
+		end
+		if #names > 0 then
+			return message .. " Available tools include: " .. table.concat(names, ", ")
+				.. ". Use their declared arguments."
+				.. (name == "bash" and " Shell commands are not Luau source." or "")
+		end
+		return message .. " No tools are available in this conversation."
+	end
+
 	-- One call. Always returns a result table; never raises.
 	function M.dispatch(call, ctx)
 		M.load()
@@ -258,9 +292,7 @@ return function(env)
 		local tool = M.tools[name]
 		local registration = registrations[name]
 		if not tool then
-			local names = util.slice(M.order, 1, 12)
-			result.text = string.format("No tool named '%s'. Available tools include: %s.",
-				name, table.concat(names, ", "))
+			result.text = unknownToolMessage(name, ctx)
 			result.error = "unknown tool"
 			result.ms = clock.since(started)
 			return result
@@ -306,10 +338,10 @@ return function(env)
 			return result
 		end
 
-		-- Completing an interrupted write can silently drop edits or options. Keep
-		-- harmless formatting repairs, but never invent the end of a mutation.
+		-- Completing interrupted arguments can drop a target or filter even on
+		-- reads. Keep formatting repairs, but never invent a call's missing tail.
 		local args, repairNote = schema.repairJson(fn.arguments or call.arguments or "{}", {
-			allowTruncated = tool.risk == "read",
+			allowTruncated = false,
 		})
 		if args == nil then
 			result.text = string.format("Could not read the arguments for %s: %s. Send valid JSON.",
@@ -471,6 +503,9 @@ return function(env)
 			handlerOk = true
 		end
 
+		local formatter = env.require("agent/tool_result")
+		local observing = hooks.count("postTool") > 0
+		local beforeText, beforeData = text, observing and formatter.signature(data)
 		local after = { tool = tool, args = coerced, text = text, data = data, ctx = ctx }
 		hooks.run("postTool", after)
 		text = tostring(after.text or text)
@@ -483,6 +518,18 @@ return function(env)
 		result.full = truncated and text or nil
 		result.truncated = truncated
 		result.data = after.data
+		local function readerAvailable(readerName)
+			local reader = M.tools[readerName]
+			local owner = ctx and ctx.session
+			return reader ~= nil and M.groupEnabled(reader.group) and not M.missingCapability(reader)
+				and permissions.check(reader) ~= "deny"
+				and not (owner and ((owner.toolFilter and not owner.toolFilter[readerName])
+					or (owner.toolGroups and not owner.toolGroups[reader.group]) or (owner.toolExclude and owner.toolExclude[readerName])))
+		end
+		local referenceAllowed = not observing or (text == beforeText and beforeData ~= nil and formatter.signature(after.data) == beforeData)
+		local modelOk, modelText = pcall(formatter.render, text, after.data, cap, tool.group, readerAvailable, referenceAllowed)
+		if modelOk then result.modelText = modelText
+		else result.modelText = "Structured tool result could not be formatted. Narrow the original query; the original receipt remains in the UI." end
 		result.ms = clock.since(started)
 		return result
 	end

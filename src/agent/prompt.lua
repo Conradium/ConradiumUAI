@@ -87,6 +87,17 @@ Files and source (supersedes old path-workaround memories):
   Validate complex code with check_luau, then run_luau by path. Managed spawned
   tasks share the call's deadline (10s default, up to 60s), not a background lifetime.]]
 
+	local LUAU = [[
+Luau source:
+- Use Roblox Luau: nil, true/false, 1-based arrays and game:GetService("Name").
+  JSON null belongs in tool arguments, not Lua source. Use task.wait() to pace loops.
+- check_luau only compiles; it does not check Roblox API availability or types.
+  script_analyze adds lexical outlines and literal dependency checks. Inspect live
+  objects and relevant APIs before relying on them; neither check proves behavior.
+- files/... is saved workspace source; pastes/... is an attached source snapshot;
+  dump/ under the current game folder holds inspected source. Code document IDs
+  identify editor drafts, not file paths. For editor tasks, read the current draft.]]
+
 	local NATIVE = [[
 Native workspace:
 - Prefer code_*, explorer_*, instance_* and remotes_* over external explorers or
@@ -143,10 +154,8 @@ Delegation:
 	local HISTORY = [[
 Continuity:
 - If earlier work matters and facts are missing, search conversations and read the
-  relevant thread; memory_read retrieves durable facts by key or query. Do not
-  rediscover settled work or load unrelated history. Save useful facts, not chatter.
-- When conversation_rename is offered, give the topic a short title early. Use
-  todo_write for a useful plan, with one active item while work remains.]]
+  relevant thread when those tools are offered. Do not rediscover settled work or
+  load unrelated history. Save useful facts, not chatter.]]
 
 	local CHAT = [[
 Background chat:
@@ -170,8 +179,11 @@ Background chat:
 		if names == nil then return true end
 		for index = 1, select("#", ...) do
 			local prefix = select(index, ...)
-			for name in pairs(names) do
-				if name:sub(1, #prefix) == prefix then return true end
+			if names[prefix] then return true end
+			if prefix:sub(-1) == "_" then
+				for name in pairs(names) do
+					if name:sub(1, #prefix) == prefix then return true end
+				end
 			end
 		end
 		return false
@@ -181,13 +193,29 @@ Background chat:
 		local parts = { child and "You are a subagent of UAI, working inside a running Roblox client."
 			or "You are UAI, an agent embedded in a running Roblox client.", CORE }
 		local function include(enabled, text) if enabled then parts[#parts + 1] = text end end
+		if opts.opencodeCompatibility then
+			local declarations = {}
+			for _, name in ipairs({ "bash", "read", "edit", "glob", "grep", "list" }) do
+				if not names or not names[name] then declarations[#declarations + 1] = name end
+			end
+			if #declarations > 0 then
+				parts[#parts + 1] = "OpenCode compatibility: " .. table.concat(declarations, ", ")
+					.. " are required provider declarations with no local implementation. Do not call them. "
+					.. "Use the other offered tools and their declared arguments for actual work."
+			end
+		end
 		include(offered(names, "skills_read"), SKILLS)
+		include(offered(names, "scripting_docs"), "For script creation or repair, read scripting_docs quickstart once, then only task-relevant sections. Reuse retained guidance; do not load the whole guide as setup.")
 		include(offered(names, "file_", "check_luau", "run_luau", "project_", "script_", "code_"), FILESYSTEM)
+		include(offered(names, "file_", "check_luau", "run_luau", "project_", "script_", "code_"), LUAU)
 		include(offered(names, "code_", "explorer_", "instance_", "remotes_", "changes_"), NATIVE)
 		include(offered(names, "file_write", "file_edit", "file_append", "run_luau", "code_", "project_", "ui_library_docs"), SCRIPT_UI)
 		include(offered(names, "project_", "script_analyze", "script_test"), PROJECTS)
 		include(offered(names, "dispatch_agent", "agent_followup", "agent_status"), DELEGATION)
 		include(offered(names, "conversation_", "memory_", "todo_"), HISTORY)
+		include(offered(names, "memory_read"), "memory_read retrieves durable facts by key or query; follow its nextOffset with offset until eof.")
+		include(offered(names, "conversation_rename"), "Give the conversation a short topic title with conversation_rename.")
+		include(offered(names, "todo_write"), "Use todo_write for a useful plan, with one active item while work remains.")
 		include(offered(names, "chat_bot", "auto_chat", "auto_reply", "quiz_bot", "chat_loop_"), CHAT)
 		return parts, names
 	end

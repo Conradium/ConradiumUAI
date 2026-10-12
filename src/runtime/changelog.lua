@@ -19,6 +19,47 @@ return function(env)
 	local CATEGORY_ORDER = { "added", "improved", "fixed" }
 	local ENTRIES = {
 		{
+			version = "2.8.0",
+			revision = "2026-10-12-scripting-guide-decompilation-and-audit",
+			date = "October 12, 2026",
+			title = "Reliable scripting and clearer failures",
+			highlights = "An on-demand scripting guide, more reliable decompiler fallbacks, clearer execution results and OpenCode guidance, and focused runtime fixes from the client audit.",
+			sections = {
+				{ category = "added", label = "Script development reference", items = {
+					"Read the scripting guide on demand: a short quickstart, exact tool examples, saved-file and editor workflows, focused debugging, cleanup, source inspection and UI LIB guidance. Main and subagents can request only the sections they need.",
+				} },
+				{ category = "fixed", label = "Script execution and projects", items = {
+					"Distinguish source, compiler, wrapper and stale-revision errors. Keep canonical paths, reject oversized source before execution, and support managed arguments and multiple returns when only table.unpack is available.",
+					"Retain runtime errors and disclose omitted output. Ordinary failures without pending work no longer receive a blanket do-not-retry warning; native continuations retain their cooperative limits.",
+					"Keep completed project test results when another module has invalid exports or the case limit is reached. Report incomplete runs and discovery failures without discarding earlier evidence.",
+					"Validate and quote template data, clean up temporary monitoring, and preserve nested tool failures. Reject stale Code proposals and isolate action inputs.",
+				} },
+				{ category = "improved", label = "Agents and providers", items = {
+					"Give the model structured tool results with the IDs, listings, revisions and continuation cursors needed for its next action. Native results previously exposed these fields only to the interface while the model could receive a generic sentence.",
+					"Preserve the required OpenCode compatibility tool declarations and streaming. Explain placeholder names and guide failed calls toward available UAI tools without adding aliases or expanding permission scopes.",
+					"Give agents concise Luau guidance and distinguish saved files, pasted source and editor drafts. Guidance follows the offered tools and separates syntax checks from API or behavior verification.",
+					"Read subagents receive read-risk tools only. Mutations use write permissions, unknown presets fail early, and client_status reports diagnostics without replacing delegated agent_status.",
+					"Reject truncated arguments instead of guessing missing targets. Normalize memory keys consistently and honor supported Messages sampling settings. Successful response text no longer triggers transient retries unless explicit error fields identify one.",
+					"Do not count token-truncated batches as repeated actions when no tool ran. A later complete, repaired call can execute without inheriting a false repeat warning.",
+				} },
+				{ category = "improved", label = "Code and failure review", items = {
+					"Keep Code editing and previews readable when syntax highlighting fails. Render run logs literally without requiring the Lua lexer.",
+					"Review complete permission arguments and source through expandable previews and the full-argument viewer. Allow, Deny and dismissal settle once and release the prompt before the next queued request.",
+					"Retain complete orphaned tool results, count unread failures in Latest and use Show failures to open their result bodies. Preserve the reader's disclosure and scroll choices.",
+				} },
+				{ category = "fixed", label = "Source and decompiler fallbacks", items = {
+					"Reject unusable native output and service documents before caching; continue to available decompiler fallbacks. Report missing capabilities separately from failed attempts without exposing raw host or service error bodies.",
+					"Stop starting fallbacks after cancellation or expiry, bound bytecode requests and retry waits, and discard late completions. Native operations retain their worker slots until they return.",
+					"Install luacid in a private environment without replacing executor globals. Remove its unbounded response cache so explicit Refresh can request fresh source.",
+				} },
+				{ category = "fixed", label = "Runtime tools", items = {
+					"Correct typed remote prefixes and finite numeric parsing. Report failed input adapters accurately, verify hierarchy changes, and recover previous Gravity selections when a failed update permits restoration.",
+					"Bound fallback world and performance scans and label incomplete results. Protect host capability probes, preserve fractional fallback deadlines and nil callback arguments, and redact more credential formats from logs.",
+					"Map generated bundle lines to source in the manifest. Fix website risk filters, the bulk-read example and animated catalog counts. UI LIB remains 1.3.0 and the embedding SDK 1.0.0.",
+				} },
+			},
+		},
+		{
 			version = "2.7.0",
 			revision = "2026-10-10-request-isolation-and-tool-cancellation",
 			date = "October 9, 2026",

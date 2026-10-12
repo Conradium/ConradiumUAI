@@ -32,6 +32,7 @@ const output = `-- The luacid decompiler, embedded so a host whose own decompile
 -- the host's own tool failed.
 return function(env)
 \tlocal caps = env.require("runtime/caps")
+\tlocal clock = env.require("runtime/clock")
 
 \tlocal M = { installed = nil }
 
@@ -40,11 +41,11 @@ ${asset}
 ]==]
 
 \t-- The asset reads bytecode, sends an executor HTTP request, and publishes on
-\t-- getgenv, which it calls unconditionally. The fallback is advertised only
-\t-- when every one of those is present.
+\t-- an isolated getgenv table. The fallback needs a host environment and a
+\t-- working environment binder so it cannot replace the host's globals.
 \tfunction M.available()
 \t\treturn caps.fn.loadstring ~= nil and caps.fn.getscriptbytecode ~= nil
-\t\t\tand caps.fn.request ~= nil and caps.fn.getgenv ~= nil
+\t\t\tand caps.fn.request ~= nil and caps.fn.getgenv ~= nil and type(setfenv) == "function"
 \tend
 
 \t-- The asset resolves getscriptbytecode and request as plain globals, which
@@ -53,64 +54,71 @@ ${asset}
 \t-- treat missing or empty bytecode as a read error so an unreadable script
 \t-- cannot become an empty API request.
 \tlocal function executorEnvironment(globals)
-\t\tlocal getscriptbytecode, request = caps.fn.getscriptbytecode, caps.fn.request
-\t\treturn setmetatable({
-\t\t\t_G = globals,
-\t\t\tgetgenv = caps.fn.getgenv,
-\t\t\t-- A successful response with no body is not source, and the asset caches
-\t\t\t-- any 200 for the session; report it as a retryable failure so a
-\t\t\t-- transient empty response cannot stick as an empty script.
-\t\t\trequest = function(options)
-\t\t\t\tlocal response = request(options)
-\t\t\t\tif type(response) == "table" and response.StatusCode == 200
-\t\t\t\t\tand (response.Body == nil or tostring(response.Body) == "") then
-\t\t\t\t\treturn { StatusCode = 502, Body = "empty response body", Headers = response.Headers or {} }
+\t\tlocal scope = setmetatable({}, { __index = globals })
+\t\tscope._G = setmetatable({}, { __index = globals })
+\t\tscope.getgenv = function() return scope end
+\t\tscope.getscriptbytecode = caps.fn.getscriptbytecode
+\t\tscope.request = function(options, control)
+\t\t\tcontrol = control or {}
+\t\t\tif not caps.fn.request or (control.aborted and control.aborted()) then return { StatusCode = 499, Body = "request cancelled", Headers = {} } end
+\t\t\tlocal remaining = math.min(15, math.max(0, ((control.deadlineMs or (clock.ms() + 15000)) - clock.ms()) / 1000))
+\t\t\tif remaining <= 0 then return { StatusCode = 499, Body = "request expired", Headers = {} } end
+\t\t\t-- This native continuation stays inside its source worker until it returns.
+\t\t\t-- The requesting waiter may expire, but cannot free a still-running call.
+\t\t\tlocal response = caps.fn.request({ Url = options.Url, Method = options.Method,
+\t\t\t\tHeaders = options.Headers, Body = options.Body, Timeout = remaining })
+\t\t\tif (control.aborted and control.aborted()) or type(response) ~= "table" then return { StatusCode = 499, Body = "request did not complete", Headers = {} } end
+\t\t\tlocal status, body = tonumber(response.StatusCode), response.Body
+\t\t\tlocal headers = type(response.Headers) == "table" and response.Headers or {}
+\t\t\tif status == 200 then
+\t\t\t\tlocal problem = env.require("runtime/decompile_result").problem(body)
+\t\t\t\tfor name, value in pairs(headers) do
+\t\t\t\t\tif tostring(name):lower() == "content-type" then
+\t\t\t\t\t\tlocal mime = tostring(value):lower()
+\t\t\t\t\t\tif mime:find("json", 1, true) or mime:find("html", 1, true) then problem = "returned a service document instead of Luau source" end
+\t\t\t\t\tend
 \t\t\t\tend
-\t\t\t\treturn response
-\t\t\tend,
-\t\t\tgetscriptbytecode = function(object)
-\t\t\t\tlocal value = getscriptbytecode(object)
-\t\t\t\tif type(value) ~= "string" or value == "" then
-\t\t\t\t\terror("the host returned no bytecode for this script", 0)
-\t\t\t\tend
-\t\t\t\treturn value
-\t\t\tend,
-\t\t}, { __index = globals })
+\t\t\t\tif problem then status, body = body == "" and 502 or 422, problem end
+\t\t\telse body = "HTTP " .. tostring(status) end
+\t\t\treturn { StatusCode = status, Body = body, Headers = headers }
+\t\tend
+\t\treturn scope
 \tend
 
 \t-- Compiles and runs the fallback once, then hands back the function it
 \t-- publishes. A failed install is retried, because the reason may have been
-\t-- transient. Any native decompiler global is restored afterwards so the
-\t-- fallback cannot silently replace the host's own tool.
+\t-- transient. Publication stays inside the isolated compiled environment;
+\t-- compiler/initialisation failures never replace host globals.
 \tfunction M.install()
 \t\tif M.installed then return M.installed end
 \t\tif caps.fn.loadstring == nil then return nil, "the host cannot compile code (loadstring is unavailable)" end
 \t\tif caps.fn.getscriptbytecode == nil then return nil, "the host cannot read script bytecode (getscriptbytecode is unavailable)" end
 \t\tif caps.fn.request == nil then return nil, "the host has no executor HTTP function for luacid" end
-\t\tlocal getgenv = caps.fn.getgenv
-\t\tlocal globals, previous
-\t\tif getgenv then
-\t\t\tlocal okEnv, value = pcall(getgenv)
-\t\t\tif okEnv and type(value) == "table" then
-\t\t\t\tglobals = value
-\t\t\t\tprevious = globals.decompile
-\t\t\t\tif globals.request == nil then globals.request = caps.fn.request end
-\t\t\tend
-\t\tend
-\t\tlocal loader, why = caps.fn.loadstring(M.SOURCE)
-\t\tif not loader then return nil, "luacid could not be compiled: " .. tostring(why) end
-\t\tif globals and type(setfenv) == "function" then
-\t\t\tpcall(setfenv, loader, executorEnvironment(globals))
-\t\tend
-\t\tlocal ok, err = pcall(loader)
-\t\tif not ok then return nil, "luacid failed to initialise: " .. tostring(err) end
-\t\tlocal decompiler = globals and globals.decompile or nil
-\t\tif globals and type(decompiler) == "function" then
-\t\t\tpcall(function() globals.decompile = previous end)
-\t\tend
+\t\tif not caps.fn.getgenv then return nil, "the host has no global environment for luacid" end
+\t\tif type(setfenv) ~= "function" then return nil, "the host cannot bind the luacid environment" end
+\t\tlocal okEnv, globals = pcall(caps.fn.getgenv)
+\t\tif not okEnv or type(globals) ~= "table" then return nil, "the host global environment is unavailable" end
+\t\tlocal okCompile, loader = pcall(caps.fn.loadstring, M.SOURCE)
+\t\tif not okCompile or type(loader) ~= "function" then return nil, "luacid could not be compiled" end
+\t\tlocal scope = executorEnvironment(globals)
+\t\tlocal bound = pcall(setfenv, loader, scope)
+\t\tif not bound then return nil, "the host could not bind the luacid environment" end
+\t\tlocal ok = pcall(loader)
+\t\tif not ok then return nil, "luacid failed to initialise" end
+\t\tlocal decompiler = rawget(scope, "decompile")
 \t\tif type(decompiler) ~= "function" then return nil, "luacid did not publish a decompiler" end
-\t\tM.installed = decompiler
-\t\treturn decompiler
+\t\tM.installed = function(object, options)
+\t\t\toptions = type(options) == "table" and options or {}
+\t\t\tlocal requested, deadline = tonumber(options.deadlineMs), clock.ms() + 15000
+\t\t\tif requested and requested == requested then deadline = math.min(requested, deadline) end
+\t\t\tlocal control = { deadlineMs = deadline, aborted = function()
+\t\t\t\tif clock.ms() >= deadline then return true end
+\t\t\t\tif not options.aborted then return false end
+\t\t\t\tlocal alive, value = pcall(options.aborted); return not alive or value == true
+\t\t\tend }
+\t\t\treturn decompiler(object, control)
+\t\tend
+\t\treturn M.installed
 \tend
 
 \treturn M

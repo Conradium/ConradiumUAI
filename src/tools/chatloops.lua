@@ -61,7 +61,7 @@ return function(env)
 				end
 				return { text = #lines == 0 and "No matching chat loops." or table.concat(lines, "\n"), data = records }
 			end },
-		{ name = "chat_loop_stop", risk = "read", description = "Stop a managed chat loop immediately, or use id='all' to stop every chat loop. An already submitted message cannot be recalled.",
+		{ name = "chat_loop_stop", risk = "write", description = "Stop a managed chat loop immediately, or use id='all' to stop every chat loop. An already submitted message cannot be recalled.",
 			parameters = { type = "object", properties = { id = { type = "string" } }, required = { "id" } },
 			run = function(args) return "Stopped " .. loops.stop(args.id) .. " chat loop(s)." end },
 	}

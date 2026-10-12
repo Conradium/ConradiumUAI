@@ -1,6 +1,6 @@
 # Project UAI — contract
 
-Current client release: **2.7.0 — October 9, 2026**.
+Current client release: **2.8.0 — October 12, 2026**.
 
 A universal Roblox AI agent client. Universal means: no game, no gateway and no
 host script is assumed. It runs standalone under an executor, embedded in a host
@@ -133,7 +133,12 @@ overlays and script resources, including replacement by the same window Id.
 
 ## 3. Transport and identity
 
-`net/http` is the only module that performs a request.
+`net/http` owns inference and general-purpose HTTP requests. The bundled
+decompiler adapters are an explicit exception: they use the executor's bytecode
+and HTTP functions directly under `runtime/script_sources` worker/deadline
+ownership. A timed-out reader does not release a still-running native transport
+slot. These adapters neither send inference identity nor log bytecode, service
+credentials or raw error bodies. Runtime modules do not depend on `net/*`.
 
 * Executor `request` is preferred because it can set `User-Agent`. `HttpService:RequestAsync`
   silently drops that header, so on a vanilla client the Claude Code identity
@@ -311,6 +316,22 @@ mode, selected model, host instructions and reply language, and follow-ups take
 precedence over the original task. Custom instructions override workflow/style
 defaults but cannot override tool permissions.
 
+`scripting_docs` is a read-only tool in the script group with no host capability
+requirements. It supplies the detailed `docs/SCRIPT_DEVELOPMENT.md` guide offline.
+Both main and child prompts include only a short pointer when the tool is offered:
+read Quickstart once, then relevant sections as needed and reuse retained guidance.
+The index and section bodies use bounded UTF-8 pages with one-based `offset`,
+`nextOffset` and `eof`. Reading guidance performs no HTTP, file access or execution
+at runtime and does not expand a conversation's tool scope.
+
+The native bundler invokes `tools/build_script_docs.lua` before collecting modules
+to generate `runtime/script_development_docs` from stable second-level headings.
+The normal build generates the reference; `--check` only compares it and fails
+when stale. Review guide prose, examples, reader and generator inputs before
+building; inspect generated output before the focused guide integration check.
+The detailed guide is not injected into every request, and updating it does not
+change the separate UI LIB artifact or API.
+
 Each provider attempt receives that provider's model identity, including fallback
 and context recovery. Request hooks receive a fresh copy of messages and tool
 schemas per attempt; changes do not mutate saved conversation history, registered
@@ -347,9 +368,16 @@ other as an excerpt; legacy producers supplying only `limited` remain supported.
 }
 ```
 
-`ctx` carries `emit(kind, text)` for progress, `aborted()`, `env`, `session`,
-`depth` (subagent nesting) and `budget`. A handler returns a string, or a table
-`{ text = "...", data = <table> }` when the UI can render something richer. A
+`ctx` carries `emit(kind, payload)`, `progress(text)`, `aborted()`, `env`, `session`,
+`depth` (subagent nesting) and `budget`. Progress is tagged with the originating
+call ID; `emit("tool:progress", { text = "..." })` is also supported. A handler
+returns a string, or a table
+`{ text = "...", data = <table> }` for structured results. After `postTool` hooks,
+both text and structured evidence reach the model through a bounded representation;
+the interface retains its original text/data receipt. IDs, revisions, listings and
+continuations must remain usable. Large native results use the existing scoped
+detail readers; clipped text must never be paired with an offset that skips the
+missing bytes. A
 handler may yield. Raising an error is caught and reported to the model as a tool
 error, not a crash. Returning `{ ok = false, text = "..." }` reports a semantic
 failure without raising. Dispatch rechecks disabled groups and the session's tool
@@ -446,8 +474,9 @@ before disk access. The prompt and tool descriptions direct edits of existing
 large files to `file_edit`/`file_edit_many`; full writes create files or replace
 most of their contents. Large new scripts use small sequential writes/appends,
 then syntax checks and execution by path. JSON repair preserves the complete outer
-object and rejects unclosed strings. Mutating tools also reject missing closers
-instead of dropping unfinished edits/options. A token-limited tool batch produces
+object and rejects unclosed strings. Every dispatched tool rejects missing closers
+instead of dropping unfinished targets, filters or edits/options. A token-limited
+tool batch produces
 an error result for every call without executing any, allowing the model to send
 smaller complete calls on its next step.
 
@@ -716,6 +745,11 @@ synchronously, return its ID, then run it in an owned worker. `background=false`
 retains blocking report delivery. Runtime `dispatch` and `followUp` stay blocking;
 `start` and `startFollowUp` return the registered record immediately. Follow-up
 reuses the child's existing context, and `runs` counts these turns.
+
+The default `read` preset intersects its groups with an explicit read-risk tool
+allowlist. It cannot acquire writes from a mixed group. Unknown preset names fail
+before a child is registered. `agent_status` reports delegated workers;
+`client_status` reports client diagnostics.
 
 The parent continues independent work and calls `agent_status` every two or three
 work batches or roughly 15–30 seconds. Status reads belong to its own children,
@@ -1027,6 +1061,12 @@ stale requests, invalid text and oversized source have distinct structured error
 Per-instance capability reads do not decompile. Only explicit requests spawn
 decompile workers (maximum four, 15-second waiter deadline), deduplicated by target,
 method and generation. Late, cancelled and old-runtime results are discarded.
+Fallbacks begin only while at least one reader remains active. Native output is
+validated before luacid and ByteFall are considered; unusable output cannot block
+a working fallback. Both external adapters cap bytecode at 2 MiB and omit raw
+service errors. Luacid installs into a private environment and shares this
+service's cache, so explicit Refresh can make a new service request. Native
+transport continuations retain their worker slots until they return.
 Completed snapshots retain at most eight items/8 MiB with a five-minute TTL; a
 visible source view pins its snapshot and hiding/destroying the view releases it.
 Host-readable and decompiled documents remain read-only across persistence and

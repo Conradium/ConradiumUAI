@@ -692,6 +692,11 @@ return function(env)
 
 	local function prepareDispatch(opts, background)
 		if not alive then return nil, "the client is unloading" end
+		if type(opts) ~= "table" then return nil, "dispatch options must be a table" end
+		local preset = opts.preset or "read"
+		if preset ~= "full" and M.PRESETS[preset] == nil then
+			return nil, "unknown subagent preset; use read, web, game or full"
+		end
 		local parent = opts.parent
 		local depth = (parent and parent.depth or 0) + 1
 
@@ -710,7 +715,7 @@ return function(env)
 			id = util.uid("agent"),
 			label = labelFor(task_text),
 			task = task_text,
-			preset = opts.preset or "read",
+			preset = preset,
 			depth = depth,
 			-- The conversation currently waiting on this child, and the tool call inside
 			-- it. Both move when a follow-up arrives from somewhere else, which is why
@@ -731,12 +736,22 @@ return function(env)
 			-- restricted worker permission to change the user's standing playbooks.
 			excluded.skills_write, excluded.skills_install, excluded.skills_delete = true, true, true
 		end
+		-- Groups contain both inspection and mutation tools. Capture an explicit
+		-- read allowlist so this preset cannot inherit writes from those groups.
+		local readTools
+		if preset == "read" then
+			readTools = {}
+			for _, tool in ipairs(env.require("agent/registry").list()) do
+				if tool.risk == "read" then readTools[tool.name] = true end
+			end
+		end
 		local child = session.create({
 			title = "subagent",
 			depth = depth,
 			headless = true,
 			maxTurns = turns,
-			toolGroups = M.PRESETS[opts.preset or "read"],
+			toolGroups = M.PRESETS[preset],
+			toolFilter = readTools,
 			-- A child has no user to ask, so the tool that asks is absent from its
 			-- catalogue entirely rather than described-and-refused. The brief also
 			-- says so, because a model that knows it cannot ask writes a complete
@@ -763,6 +778,7 @@ return function(env)
 				tools = request.tools,
 				model = request.model,
 				provider = request.provider,
+				opencodeCompatibility = request.opencodeCompatibility,
 				session = child,
 			})
 		end

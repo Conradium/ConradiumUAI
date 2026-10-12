@@ -2,6 +2,7 @@
 return function(env)
 	local store = env.require("runtime/code_store")
 	local runner = env.require("tools/code_runner")
+	local execution = env.require("tools/execution")
 	local sources = env.require("runtime/script_sources")
 	local H = env.require("tools/helpers")
 	local N = env.require("tools/native_helpers")
@@ -23,7 +24,7 @@ return function(env)
 		return N.result({ items = items, activeId = store.activeId(), openIds = store.openIds(), nextOffset = at + #items <= #docs and at + #items or nil }, #items .. " documents")
 	end)
 	N.add(tools, "code_read", "read", "Read the latest live source or a retained version/proposal. Returns the revision for edits and Run; source pages are at most 6,000 bytes.",
-		{ tab = str, document_id = str, source_id = str, version_id = str, proposal_id = str, start = num, count = num, offset = num, limit = num }, {}, function(args)
+		{ tab = str, document_id = str, source_id = str, version_id = str, proposal_id = str, start = { type = "integer", minimum = 1 }, count = { type = "integer", minimum = 1 }, offset = num, limit = num }, {}, function(args)
 		if args.source_id then
 			local page, why = sources.read(args.source_id, args.offset, math.min(args.limit or 3500, 3500)); if not page then return N.fail(why) end
 			local text = page.text; page.text = nil; return N.result(page, text)
@@ -53,6 +54,7 @@ return function(env)
 	end, bind)
 	N.add(tools, "code_search", "read", "Search live documents. Literal query is the default; pattern explicitly enables a Lua pattern. Results include source offsets and revisions.",
 		{ query = str, pattern = str, tab = str, document_id = str, offset = num, case_sensitive = { type = "boolean" }, whole_word = { type = "boolean" } }, {}, function(args)
+		if args.query ~= nil and args.pattern ~= nil then return N.fail("Provide either query or pattern, not both") end
 		local matches, why, cursor, counts = store.search(args.query or args.pattern, { document = ref(args), pattern = args.pattern ~= nil and args.query == nil, offset = args.offset, limit = 10, caseSensitive = args.case_sensitive, wholeWord = args.whole_word })
 		if not matches then return N.fail(why) end; return N.result({ items = matches, nextOffset = cursor, complete = counts.complete, retainedMatches = counts.retainedMatches }, #matches .. " matches")
 	end)
@@ -64,7 +66,7 @@ return function(env)
 		local snapshot, why = runner.snapshot(prepared and prepared.documentId or ref(args), args.expected_revision, "tool"); if not snapshot then return N.fail(why) end
 		return runner.run(snapshot, ctx, args.timeout)
 	end, bind)
-	run.needs, run.timeout = { "exec" }, 65
+	run.needs, run.timeout = { "exec" }, function(args) return execution.timeout(args) + 5 end
 	N.add(tools, "code_propose", "write", "Store a reviewable candidate tied to a base revision. Reports proposed; does not overwrite, select, or run live source.",
 		{ tab = str, document_id = str, expected_revision = num, code = str, name = str }, { "expected_revision", "code" }, function(args)
 		local proposal, why = store.propose(ref(args), args.expected_revision, args.code, args.name); if not proposal then return N.fail(why) end
@@ -82,7 +84,7 @@ return function(env)
 		return N.result({ items = items }, #items .. " saved actions")
 	end)
 	N.add(tools, "code_action_save", "write", "Save an inspectable source snapshot as an action with typed inputs. Updating an action is explicit and revision guarded.",
-		{ document_id = str, name = str, inputs = { type = "array", items = { type = "object" } }, action_id = str, expected_revision = num, source_revision = num }, { "document_id", "name", "source_revision" }, function(args)
+		{ document_id = str, name = str, inputs = { type = "array", items = { type = "object" }, maxItems = 12 }, action_id = str, expected_revision = num, source_revision = num }, { "document_id", "name", "source_revision" }, function(args)
 		local item, why = store.saveAction(args.document_id, args.name, args.inputs or {}, { id = args.action_id, expected_revision = args.expected_revision, source_revision = args.source_revision }); if not item then return N.fail(why) end
 		return N.result({ id = item.id, revision = item.revision, sourceRevision = item.sourceRevision, status = "saved" }, "Saved action snapshot")
 	end)
@@ -96,7 +98,7 @@ return function(env)
 		{ action_id = str, expected_revision = num, inputs = { type = "object" }, timeout = { type = "number", minimum = 1, maximum = 60 } }, { "action_id", "expected_revision" }, function(args, ctx)
 		local snapshot, why = runner.actionSnapshot(args.action_id, args.expected_revision, args.inputs or {}, "tool"); if not snapshot then return N.fail(why) end; return runner.run(snapshot, ctx, args.timeout)
 	end)
-	actionRun.needs, actionRun.timeout = { "exec" }, 65
+	actionRun.needs, actionRun.timeout = { "exec" }, function(args) return execution.timeout(args) + 5 end
 	for _, tool in ipairs(env.require("tools/project")) do tools[#tools + 1] = tool end
 	return tools
 end
