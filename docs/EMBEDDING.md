@@ -2,9 +2,15 @@
 
 Build a script interface with Project UAI UI LIB, add UAI to a host script, or
 connect your own library window to UAI's conversations and tools. This guide
-documents **embedding SDK 1.0.0** in **Project UAI 2.8.0**, alongside **UI LIB
-1.3.0**. SDK metadata is exposed through `uai.sdk`; UI LIB remains a separate
-bundle with its own version and lifetime.
+documents **embedding SDK 1.0.0** in **Project UAI 3.0.0 (October 13, 2026)**,
+alongside **UI LIB 1.3.0**. SDK metadata is exposed through `uai.sdk`; UI LIB
+remains a separate bundle with its own version and lifetime.
+
+The 3.0.0 client improves shared tool validation, source-analysis reuse and
+resumable results without changing the SDK version. Host integrations still
+own their scopes and cleanup; inspect returned status and continuation metadata
+before following up on a tool call. See the [release notes](../CHANGELOG.md) and
+[focused verification record](TESTING_3.0.0.md).
 
 Start with [the complete workbench example](../examples/embedding/README.md) for
 working code. Use [the UI library reference](UI_LIBRARY.md) for every control,

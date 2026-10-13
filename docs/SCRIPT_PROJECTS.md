@@ -72,7 +72,7 @@ be adapted explicitly. Project entry is not executed by mapping, analysis or bui
 | `project_patch_restore` | `patch_id`: conditionally restore original files and remove files the checkpoint created. High-impact permission because restoration can delete files. |
 | `project_patch_discard` | `patch_id`: release the proposal/checkpoint; files stay untouched. |
 | `script_analyze` | Exactly one of `path` or `manifest`: host compiler diagnostics and source hashes; projects also check literal imports and cycles. No execution. |
-| `script_test` | `manifest`; optional JSON `fixtures` and `timeout` (1–60 seconds, default 10). Execute declared test modules through the managed engine. |
+| `script_test` | `manifest`; optional `modules` (declared test IDs), `filter` (case-sensitive literal substring of case names), JSON `fixtures` and `timeout` (1–60 seconds, default 10). Execute only the selected tests through the managed engine. |
 | `project_build` | `manifest`, `output` ending in `.lua`; existing output also needs `expected_hash`. Check and export a deterministic bundle, source line locations, hash and recovery checkpoint. |
 
 Exact edits have `old_text` and `new_text`. Matches must be unique, and each edit
@@ -93,6 +93,13 @@ Review authored changes first. Use `script_analyze` to find syntax errors and
 unresolved literal imports. For multi-file code, use `project_build`, inspect
 its generated source, then run relevant `script_test` cases. Review any repair
 before rebuilding and retesting. Building never starts the script.
+
+Use `modules` and `filter` to check the behavior affected by a change. For example,
+`{"manifest":"files/Helper/uai.project.json","modules":["tests/settings"],"filter":"defaults"}`
+runs matching cases in the settings test module. Unknown or duplicate test IDs are
+rejected. Results list selected modules and skipped case counts; a filter matching
+no cases fails explicitly. Passing selected cases establishes only that selection's
+coverage. Omit both selectors when the whole declared suite is needed.
 
 For example, a test module can return:
 
@@ -131,6 +138,18 @@ Outlines skip comments and strings, but are lexical hints without scope inferenc
 Interpolated-string expressions are opaque, shadowed `require` can cause false
 dependency reports, and literal dependency cycles are conservatively rejected.
 Outline columns and offsets count bytes. Type/API validation is not claimed.
+
+Version 3 reuses lexical outlines for identical source bytes and successful or
+failed syntax results for an unchanged path/source/compiler combination. Every
+project operation still reads the saved files, and dependency checks run against
+the current manifest. Changing a compiler invalidates its syntax cache. Results
+report `compiledModules` and `reusedModules`; cancelled analysis sets
+`complete=false`. Cached outlines are copied before use so one request cannot
+change another request's evidence. No compiled closures are retained or executed.
+
+Outline retention allows 128 entries within a 4 MiB accounting budget including
+source and outline fields. Project syntax retention allows 128 entries and 2 MiB
+of source. Least-recently-used entries are evicted, and unload releases both caches.
 
 ## Bounds and recovery
 

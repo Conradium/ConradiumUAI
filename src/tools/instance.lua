@@ -9,60 +9,49 @@ return function(env)
 	local H = env.require("tools/helpers")
 	local scan = env.require("tools/scan")
 	local refs = env.require("runtime/instance_refs")
-	local fields = env.require("runtime/instance_fields")
+	local clock = env.require("runtime/clock")
 	local N = env.require("tools/native_helpers").forGroup("instance")
 
 	local native = env.require("tools/instance_native")
 	local SCAN_CAP = 20000
 
-	local schema = env.require("runtime/instance_schema")
-	local propertyNames = schema.names
-
-	local function readProperties(instance, extra)
-		local rows = {}
-		for _, name in ipairs(propertyNames(instance, extra)) do
-			local ok, value = fields.read(instance, "property", name)
-			if ok and value ~= nil and typeof(value) ~= "function" then
-				local shown = H.show(value)
-				-- Source can be enormous; it has its own tool.
-				if name == "Source" then shown = string.format("<%d characters, use script_source>", #tostring(value)) end
-				rows[#rows + 1] = { name, shown }
-			end
-		end
-		return rows
-	end
-
 	-- Depth-limited walk. The cap is on nodes visited rather than depth alone,
 	-- because one folder with nine thousand parts is the common shape and a depth
 	-- limit alone would not save us from it.
-	local function walk(root, maxDepth, perLevel)
+	local function walk(root, maxDepth, perLevel, ctx)
 		local lines = {}
-		local visited = 0
+		local visited, bytes, stopped, unreadable, omitted = 0, 0, nil, 0, 0
+		local budget = math.max(128, H.resultBudget() - 600)
 		local function recurse(node, depth, prefix)
-			if depth > maxDepth then return end
+			if depth > maxDepth or stopped then return end
+			if ctx and ctx.aborted and ctx.aborted() then stopped = "aborted"; return end
 			local ok, children = pcall(function() return node:GetChildren() end)
-			if not ok then return end
+			if not ok then unreadable = unreadable + 1; return end
 			local shown = math.min(#children, perLevel)
 			for index = 1, shown do
+				if stopped then return end
 				local child = children[index]
-				visited = visited + 1
-				if visited > SCAN_CAP then return end
-				lines[#lines + 1] = prefix .. H.describe(child) .. " (" .. refs.id(child) .. ")"
+				if visited >= SCAN_CAP then stopped = "scan limit"; return end
+				local line = prefix .. H.describe(child, false) .. " (" .. refs.id(child) .. ")"
+				if bytes + #line + 1 > budget then stopped = "result budget"; return end
+				visited, bytes = visited + 1, bytes + #line + 1
+				lines[#lines + 1] = line
+				if visited % 128 == 0 then clock.wait(); if ctx and ctx.aborted and ctx.aborted() then stopped = "aborted"; return end end
 				recurse(child, depth + 1, prefix .. "  ")
 			end
 			if #children > shown then
-				lines[#lines + 1] = prefix .. string.format("... %d more children", #children - shown)
+				omitted = omitted + #children - shown
 			end
 		end
 		recurse(root, 1, "")
-		return lines, visited
+		return lines, visited, stopped, unreadable, omitted
 	end
 
 	local tools = {
 		{
 			name = "instance_tree",
 			risk = "read",
-			description = "List the children of an instance as an indented tree. Start here when exploring an unfamiliar game.",
+			description = "Read a depth-limited tree within the result budget. Reports omitted/unreadable branches; use explorer_children for complete paginated children of a known handle.",
 			parameters = {
 				type = "object",
 				properties = {
@@ -72,15 +61,16 @@ return function(env)
 				},
 				required = {},
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local root, err = H.resolve(args.path or "Workspace")
 				if not root then return H.fail(err) end
-				local lines, visited = walk(root, H.limit(args.depth, 2, 6), H.limit(args.limit, 30, 80))
-				if #lines == 0 then
+				local lines, visited, reason, unreadable, omitted = walk(root, H.limit(args.depth, 2, 6), H.limit(args.limit, 30, 80), ctx)
+				if #lines == 0 and not reason and unreadable == 0 then
 					return H.pathOf(root) .. " [" .. root.ClassName .. "] has no children."
 				end
-				return N.result({ instanceId = refs.id(root), shown = visited }, string.format("%s [%s], %d nodes shown:\n%s",
-					H.pathOf(root), root.ClassName, visited, table.concat(lines, "\n")))
+				local note = (reason or unreadable > 0 or omitted > 0) and "\nTree incomplete; use explorer_children for the omitted branches." or ""
+				return N.result({ ok = reason ~= "aborted", instanceId = refs.id(root), shown = visited, reason = reason, unreadable = unreadable, omitted = omitted, depth = args.depth or 2 }, string.format("%s [%s], %d nodes shown:\n%s%s",
+					H.pathOf(root), root.ClassName, visited, table.concat(lines, "\n"), note))
 			end,
 		},
 		{
@@ -94,6 +84,7 @@ return function(env)
 					class = { type = "string", description = "Class name, matched with IsA, e.g. 'BasePart' or 'RemoteEvent'." },
 					root = { type = "string", description = "Where to search. Defaults to Workspace; use 'game' to search everything." },
 					limit = { type = "integer", description = "Maximum results, 1-100. Default 25.", minimum = 1, maximum = 100 },
+					offset = { type = "integer", minimum = 1, maximum = 20000, description = "Continue at the returned traversal offset, keeping the same filters." },
 				},
 				required = {},
 			},
@@ -101,14 +92,14 @@ return function(env)
 				local needle = util.trim(args.name):lower()
 				local class = util.trim(args.class)
 				if needle == "" and class == "" then
-					return "Give a name, a class, or both."
+					return H.fail("give a name, a class, or both")
 				end
 				local root, err = H.resolve(args.root or "Workspace")
 				if not root then return H.fail(err) end
 
 				local limit = H.limit(args.limit, 25, 100)
-				local hits = {}
-				local stats = scan.descendants(root, ctx, function(node)
+				local hits, nextOffset = {}, nil
+				local stats = scan.descendants(root, ctx, function(node, index)
 					local matches = true
 					if needle ~= "" and not tostring(node.Name):lower():find(needle, 1, true) then matches = false end
 					if matches and class ~= "" then
@@ -116,8 +107,8 @@ return function(env)
 						matches = okA and isA
 					end
 					if matches then hits[#hits + 1] = node end
-					if #hits >= limit then return false end
-				end, SCAN_CAP)
+					if #hits >= limit then nextOffset = index < SCAN_CAP and index + 1 or nil; return false end
+				end, SCAN_CAP, args.offset or 1)
 				if stats.reason == "aborted" then return { ok = false, text = "Search stopped.", data = { status = "aborted" } } end
 				if stats.reason == "unreadable root" then return H.fail("could not read that subtree") end
 				local note = stats.complete and "" or " Search incomplete; use instance_query or narrow the root."
@@ -125,7 +116,7 @@ return function(env)
 				if #hits == 0 then
 					return string.format("No match under %s (%d instances scanned).%s", H.pathOf(root), stats.scanned, note)
 				end
-				return N.result({ scanned = stats.scanned, complete = stats.complete }, string.format("%d match(es) under %s.%s\n%s", #hits, H.pathOf(root), note,
+				return N.result({ scanned = stats.scanned, complete = stats.complete, nextOffset = nextOffset }, string.format("%d match(es) under %s.%s\n%s", #hits, H.pathOf(root), note,
 					H.list(hits, limit, function(node)
 						return H.pathOf(node) .. " [" .. node.ClassName .. "] (" .. refs.id(node) .. ")"
 					end)))
@@ -143,6 +134,7 @@ return function(env)
 						type = "array",
 						description = "Extra property names to read beyond the usual set for this class.",
 						items = { type = "string" },
+						maxItems = 100,
 					},
 				},
 				required = { "path" },
@@ -247,6 +239,7 @@ return function(env)
 				properties = {
 					tag = { type = "string", description = "Omit to list all tags in the place." },
 					limit = { type = "integer", minimum = 1, maximum = 100 },
+					offset = { type = "integer", minimum = 1 },
 				},
 				required = {},
 			},
@@ -254,16 +247,16 @@ return function(env)
 				local service = env.services.CollectionService
 				if not args.tag or util.trim(args.tag) == "" then
 					local ok, tags = pcall(function() return service:GetAllTags() end)
-					if not ok or type(tags) ~= "table" or #tags == 0 then return "No tags are in use here." end
-					return util.pluralise(#tags, "tag") .. ": " .. table.concat(tags, ", ")
+					if not ok or type(tags) ~= "table" then return H.fail("tags could not be enumerated") end
+					table.sort(tags)
+					return H.page(tags, args, util.pluralise(#tags, "tag"), nil, 25, 100)
 				end
 				local ok, tagged = pcall(function() return service:GetTagged(util.trim(args.tag)) end)
 				if not ok or type(tagged) ~= "table" then return H.fail("could not read that tag") end
 				if #tagged == 0 then return "Nothing is tagged '" .. util.trim(args.tag) .. "'." end
-				return N.result({ total = #tagged }, string.format("%d instance(s) tagged '%s':\n%s", #tagged, util.trim(args.tag),
-					H.list(tagged, H.limit(args.limit, 25, 100), function(node)
+				return H.page(tagged, args, string.format("%d instance(s) tagged '%s':", #tagged, util.trim(args.tag)), function(node)
 						return H.pathOf(node) .. " [" .. node.ClassName .. "] (" .. refs.id(node) .. ")"
-					end)))
+					end, 25, 100)
 			end,
 		},
 	}

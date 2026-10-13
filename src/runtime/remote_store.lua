@@ -7,6 +7,17 @@ return function(env)
 	local M = { changed = env.require("runtime/signal").new("remote-records"), generation = 0, sequence = 0,
 		limits = { records = 1000, bytes = 4 * 1024 * 1024, pending = 128, pins = 10, pinBytes = 1024 * 1024 } }
 	local records, index, pins, cursors, bytes, pending = {}, {}, {}, {}, 0, 0
+	local first, last = 1, 0
+	local function append(record)
+		last = last + 1
+		records[last], index[record.id], bytes = record, record, bytes + record.bytes
+	end
+	local function lookup(key, revision)
+		local record = index[key] or pins[key]
+		if not record then return nil, "expired: capture was cleared or evicted" end
+		if revision ~= nil and revision ~= record.revision then return nil, "stale_revision: refresh this call" end
+		return record
+	end
 	local function measure(record)
 		local size = #util.encode(record)
 		repeat record.bytes = size; size = #util.encode(record) until size == record.bytes
@@ -28,10 +39,17 @@ return function(env)
 			replay = outgoing and not record.offline, portable = outgoing and not record.offline, editArguments = outgoing == true }
 	end
 	local function evict()
-		while #records > M.limits.records or bytes > M.limits.bytes do
-			local old = table.remove(records, 1); bytes = bytes - old.bytes; index[old.id] = nil
+		while first <= last and (last - first + 1 > M.limits.records or bytes > M.limits.bytes) do
+			local old = records[first]; records[first], first = nil, first + 1
+			bytes = bytes - old.bytes; index[old.id] = nil
 			if old.outcome == "pending" and not pins[old.id] then pending = math.max(0, pending - 1); M.count("pendingEvicted") end
 			M.count("evicted")
+		end
+		-- Compact in blocks: ordinary arrival/eviction never shifts retained calls.
+		if first > 1024 and first > last / 2 then
+			local kept = {}
+			for i = first, last do kept[#kept + 1] = records[i] end
+			records, first, last = kept, 1, #kept
 		end
 	end
 	function M.begin(meta, packed, options)
@@ -46,7 +64,7 @@ return function(env)
 		end
 		if not graph.complete then M.count("truncated") end
 		measure(record)
-		records[#records + 1], index[record.id], bytes = record, record, bytes + record.bytes
+		append(record)
 		M.count("admitted"); evict(); notify("record", record.id)
 		return { id = record.id, generation = M.generation }
 	end
@@ -80,22 +98,19 @@ return function(env)
 				if index[record.id] then bytes = bytes + record.bytes - before end
 			end
 		end
-		for _, record in ipairs(records) do stop(record) end
+		for i = first, last do stop(records[i]) end
 		for _, record in pairs(pins) do stop(record) end
 		pending = 0; evict(); M.enforcePins(); notify("stop")
 	end
 	function M.get(key, revision)
-		local record = index[key] or pins[key]
-		if not record then return nil, "expired: capture was cleared or evicted" end
-		if revision ~= nil and revision ~= record.revision then return nil, "stale_revision: refresh this call" end
+		local record, why = lookup(key, revision); if not record then return nil, why end
 		return util.deepCopy(record)
 	end
 	function M.pin(key)
-		local record, why = M.get(key); if not record then return nil, why end
+		local record, why = lookup(key); if not record then return nil, why end
 		if pins[key] then return true end
 		local total = record.bytes; for _, pinned in pairs(pins) do total = total + pinned.bytes end
 		if util.count(pins) >= M.limits.pins or total > M.limits.pinBytes then return nil, "Close a pinned capture before opening another" end
-		record = index[key] or pins[key] or record
 		pins[key] = record; if not record.offline then refs.pin(record.remoteId, record) end; return true
 	end
 	function M.unpin(key) if pins[key] then if not index[key] and pins[key].outcome == "pending" then pending = math.max(0, pending - 1) end; refs.release(pins[key]); pins[key] = nil end end
@@ -118,11 +133,12 @@ return function(env)
 	function M.clear()
 		for key in pairs(pins) do M.unpin(key) end
 		records, index, cursors, bytes, pending = {}, {}, {}, 0, 0
+		first, last = 1, 0
 		M.generation = M.generation + 1; M.counters = counters(); notify("clear")
 	end
 	function M.state()
 		local pinBytes = 0; for _, record in pairs(pins) do pinBytes = pinBytes + record.bytes end
-		return { retained = #records, bytes = bytes, pins = util.count(pins), pinBytes = pinBytes, generation = M.generation, oldest = records[1] and records[1].sequence, newest = M.sequence, counters = util.copy(M.counters), lifetime = util.copy(M.lifetime), offlineSessionId = "offline:" .. refs.epoch }
+		return { retained = last - first + 1, bytes = bytes, pins = util.count(pins), pinBytes = pinBytes, generation = M.generation, oldest = records[first] and records[first].sequence, newest = M.sequence, counters = util.copy(M.counters), lifetime = util.copy(M.lifetime), offlineSessionId = "offline:" .. refs.epoch }
 	end
 	-- The UI follows the newest *matching* calls. Filtering only the last N raw
 	-- sequences hides quiet remotes as soon as a busy remote fills that window.
@@ -132,8 +148,8 @@ return function(env)
 		if not values.finite(before) or before < 1 or before ~= math.floor(before) then return nil, "Invalid sequence offset" end
 		local filter, limit = tostring(args.name or ""):lower(), math.max(1, math.min(tonumber(args.limit) or 100, 100))
 		local reverse = {}
-		local result = { items = {}, generation = M.generation, oldest = records[1] and records[1].sequence }
-		for i = #records, 1, -1 do
+		local result = { items = {}, generation = M.generation, oldest = records[first] and records[first].sequence }
+		for i = last, first, -1 do
 			local record = records[i]
 			if record.sequence < before and (not args.session_id or record.sessionId == args.session_id)
 				and (filter == "" or (record.name or ""):lower():find(filter, 1, true))
@@ -159,35 +175,36 @@ return function(env)
 			if not cursor or cursor.generation ~= M.generation or cursor.signature ~= signature or clock.ms() - cursor.at > 300000 then return nil, "stale_cursor: capture query changed" end
 			after = cursor.after
 		end
-		local result = { items = {}, oldest = records[1] and records[1].sequence, generation = M.generation }
+		local result = { items = {}, oldest = records[first] and records[first].sequence, generation = M.generation }
 		if result.oldest and after > 0 and after + 1 < result.oldest then result.gap = { first = after + 1, last = result.oldest - 1 } end
-		local limit = math.max(1, math.min(tonumber(args.limit) or 25, 100)); local last
-		for _, record in ipairs(records) do
+		local limit = math.max(1, math.min(tonumber(args.limit) or 25, 100)); local lastSequence
+		for i = first, last do
+			local record = records[i]
 			if record.sequence > after and (not session or record.sessionId == session) and (filter == "" or (record.name or ""):lower():find(filter, 1, true))
 				and (not args.direction or record.direction == args.direction) and (not args.method or record.method == args.method)
 				and (not args.origin or record.origin == args.origin) and (not args.outcome or record.outcome == args.outcome)
 				and (not args.remote_id or record.remoteId == args.remote_id) then
 				if #result.items >= limit then
-					local key = "calls:" .. M.generation .. ":" .. last .. ":" .. tostring(clock.ms())
+					local key = "calls:" .. M.generation .. ":" .. lastSequence .. ":" .. tostring(clock.ms())
 					if util.count(cursors) > 128 then cursors = {} end
-					cursors[key] = { after = last, generation = M.generation, signature = signature, at = clock.ms() }; result.nextCursor = key; break
+					cursors[key] = { after = lastSequence, generation = M.generation, signature = signature, at = clock.ms() }; result.nextCursor = key; break
 				end
-				result.items[#result.items + 1] = M.summary(record); last = record.sequence
+				result.items[#result.items + 1] = M.summary(record); lastSequence = record.sequence
 			end
 		end
 		return result
 	end
 	function M.read(key, section, nodeId, offset, revision)
-		local record, why = M.get(key, revision); if not record then return nil, why end
+		local record, why = lookup(key, revision); if not record then return nil, why end
 		local result = M.summary(record)
-		if section == "summary" then result.path, result.caller, result.error = record.pathAtCapture, record.caller, record.error; return result end
+		if section == "summary" then result.path, result.caller, result.error = record.pathAtCapture, util.deepCopy(record.caller), record.error; return result end
 		if section ~= "caller" and section ~= "arguments" and section ~= "results" then return nil, "Invalid capture section" end
-		if section == "caller" then result.caller = record.caller or { status = "unavailable" }; return result end
+		if section == "caller" then result.caller = record.caller and util.deepCopy(record.caller) or { status = "unavailable" }; return result end
 		local graph = section == "arguments" and record.arguments or section == "results" and record.results
 		if not graph then result.error = record.error; result.message = "No observed " .. tostring(section); return result end
 		local list = graph.slots
 		if nodeId then if not graph.nodes[nodeId] then return nil, "Unknown graph node" end; list = graph.nodes[nodeId].entries end
-		result.values, result.count, result.complete, result.reasons = {}, graph.count, graph.complete, graph.reasons
+		result.values, result.count, result.complete, result.reasons = {}, graph.count, graph.complete, util.deepCopy(graph.reasons)
 		local at, used = math.max(1, tonumber(offset) or 1), 0
 		for i = at, #list do
 			local item = util.deepCopy(list[i]); local size = #util.encode(item)
@@ -201,7 +218,7 @@ return function(env)
 		return result
 	end
 	function M.readBytes(args)
-		local record, why = M.get(args.record_id, args.record_revision); if not record then return nil, why end
+		local record, why = lookup(args.record_id, args.record_revision); if not record then return nil, why end
 		local graph = args.section == "arguments" and record.arguments or args.section == "results" and record.results
 		if not graph then return nil, "That section has no retained values" end
 		local node = graph.slots[args.index or 1]
@@ -236,8 +253,8 @@ return function(env)
 			if snapshot.bytes + record.bytes > M.limits.bytes + M.limits.pinBytes then return nil, "Export snapshot exceeds its byte budget" end
 			snapshot.items[#snapshot.items + 1] = util.deepCopy(record); snapshot.bytes = snapshot.bytes + record.bytes; return true
 		end
-		if keys then for _, key in ipairs(keys) do local record, why = M.get(key); if not record then return nil, why end; local ok, err = append(record); if not ok then return nil, err end end
-		else for _, record in ipairs(records) do if record.sequence <= snapshot.throughSequence then local ok, why = append(record); if not ok then return nil, why end end end end
+		if keys then for _, key in ipairs(keys) do local record, why = lookup(key); if not record then return nil, why end; local ok, err = append(record); if not ok then return nil, err end end
+		else for i = first, last do local record = records[i]; if record.sequence <= snapshot.throughSequence then local ok, why = append(record); if not ok then return nil, why end end end end
 		return snapshot
 	end
 	function M.exportPage(snapshot, offset, limit)
@@ -264,7 +281,7 @@ return function(env)
 			record.originalSessionId, record.sessionId = record.sessionId, "offline:" .. refs.epoch
 			record.offline, record.dataGeneration = true, M.generation
 			record.bytes = #util.encode(record) + 2048
-			records[#records + 1], index[record.id], bytes = record, record, bytes + record.bytes
+			append(record)
 		end
 		evict(); notify("import"); return #list
 	end

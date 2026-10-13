@@ -199,6 +199,9 @@ return function(env)
 			end
 		end
 		M.queue = kept
+		-- Closing one conversation's active question must not strand questions
+		-- retained for other conversations behind an empty current slot.
+		if not M.showing and #M.queue > 0 then present(table.remove(M.queue, 1)) end
 		return closed
 	end
 

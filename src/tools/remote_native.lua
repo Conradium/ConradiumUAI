@@ -2,11 +2,9 @@ return function(env)
 	local refs = env.require("runtime/instance_refs")
 	local transport = env.require("tools/remote_transport")
 	local values = env.require("runtime/values")
-	local scan = env.require("runtime/instance_scan")
 	local explorer = env.require("runtime/explorer")
 	local H = env.require("tools/helpers")
 	local N = env.require("tools/native_helpers").forGroup("remotes")
-	local util = env.require("runtime/util")
 	local M = { run = {} }
 	local function prepare(args)
 		local remote, why = refs.select(args); if not remote then return nil, why end
@@ -34,7 +32,10 @@ return function(env)
 	end
 	function M.extend(tool)
 		if M.run[tool.name] then tool.run = M.run[tool.name] end
-		if tool.name == "remotes_list" then tool.parameters.properties.cursor = { type = "string" } end
+		if tool.name == "remotes_list" then
+			tool.parameters.properties.cursor = { type = "string", description = "Continue the retained search snapshot with identical root/name filters." }
+			tool.parameters.properties.limit = { type = "integer", minimum = 1, maximum = 5, description = "References per page; default 5. Follow nextCursor for the remaining matches." }
+		end
 		if tool.name == "remote_fire" or tool.name == "remote_invoke" then
 			tool.prepare = prepare; tool.timeout = 65
 			tool.parameters.properties.instance_id = { type = "string" }

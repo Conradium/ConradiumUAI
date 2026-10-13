@@ -5,8 +5,10 @@ return function(env)
 	local caps = env.require("runtime/caps")
 	local gravity = env.require("runtime/gravity")
 	local execution = env.require("tools/execution")
+	local clock = env.require("runtime/clock")
 	local M = {}
 	local MAX_BYTES = 2 * 1024 * 1024
+	local sources, sourceSerial, alive = {}, 0, true
 	local function stopped(ctx) return ctx and ctx.aborted and ctx.aborted() end
 	local function finite(value) return type(value) == "number" and value == value and math.abs(value) < math.huge end
 
@@ -41,6 +43,7 @@ return function(env)
 	end
 
 	function M.read(args, ctx)
+		if not alive or stopped(ctx) then return nil, "shape read cancelled" end
 		local name, path = M.filename(args.plugin)
 		if not name then return nil, path end
 		local context = gravity.current()
@@ -50,14 +53,29 @@ return function(env)
 		if not path then return nil, why end
 		if (context and context.local_shapes and context.local_shapes[name]) or (caps.fn.isfile and fsx.exists(path, { raw = true })) then
 			local source, err = fsx.read(path, { raw = true })
+			if type(source) == "string" and #source > MAX_BYTES then return nil, "shape source exceeds 2 MiB" end
 			return source, err, path
 		end
 		if args.origin == "local" then return nil, "local shape file does not exist" end
 		local url = "https://raw.githubusercontent.com/CarlDV/Project-Gravity-02/main/shapes/" .. util.urlEncode(name) .. ".lua"
+		local now = clock.ms()
+		for key, item in pairs(sources) do if now < item.at or now - item.at >= 300000 then sources[key] = nil end end
+		local cached = sources[url]
+		if cached and not args.refresh then return cached.source, nil, "official shapes/" .. name .. ".lua" end
+		if not alive or stopped(ctx) then return nil, "shape read cancelled" end
 		local res, err = env.require("net/http").send({ url = url, method = "GET", identity = "browser", attempts = 1,
 			aborted = ctx and ctx.aborted })
 		if not res or res.status ~= 200 then return nil, "could not read the official shape: " .. tostring(err or (res and res.status)) end
-		if #res.body > MAX_BYTES then return nil, "shape source exceeds 2 MiB" end
+		if not alive or stopped(ctx) then return nil, "shape read cancelled" end
+		if type(res.body) ~= "string" or #res.body > MAX_BYTES then return nil, "shape source exceeds 2 MiB or is unavailable" end
+		sourceSerial = sourceSerial + 1
+		sources[url] = { source = res.body, at = clock.ms(), serial = sourceSerial }
+		-- At most two immutable source strings (4 MiB total) serve paginated reads.
+		if util.count(sources) > 2 then
+			local oldest
+			for key, item in pairs(sources) do if not oldest or item.serial < sources[oldest].serial then oldest = key end end
+			sources[oldest] = nil
+		end
 		return res.body, nil, "official shapes/" .. name .. ".lua"
 	end
 
@@ -185,5 +203,6 @@ return function(env)
 		if not ok then return nil, tostring(result) end
 		return result, why
 	end
+	env.require("runtime/dispose").add(function() alive = false; sources = {} end, "Gravity source snapshots")
 	return M
 end

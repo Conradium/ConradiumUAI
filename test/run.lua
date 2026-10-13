@@ -5547,10 +5547,10 @@ scenario("chat and virtual input tools are registered and callable", function()
 	contains("key_press rejects invalid keys", type(badKey) == "table" and badKey.text or tostring(badKey), "unrecognised KeyCode")
 
 	local okKey = keyPress.run({ key = "E", action = "press" })
-	truthy("key_press executes valid key", okKey:find("Key E: press") ~= nil or okKey:find("no virtual input") ~= nil)
+	truthy("key_press executes valid key", type(okKey) == "table" and (okKey.text:find("Key E:", 1, true) ~= nil or okKey.text:find("no input provider", 1, true) ~= nil))
 
 	local clickRes = mouseClick.run({ button = "left", action = "click", x = 100, y = 200 })
-	truthy("mouse_click executes", clickRes:find("Mouse left click") ~= nil or clickRes:find("no mouse input") ~= nil)
+	truthy("mouse_click executes", type(clickRes) == "table" and (clickRes.text:find("Mouse left click", 1, true) ~= nil or clickRes.text:find("no input provider", 1, true) ~= nil))
 end)
 
 -- Infinite Yield tools -------------------------------------------------------

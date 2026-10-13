@@ -244,8 +244,14 @@ return function(env)
 
 	local function normaliseUsage(usage)
 		usage = usage or {}
-		local input = usage.input_tokens or 0
-		local output = usage.output_tokens or 0
+		local function tokens(value)
+			local number = tonumber(value)
+			return number and number == number and number > 0 and number < math.huge and math.floor(number) or 0
+		end
+		local cached, created = tokens(usage.cache_read_input_tokens), tokens(usage.cache_creation_input_tokens)
+		-- All three input categories occupy context, including cached history.
+		local input = tokens(usage.input_tokens) + cached + created
+		local output = tokens(usage.output_tokens)
 		-- Renamed to the OpenAI keys the usage panel reads, originals kept alongside.
 		return {
 			prompt_tokens = input,
@@ -253,6 +259,7 @@ return function(env)
 			total_tokens = input + output,
 			cache_read_input_tokens = usage.cache_read_input_tokens,
 			cache_creation_input_tokens = usage.cache_creation_input_tokens,
+			prompt_tokens_details = { cached_tokens = cached },
 		}
 	end
 

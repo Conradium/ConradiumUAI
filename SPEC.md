@@ -1,6 +1,6 @@
 # Project UAI — contract
 
-Current client release: **2.8.0 — October 12, 2026**.
+Current client release: **3.0.0 — October 13, 2026**.
 
 A universal Roblox AI agent client. Universal means: no game, no gateway and no
 host script is assumed. It runs standalone under an executor, embedded in a host
@@ -56,6 +56,12 @@ end
 
 Cycles are a load error, not a hang. `runtime/*` must not require anything above
 it; `ui/*` must not require `agent/*` except through `agent/session`.
+
+`runtime/clock.debounce` retains one scheduled wakeup and the latest packed
+arguments per pending burst. Cancellation releases retained arguments. A callback
+may yield and queue another call without losing that new call. UTF-8 validation
+and repair preserve their byte/character contracts while processing contiguous
+ASCII or valid spans.
 
 ### Embedding SDK
 
@@ -289,6 +295,11 @@ previews and are retained once; buffered HTTP replies render immediately without
 simulated typing. The prompt requests brief assistant-content updates between
 tool steps. Tokens cannot be displayed before the host/provider delivers them.
 
+Responses tool assembly binds item IDs, call IDs and output positions to one
+slot. Full argument events replace streamed fragments; nonempty final output
+replaces superseded partial calls. Streamed and whole responses enforce shared
+limits of 64 calls and 256,000 argument bytes. Exceeding either limit is terminal.
+
 Generation settings live in `runtime/config` and are persisted in `UAI/config.json`:
 
 | Setting | Default | Behavior |
@@ -383,6 +394,40 @@ error, not a crash. Returning `{ ok = false, text = "..." }` reports a semantic
 failure without raising. Dispatch rechecks disabled groups and the session's tool
 filters before execution, including after a pending approval resolves.
 
+Schema validation preserves already-valid union types and bounds recursive work
+to depth 32, 8,192 visited values and 16 reported errors. Declared oversized
+arrays fail before member coercion. Invalid worker counts fall back to eight;
+tool result order remains the original call order. Fitting native summary/detail
+receipts reach the model immediately. References are exposed only for the
+originating available reader and are checked after hooks replace a result.
+
+Shared retained tool details expire after five minutes and are bounded to 20
+snapshots/4 MiB. Text pages fit the configured result budget and preserve UTF-8
+continuation. Oversized or expired details are reported as unavailable.
+`http_get`/`http_request` fail on HTTP errors; a retained body continuation does
+not issue another request. `json_api.keys` selects exact keys, including dots and
+numeric-looking strings, and preserves `false`. `web_read` accepts a URL or an
+immutable `page_id`, retains four readable-text snapshots/4 MiB for five minutes,
+and rejects responses over 2 MiB or sanitized text over its snapshot limit.
+
+Metadata tools share a 32-entry product cache for 60 seconds and accept explicit
+`refresh=true`. Counts and uptime remain live. Failed or empty API documents are
+errors, and the native `place_info` path does not require executor HTTP.
+
+`conversation_search` accepts `scope=all|conversations|pastes`. Each pass reads at
+most 128 paste files/8 MiB and scans at most 12,000 conversation entries/8 MiB.
+The last whole value may cross the byte budget. Limited or unreadable searches
+report incomplete coverage and support narrower follow-up through scope or
+`file_search` on an exact paste path.
+
+Small property batches preflight reads and value conversion before writes, then
+report observed changes, failures and unreadable effects. A clamped value or a
+setter throwing after a change cannot be described as untouched. These writes
+are not atomic. Player selection gives exact usernames priority; duplicate
+display names require a narrower identity. Distance listings capture values
+before sorting. GUI text traversal checks ancestor visibility/Enabled, includes
+an explicitly selected text root and discloses incomplete traversal.
+
 Discovery and dispatch use the same permission decision: explicit tool rules
 override the base mode, including `allow` or `ask` rules in read-only mode.
 Capability and conversation-scope checks still apply. A rejected tool result
@@ -396,6 +441,12 @@ check without closing native continuations. Cancelled calls suppress late progre
 and results and remain cancelled if permissions or the active turn change. Native
 effects may still finish; cancellation never claims rollback. Invalid dynamic tool
 timeouts fall back to the configured positive finite deadline, then 25 seconds.
+
+Virtual input owns up to 32 held keys/buttons by conversation and original
+provider. Stop, revocation, epoch replacement and unload attempt release; a
+native down returning after early cleanup is released again. Accepted or
+uncertain presses never trigger another provider's press. Failed releases retain
+ownership for explicit `up` recovery. One watcher handles eligible cleanup.
 
 The prompt asks for successive batches of normally 1–4 independent calls, waits
 for their results, and discourages dozens of calls in one response. Dependent
@@ -469,6 +520,11 @@ This keeps saved source out of repeated model output. `file_edit` requires an ex
 unique match unless replace-all is explicit, permits empty replacement text, and refuses stale file
 contents. `file_read` and `script_source` use contiguous UTF-8 slices with 1-based
 byte offsets and continuation cursors; each slice fits the registry's result budget.
+Successful standalone syntax checks retain at most 16 exact-source entries/2 MiB
+and invalidate on compiler replacement or unload. They retain no executable
+closures; managed execution wrappers compile fresh. Exact file edits verify
+written bytes before reporting success. `code_read` line ranges avoid allocating
+all document lines and reject conflicting source/version/proposal selectors.
 `file_write` and `file_append` advertise and enforce a 2 MiB content limit per call
 before disk access. The prompt and tool descriptions direct edits of existing
 large files to `file_edit`/`file_edit_many`; full writes create files or replace
@@ -489,6 +545,9 @@ the result budget. Restricted subagents retain skill reads without write/install
 delete tools. Disabled skills remain unreadable; denied or unavailable reads need
 no retries. Reuse unchanged bodies retained in context, including on resume; read
 needed bodies again after changes or compaction removes them.
+The prompt inventory alone may reuse its bounded rendered text for five seconds;
+explicit skill listings/body reads stay fresh. Skill saves, removals, enabled
+policy changes and configuration replacement invalidate that inventory.
 
 The Project Gravity tool group resolves the live `_GRAVITY_CONTEXT` for each
 action, falling back to `env.context.gravity`. Desktop and mobile Gravity
@@ -592,6 +651,9 @@ their members.
   cooperatively, and inspect at most 20,000 nodes. Query offsets refer to the
   current traversal order; restart if the tree changes. An incomplete scan must
   never be presented as proof of absence.
+- `file_find` discovers filename globs without reading contents. It uses the
+  bounded directory inventory, sorted canonical paths and offset/limit pages;
+  restart after files change. Incomplete inventory never proves absence.
 - `file_search` searches single-line literals in the files scope or an explicit
   `pastes/` path, supporting
   filename globs and a case-sensitive option. Its inventory caps are 128
@@ -601,7 +663,8 @@ their members.
   portable stat/range API, so the final read can exceed it. Returned cursors
   include a path, line, and (where available) direct byte offset. Continue with
   the same search; restart after source changes. Read errors and incomplete
-  inventories appear in both text and structured results.
+  inventories appear in both text and structured results. Skipped binary or
+  oversized files also make coverage incomplete.
 - `file_read_many` accepts up to 12 files or saved pastes, each up to 2 MB. It
   shares the configured output budget, retains individual failures, and returns
   per-slice offsets plus a request index if the batch fills the page. Repeated
@@ -653,12 +716,24 @@ Columns are byte positions. Literal cycles are conservatively rejected; shadowed
 requires can produce false dependency reports. Bundled require resolves only
 declared project IDs, memoizes false, converts nil to true and detects active cycles.
 
+Outlines reuse exact source strings within 128 entries and 4 MiB of accounted
+source/outline storage; callers receive detached data. Project syntax outcomes
+reuse exact path/source and compiler identity within 128 records/2 MiB of source.
+No compiled closures are retained. Saved bytes and dependency graphs are checked
+again. Analysis exposes compiled/reused module counts and explicit incomplete
+cancellation. Staged patch hashes are reused for metadata; full-byte guards remain
+authoritative for apply and restore.
+
 Test modules return named functions receiving assertions and fixture data. Each
 case gets fresh module caches/fixtures, but native client state is shared. Tests
 use the existing managed execution engine, high-impact permission, cancellation
 and 1–60 second deadline, with at most 100 cases per run. They are not a security
 sandbox, isolated process or native Roblox validation. Main and subagent prompts
 describe review, build, output inspection and focused test/repair workflows.
+`script_test.modules` restricts execution to distinct declared test IDs;
+`filter` is a case-sensitive literal substring of case names. Skipped cases are
+counted, fresh state is created for each executed case, and zero matching cases
+is an incomplete failed run.
 
 ## 6. Event stream
 
@@ -829,6 +904,11 @@ was kept. Conversation search includes retained dialogue after model compaction.
 comes from. It observes the stream through the `onEvent` hook and the
 `usage.recorded` signal, buckets everything by local day and local hour, and
 persists to `stats.json`.
+
+Anthropic input accounting includes uncached, cache-read and cache-creation
+tokens; all occupy context. Price estimates retain their documented approximation
+and do not claim cache-discount billing accuracy. Reload restores persisted
+lifetime model first/last-use dates and hour totals as well as current buckets.
 
 * A number is recorded or it is absent. Nothing is modelled, sampled or
   interpolated, and no surface may compute a headline figure of its own.
@@ -1143,6 +1223,9 @@ omissions/eviction gaps; details/bytes paginate. View filters, admission filters
 exact-target blocking rules are separate. Pause stops recording; Stop also disarms
 rules. Native and tool Start default to 30 seconds; persistence is explicit. The UI
 requires a selected remote by default; all-game and subtree capture are explicit.
+Private queue eviction preserves public ordering, cursor gaps, pins and late
+completion handling. Summary and byte reads avoid copying unrequested graphs;
+returned mutable detail sections remain detached from retained records.
 One target resolver validates the displayed Explorer selection and its primary.
 Permission/group/session revocation removes
 agent-owned behavior. Capture survives navigation/minimize with a launcher indicator;
@@ -1174,16 +1257,20 @@ executor forwarding/coexistence and performance need the client scenarios in
 
 ## 8. Build and verification
 
-Audit changed source, documentation and tests before running
-`node tools/test_native.js --build-only`. Inspect its generated bundles,
-manifests and catalog before running `node tools/test_native.js --verify-only`.
-Verification runs read-only freshness, native static checks, the main native
-suite, every focused native suite, performance contracts and the official Luau
-compiler, sequentially and fail-fast. After any fix, review the change, rebuild
-and inspect affected outputs, then restart verification. Results and suite summaries are in
-`refer/native-verification/results.json`. See the native testing guide for setup
-and the final diff/scope/generated-output review. This is behavioral contract
-coverage and syntax validation, not strict Roblox type analysis or host validation.
+Audit changed source, documentation, examples, tests and build inputs before
+building. Rebuild changed client source with `luajit tools/bundle.lua --native`,
+inspect the generated bundle/manifest/reference outputs, then run only focused
+checks justified by the change. Review each fix before rebuilding affected
+outputs and rerunning affected checks. Use native static checks, deterministic
+freshness checks and the official Luau compiler where applicable.
+
+The 3.0.0 plan and actual outcomes belong in
+[docs/TESTING_3.0.0.md](docs/TESTING_3.0.0.md). The entire native suite is not part
+of that release pass. `tools/test_native.js --verify-only` is a separate full-suite
+workflow, not a substitute for selected checks. The broader command reference
+below includes independent product/site workflows; it does not require running
+them for every client change. Offline verification measures behavior and syntax,
+not native Roblox rendering, host input, live model quality or native performance.
 
 ```
 luajit tools/bundle.lua --native # src/ -> dist/uai.lua and module manifest

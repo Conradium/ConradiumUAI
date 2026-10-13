@@ -4,6 +4,35 @@ return function(env)
 	local fsx = env.require("runtime/fsx")
 	local H = env.require("tools/helpers")
 	local W = env.require("tools/workspace")
+	local function find(args, ctx)
+		local glob = args.glob or "*"
+		if glob:find("[/\\]") then return H.fail("glob matches filenames; put the directory in path") end
+		local cap = H.resultBudget()
+		if cap < 512 then return H.fail("file_find needs a result budget of at least 512 bytes") end
+		local files, inventory = W.files(args.path or "", ctx)
+		if not files then return H.fail(inventory) end
+		local selected = {}
+		for _, path in ipairs(files) do
+			if W.matches(path:match("[^/]+$") or path, glob) then selected[#selected + 1] = path end
+		end
+		local offset, rows, used = args.offset or 1, {}, 0
+		local index = offset
+		while index <= #selected and #rows < (args.limit or 60) do
+			local path = selected[index]
+			if used + #path + 1 > cap - 320 then break end
+			rows[#rows + 1], used, index = path, used + #path + 1, index + 1
+		end
+		if #rows == 0 and index <= #selected then return H.fail("increase the result budget to fit a file path") end
+		local nextOffset = index <= #selected and index or nil
+		local stopped = W.stopped(ctx) or inventory.reason == "aborted"
+		local complete = inventory.complete and not stopped
+		local header = string.format("%d matching file(s); %d returned. No file contents read.", #selected, #rows)
+		if not complete then header = header .. " Inventory incomplete; narrow path." end
+		local footer = nextOffset and ("\nContinue with offset=" .. nextOffset .. " using the same path/glob; restart if files change.") or ""
+		return { ok = not stopped and (#rows > 0 or #inventory.errors == 0), text = header .. "\n" .. table.concat(rows, "\n") .. footer,
+			data = { paths = rows, total = #selected, nextOffset = nextOffset, complete = complete and not nextOffset,
+				inventoryComplete = complete, errors = inventory.errors, reason = inventory.reason, status = stopped and "aborted" or "completed" } }
+	end
 
 	local function readMany(args, ctx)
 		local cap = H.resultBudget()
@@ -181,11 +210,22 @@ return function(env)
 		if #summary + #footer > 319 then summary = util.ellipsis(summary, math.max(20, 319 - #footer)) end
 		return { ok = not stopped and (filesRead > 0 or #errors == 0), text = summary .. "\n" .. table.concat(lines, "\n") .. footer,
 			data = { matches = hits, nextCursor = nextCursor, filesRead = filesRead, scannedLines = scannedLines,
-				skipped = skipped, errors = errors, complete = not stopped and not nextCursor and inventory.complete and #errors == 0,
+				skipped = skipped, errors = errors, complete = not stopped and not nextCursor and inventory.complete and #errors == 0 and skipped == 0,
 				status = stopped and "aborted" or "completed" } }
 	end
 
 	return {
+		{
+			name = "file_find", risk = "read", needs = { "fs" },
+			description = "Find workspace or saved-paste files by filename glob without reading their contents. Use when you know a name or extension; returns sorted reusable paths and offset pages. Searches subfolders within bounded inventory; incomplete results are explicit. Narrow path to the current game or known source directory.",
+			parameters = { type = "object", properties = {
+				path = { type = "string", description = "Directory under files/, or explicit pastes/; defaults to all workspace games." },
+				glob = { type = "string", minLength = 1, maxLength = 128, description = "Filename glob, e.g. *controller*.lua or *.luau. ASCII case-insensitive; * and ? supported. Default *." },
+				offset = { type = "integer", minimum = 1, description = "Resume with nextOffset; restart if files change." },
+				limit = { type = "integer", minimum = 1, maximum = 200, description = "Paths per page, default 60; also bounded by the result budget." },
+			}, required = {} },
+			run = find,
+		},
 		{
 			name = "file_search", risk = "read", needs = { "fs" },
 			description = "Find literal text in a known file or directory before reading relevant slices with file_read_many. Returns reusable files/ paths, matching lines, byte offsets and a continuation cursor. Searches subfolders; skips binary/files over 2 MB. Narrow path to the current game or known source directory to avoid unrelated games/dumps.",

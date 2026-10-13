@@ -7,6 +7,7 @@ return function(env)
 	local util = env.require("runtime/util")
 	local http = env.require("net/http")
 	local H = env.require("tools/helpers")
+	local N = env.require("tools/native_helpers").forGroup("net")
 
 	local BODY_CAP = 5000
 
@@ -17,116 +18,140 @@ return function(env)
 		end
 		return out
 	end
+	local function timeout(args)
+		return H.limit(args.timeout, 20, 120)
+	end
+	local function response(res, args)
+		local body = tostring(res.body or "")
+		local limit = math.min(H.limit(args.limit, BODY_CAP, 64000), math.max(128, H.resultBudget() - 480))
+		local last = math.min(#body, limit)
+		while last > 0 and body:byte(last + 1) and body:byte(last + 1) >= 128 and body:byte(last + 1) < 192 do last = last - 1 end
+		local text, trimmed = body:sub(1, last), last < #body
+		local data = { ok = res.ok == true, status = res.status, totalBytes = #body, truncated = trimmed == true }
+		if trimmed then
+			local key = N.retain({ body = body, status = res.status, ok = res.ok == true }, body, "net")
+			data.resultId, data.readTool = key, key and "http_result_read" or nil
+			data.detailsUnavailable = not key and "Response exceeded the retained-detail budget" or nil
+			data.nextOffset = key and #text + 1 or nil
+		end
+		return { ok = data.ok, text = string.format("HTTP %s (%d bytes%s)\n%s", tostring(res.status), #body,
+			data.resultId and "; use http_result_read section=text for the complete response" or trimmed and "; remaining response exceeded detail retention" or "", text), data = data }
+	end
 
-	return {
+	local tools = {
 		{
 			name = "http_get",
 			risk = "read",
 			needs = { "http" },
-			description = "GET a URL and return the response body as text.",
+			description = "GET a URL. HTTP errors fail the call. Large bodies retain a five-minute result reference for http_result_read without another request.",
+			timeout = function(args) return timeout(args) + 1 end,
 			parameters = {
 				type = "object",
 				properties = {
 					url = { type = "string" },
+					timeout = { type = "integer", minimum = 1, maximum = 120, description = "Total request deadline in seconds, default 20." },
 					headers = { type = "object", description = "Extra request headers." },
-					limit = { type = "integer", description = "Maximum characters of body. Default 5000.", minimum = 200, maximum = 64000 },
+					limit = { type = "integer", description = "Maximum UTF-8 body bytes in this page; bounded by result budget. Default 5000.", minimum = 200, maximum = 64000 },
 				},
 				required = { "url" },
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local res, err = http.send({
 					url = args.url,
 					method = "GET",
 					headers = headerTable(args.headers),
 					attempts = 2,
+					timeout = timeout(args), aborted = ctx and ctx.aborted,
 					tag = "tool:http_get",
 				})
 				if not res then return H.fail(err) end
-				local text, truncated = util.truncate(res.body, tonumber(args.limit) or BODY_CAP)
-				return string.format("%d %s (%d bytes%s)\n%s",
-					res.status, res.ok and "OK" or "error", #tostring(res.body),
-					truncated and ", trimmed" or "", text)
+				return response(res, args)
 			end,
 		},
 		{
 			name = "http_request",
 			risk = "write",
 			needs = { "http" },
-			description = "Send an HTTP request with any method and body. Marked as a write because it can change state on the other end.",
+			description = "Send one HTTP request with method and body. Writes are never retried. HTTP errors fail the call; large responses remain readable through http_result_read.",
+			timeout = function(args) return timeout(args) + 1 end,
 			parameters = {
 				type = "object",
 				properties = {
 					url = { type = "string" },
 					method = { type = "string", enum = { "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD" } },
+					timeout = { type = "integer", minimum = 1, maximum = 120, description = "Total request deadline in seconds, default 20." },
 					headers = { type = "object" },
 					body = { type = "string", description = "Request body. JSON should be sent as a string." },
 					limit = { type = "integer", minimum = 200, maximum = 64000 },
 				},
 				required = { "url", "method" },
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local res, err = http.send({
 					url = args.url,
 					method = args.method,
 					headers = headerTable(args.headers),
 					body = args.body,
 					attempts = 1,
+					timeout = timeout(args), aborted = ctx and ctx.aborted,
 					tag = "tool:http_request",
 				})
 				if not res then return H.fail(err) end
-				local text, truncated = util.truncate(res.body, tonumber(args.limit) or BODY_CAP)
-				return string.format("%s %s -> %d (%d bytes%s)\n%s",
-					tostring(args.method):upper(), tostring(args.url), res.status,
-					#tostring(res.body), truncated and ", trimmed" or "", text)
+				return response(res, args)
 			end,
 		},
 		{
 			name = "json_api",
 			risk = "read",
 			needs = { "http" },
-			description = "GET a JSON endpoint and return either the whole document or one field, addressed by a dotted path such as 'data.items.1.name'.",
+			description = "GET JSON and read a field by dotted path or exact keys (including keys containing dots). Large values retain a reference for http_result_read; false is a valid value and HTTP errors fail.",
+			timeout = function(args) return timeout(args) + 1 end,
 			parameters = {
 				type = "object",
 				properties = {
 					url = { type = "string" },
 					path = { type = "string", description = "Dotted path into the response. Array indexes are 1-based. Omit for the whole document." },
+					keys = { type = "array", items = { type = "string" }, maxItems = 32, description = "Exact keys; array indexes as strings. Use instead of path for keys containing dots." },
+					timeout = { type = "integer", minimum = 1, maximum = 120, description = "Total request deadline in seconds, default 20." },
 					headers = { type = "object" },
 				},
 				required = { "url" },
 			},
-			run = function(args)
+			run = function(args, ctx)
+				if args.keys and args.path then return H.fail("use either keys or path, not both") end
 				local decoded, err, res = http.json({
 					url = args.url,
 					method = "GET",
 					headers = headerTable(args.headers),
 					attempts = 2,
+					timeout = timeout(args), aborted = ctx and ctx.aborted,
 					tag = "tool:json_api",
 				})
-				if not decoded then
+				if res and not res.ok then return response(res, args) end
+				if decoded == nil then
 					return H.fail(string.format("%s%s", tostring(err),
 						res and (" (status " .. tostring(res.status) .. ")") or ""))
 				end
 
 				local target = decoded
-				if args.path and util.trim(args.path) ~= "" then
-					for _, part in ipairs(util.split(args.path, ".")) do
+				if args.keys or (args.path and util.trim(args.path) ~= "") then
+					for _, part in ipairs(args.keys or util.split(args.path, ".")) do
 						if type(target) ~= "table" then
-							return H.fail("path '" .. args.path .. "' does not exist in the response")
+							return H.fail("requested path does not exist in the response")
 						end
-						target = target[tonumber(part) or part]
+						local value = target[part]
+						if value == nil and tonumber(part) then value = target[tonumber(part)] end
+						target = value
 					end
 					if target == nil then
-						return "The path '" .. args.path .. "' is not present in the response."
+						return H.fail("requested path is not present in the response")
 					end
 				end
 
-				if type(target) == "table" then
-					local ok, encoded = pcall(util.encode, target)
-					if not ok then return H.fail("that value could not be re-encoded") end
-					return (util.truncate(encoded, 5000))
-				end
-				return H.show(target)
+				return N.result({ value = target, status = res and res.status }, "JSON response value")
 			end,
 		},
 	}
+	N.addReader(tools, "net")
+	return tools
 end

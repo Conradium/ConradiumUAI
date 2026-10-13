@@ -8,6 +8,7 @@ return function(env)
 	local H = env.require("tools/helpers")
 	local M = {}
 	local serial = 0
+	local constructors = { vec3 = Vector3.new, vector3 = Vector3.new, vec2 = Vector2.new, color3 = Color3.new, cframe = CFrame.new }
 	function M.arguments(args)
 		if type(args) ~= "table" then return nil, "Remote arguments must be an object" end
 		if args.args ~= nil and args.arguments ~= nil then return nil, "Provide legacy args or packed arguments, not both" end
@@ -15,13 +16,12 @@ return function(env)
 		local list = args.args or {}
 		if type(list) ~= "table" or not util.isArray(list) or #list > 256 then return nil, "Legacy args must be an array of up to 256 values" end
 		local out = { n = #list }
-		local examples = { vec3 = Vector3.new(), vector3 = Vector3.new(), vec2 = Vector2.new(), color3 = Color3.new(), cframe = CFrame.new() }
 		for i, item in ipairs(list) do
 			local prefix, rest; if type(item) == "string" then prefix, rest = item:match("^([%a][%w_]*):(.*)$"); prefix = prefix and prefix:lower() end
 			if prefix == "instance" then local value, why = H.resolve(rest); if not value then return nil, why end; out[i] = value
 			elseif prefix == "number" then out[i] = tonumber(rest); if not values.finite(out[i]) then return nil, "Invalid numeric argument" end
 			elseif prefix == "string" then out[i] = rest
-			elseif prefix and examples[prefix] then local value, why = H.coerce(rest, examples[prefix]); if value == nil then return nil, why end; out[i] = value
+			elseif prefix and constructors[prefix] then local value, why = H.coerce(rest, constructors[prefix]()); if value == nil then return nil, why end; out[i] = value
 			else out[i] = item end
 		end
 		return out

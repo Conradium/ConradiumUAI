@@ -2,6 +2,34 @@
 return function(env)
 	local util = env.require("runtime/util")
 	local M = { MAX_FILE = 256000, MAX_TOKENS = 50000 }
+	-- Exact source strings are keys: hashes identify revisions but never prove a
+	-- cache hit. Return copies so a caller cannot change later inspections.
+	local cache, cacheCount, cacheBytes, sequence = {}, 0, 0, 0
+	local hits, misses = 0, 0
+	local CACHE_ITEMS, CACHE_BYTES = 128, 4 * 1024 * 1024
+	local function stopped(ctx) return ctx and ctx.aborted and ctx.aborted() end
+	local function remember(text, outline)
+		local weight = #text + 256
+		for _, item in ipairs(outline.symbols) do weight = weight + #item.name + 96 end
+		for _, item in ipairs(outline.imports) do weight = weight + #(item.id or "") + 80 end
+		while cacheCount >= CACHE_ITEMS or cacheBytes + weight > CACHE_BYTES do
+			local oldest, stamp
+			for key, entry in pairs(cache) do
+				if not stamp or entry.used < stamp then oldest, stamp = key, entry.used end
+			end
+			if not oldest then return end
+			cacheBytes, cacheCount = cacheBytes - cache[oldest].weight, cacheCount - 1
+			cache[oldest] = nil
+		end
+		-- Another reader may have populated this source while scan yielded.
+		if cache[text] then cacheBytes, cacheCount = cacheBytes - cache[text].weight, cacheCount - 1 end
+		sequence = sequence + 1
+		cache[text] = { outline = util.deepCopy(outline), weight = weight, used = sequence }
+		cacheBytes, cacheCount = cacheBytes + weight, cacheCount + 1
+	end
+	function M.cacheInfo()
+		return { hits = hits, misses = misses, entries = cacheCount, bytes = cacheBytes, maxEntries = CACHE_ITEMS, maxBytes = CACHE_BYTES }
+	end
 	function M.hash(source)
 		local value = 5381
 		for i = 1, #source do value = (value * 33 + source:byte(i)) % 4294967296 end
@@ -19,7 +47,15 @@ return function(env)
 		return text
 	end
 	function M.scan(source, ctx)
+		if stopped(ctx) then return nil, "Inspection cancelled" end
+		local saved = type(source) == "string" and cache[source]
+		if saved then
+			sequence, hits = sequence + 1, hits + 1
+			saved.used = sequence
+			return util.deepCopy(saved.outline)
+		end
 		if not M.valid(source) then return nil, "Source must be UTF-8 text without NUL, at most 256000 bytes" end
+		misses = misses + 1
 		local tokens, at, line, column = {}, 1, 1, 1
 		local function consume(last, kind)
 			local raw = source:sub(at, last)
@@ -35,7 +71,7 @@ return function(env)
 			steps = steps + 1
 			if steps % 1024 == 0 then
 				task.wait()
-				if ctx and ctx.aborted and ctx.aborted() then return nil, "Inspection cancelled" end
+				if stopped(ctx) then return nil, "Inspection cancelled" end
 			end
 			local char, pair = source:sub(at, at), source:sub(at, at + 1)
 			local comment = pair == "--"
@@ -45,7 +81,8 @@ return function(env)
 				local _, last = source:find("]" .. equals .. "]", open + #equals + 2, true)
 				consume(last or #source, not comment and "string" or nil)
 			elseif comment then consume((source:find("\n", at, true) or (#source + 1)) - 1)
-			elseif char:match("%s") then consume(at)
+			elseif char:match("%s") then
+				local _, last = source:find("^%s+", at); consume(last)
 			elseif char == '"' or char == "'" or char == string.char(96) then
 				local last = at + 1
 				while last <= #source do
@@ -85,8 +122,12 @@ return function(env)
 				end
 			end
 		end
-		return { hash = M.hash(source), bytes = #source, lines = line, symbols = symbols, imports = imports,
+		local outline = { hash = M.hash(source), bytes = #source, lines = line, symbols = symbols, imports = imports,
 			omitted = omitted, coverage = "lexical hints; no scope/type inference; interpolated string expressions are opaque" }
+		if stopped(ctx) then return nil, "Inspection cancelled" end
+		remember(source, outline)
+		return outline
 	end
+	env.require("runtime/dispose").add(function() cache, cacheCount, cacheBytes = {}, 0, 0 end, "Project source inspection cache")
 	return M
 end

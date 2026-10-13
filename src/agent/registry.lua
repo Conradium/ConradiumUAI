@@ -545,7 +545,9 @@ return function(env)
 		local results = {}
 		if total == 0 then return results end
 
-		local cap = math.max(config.get("agent.toolConcurrency", 4), 1)
+		local cap = tonumber(config.get("agent.toolConcurrency", 8))
+		if not cap or cap ~= cap or cap <= 0 or cap == math.huge then cap = 8 end
+		cap = math.max(1, math.min(total, math.floor(cap)))
 		local launched, completed = 0, 0
 
 		while completed < total do

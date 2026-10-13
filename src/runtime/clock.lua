@@ -238,16 +238,23 @@ return function(env)
 	-- wrapped function plus a cancel handle, because a debounced relayout has to
 	-- be cancellable when the surface it targets is destroyed.
 	function M.debounce(fn, seconds)
-		local generation = 0
+		local pending, args, due = false, nil, 0
+		local wake
+		wake = scheduled(function()
+			if not args then pending = false; return end
+			local remaining = due - M.ms()
+			if remaining > 0 then task.delay(remaining / 1000, wake); return end
+			local ready = args
+			-- Release ownership before calling a handler that may yield or reschedule.
+			pending, args = false, nil
+			fn((table.unpack or unpack)(ready, 1, ready.n))
+		end)
 		local function wrapped(...)
-			generation = generation + 1
-			local mine = generation
-			local args = { n = select("#", ...), ... }
-			task.delay(seconds, scheduled(function()
-				if mine == generation then fn((table.unpack or unpack)(args, 1, args.n)) end
-			end))
+			args, due = { n = select("#", ...), ... }, M.ms() + seconds * 1000
+			-- One pending wakeup owns only the latest arguments, even during a burst.
+			if not pending then pending = true; task.delay(seconds, wake) end
 		end
-		return wrapped, function() generation = generation + 1 end
+		return wrapped, function() args = nil end
 	end
 
 	-- Leading-edge throttle: fires immediately, then swallows calls for the rest

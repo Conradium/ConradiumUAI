@@ -29,7 +29,7 @@ return function(env)
 	-- Standard base64 with padding, in the portable dialect: the executor's own
 	-- encoder is not assumed, and the offline harness compiles this module too.
 	function M.encode(data, control)
-		local parts = {}
+		local parts, block = {}, {}
 		for index = 1, #data, 3 do
 			if control and index % 12288 == 1 then
 				if index > 1 then clock.wait() end
@@ -41,9 +41,11 @@ return function(env)
 			local b = math.floor(value / 4096) % 64 + 1
 			local c = math.floor(value / 64) % 64 + 1
 			local d = value % 64 + 1
-			parts[#parts + 1] = ALPHABET:sub(a, a) .. ALPHABET:sub(b, b)
+			block[#block + 1] = ALPHABET:sub(a, a) .. ALPHABET:sub(b, b)
 				.. (second and ALPHABET:sub(c, c) or "=") .. (third and ALPHABET:sub(d, d) or "=")
+			if #block == 1024 then parts[#parts + 1] = table.concat(block); block = {} end
 		end
+		if #block > 0 then parts[#parts + 1] = table.concat(block) end
 		return table.concat(parts)
 	end
 

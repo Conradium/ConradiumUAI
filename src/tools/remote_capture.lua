@@ -100,5 +100,31 @@ return function(env)
 		local source, why = replay.reviewedSource(args.review_id, args.digest); if not source then return N.fail(why) end
 		local result, err = exports.write(source, args.destination or ("exports/" .. env.require("runtime/code_store").id("remote") .. ".lua")); return N.result(result, err or "Portable script exported")
 	end); scriptExport.needs = { "fs" }
+	-- Advertise the runtime's exact choices so malformed actions/pages fail schema
+	-- validation before capture setup, graph inspection or a stateful operation.
+	local function choice(options, description) return { type = "string", enum = options, description = description } end
+	local positive = { type = "integer", minimum = 1 }
+	local contracts = {
+		remotes_capture = { action = choice({ "start", "stop", "clear", "pause", "resume" }),
+			mode = choice({ "uai", "incoming", "outgoing", "combined" }, "Start only; default uai."),
+			backend = choice({ "auto", "namecall", "direct" }, "Outgoing/combined only; default namecall."),
+			duration = { type = "number", minimum = 1, maximum = 300, description = "Seconds; default 30. Omit when persistent=true." } },
+		remotes_calls = { after_sequence = { type = "integer", minimum = 0 }, limit = { type = "integer", minimum = 1, maximum = 6 },
+			direction = choice({ "incoming", "outgoing" }), method = choice({ "FireServer", "InvokeServer", "OnClientEvent" }) },
+		remote_capture_read = { section = choice({ "summary", "arguments", "results", "caller" }), node_id = positive, offset = positive },
+		remote_capture_bytes = { section = choice({ "arguments", "results" }), field = choice({ "key", "value" }), node_id = positive, index = positive,
+			byte_offset = positive, byte_limit = { type = "integer", minimum = 1, maximum = 700 } },
+		remotes_filter = { method = choice({ "FireServer", "InvokeServer", "OnClientEvent" }) },
+		remote_rule = { action = choice({ "add", "remove", "clear" }), method = choice({ "FireServer", "InvokeServer" }), policy = choice({ "local_error" }) },
+		remote_replay_prepare = { method = choice({ "FireServer", "InvokeServer" }) },
+		remote_script_prepare = { method = choice({ "FireServer", "InvokeServer" }) },
+	}
+	for _, tool in ipairs(tools) do
+		local properties = tool.parameters.properties
+		for key, spec in pairs(contracts[tool.name] or {}) do properties[key] = spec end
+		for _, key in ipairs({ "expected_revision", "record_revision" }) do
+			if properties[key] then properties[key] = { type = "integer", minimum = 0, description = "Exact revision from the latest state/read; stale changes are rejected." } end
+		end
+	end
 	return tools
 end

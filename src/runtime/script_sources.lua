@@ -10,6 +10,7 @@ return function(env)
 	local decompileResult = env.require("runtime/decompile_result")
 	local M = {}
 	local sources, bindings, cache, flights, generations, owners = {}, {}, {}, {}, {}, {}
+	local documentHashes = setmetatable({}, { __mode = "k" })
 	local serial, bytes, workers, alive = 0, 0, 0, true
 	local function id(prefix) serial = serial + 1; return prefix .. ":" .. refs.epoch .. ":" .. serial end
 	local function hash(source) local value = 5381; for i = 1, #source do value = (value * 33 + source:byte(i)) % 4294967296 end; return string.format("%08x", value) end
@@ -25,12 +26,16 @@ return function(env)
 		return result
 	end
 	function M.document(doc)
+		local cachedHash = documentHashes[doc]
+		if not cachedHash or cachedHash.source ~= doc.source then
+			cachedHash = { source = doc.source, hash = hash(doc.source) }; documentHashes[doc] = cachedHash
+		end
 		local result = M.describe(doc.sourceInfo)
 		result.id, result.documentId, result.revision = "document:" .. doc.id .. ":" .. doc.revision, doc.id, doc.revision
 		result.runtimeEpoch, result.method, result.origin = result.runtimeEpoch or refs.epoch, result.method or "source", result.origin or "authored"
 		result.status, result.bytes = #doc.source == 0 and "empty" or "available", #doc.source
 		result.readOnly, result.liveBinding, result.writeBack = doc.readOnly == true, false, false
-		result.capturedAt, result.sourceHash = result.capturedAt or doc.updatedAt, hash(doc.source)
+		result.capturedAt, result.sourceHash = result.capturedAt or doc.updatedAt, cachedHash.hash
 		result.snapshotState = doc.snapshotState
 		return result
 	end
@@ -235,6 +240,9 @@ return function(env)
 		return nil, "Source binding belongs to an expired runtime; prepare a fresh script"
 	end
 	function M.state() return { snapshots = #sources, bytes = bytes, workers = workers, runtimeEpoch = refs.epoch } end
-	env.require("runtime/dispose").add(function() alive = false; sources, bindings, flights, cache, owners = {}, {}, {}, {}, {}; bytes = 0 end, "source snapshots and requests")
+	env.require("runtime/dispose").add(function()
+		alive = false; sources, bindings, flights, cache, owners = {}, {}, {}, {}, {}; bytes = 0
+		documentHashes = setmetatable({}, { __mode = "k" })
+	end, "source snapshots and requests")
 	return M
 end

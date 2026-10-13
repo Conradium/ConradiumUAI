@@ -13,6 +13,7 @@ return function(env)
 	-- the start of a turn and the user may be mid-game, while a permission prompt
 	-- arrives during work they are already watching.
 	local ASK_TIMEOUT = 600
+	local SEARCH_PASTES, SEARCH_BYTES, SEARCH_EVENTS = 128, 8 * 1024 * 1024, 12000
 	local reportReads = setmetatable({}, { __mode = "k" })
 	local function isLive(record)
 		return record.status == "queued" or record.status == "running"
@@ -194,6 +195,89 @@ return function(env)
 		return nil
 	end
 
+	-- Search in bounded passes without copying each conversation's message list.
+	-- Executor reads return whole files, so one final paste may cross the budget.
+	local function searchConversations(args, ctx)
+		local needle = util.trim(tostring(args.query or "")):lower()
+		if needle == "" then return H.fail("a query is required") end
+		local limit = util.clamp(tonumber(args.limit) or 5, 1, 12)
+		local scope = args.scope or "all"
+		local matches, lines, notes = {}, {}, {}
+		local files, bytes, events, messageBytes = 0, 0, 0, 0
+		local limited = false
+		local function snippet(text, at)
+			local start = env.require("runtime/code_text").clamp(text, math.max(at - 60, 1))
+			return util.ellipsis(text:sub(start), 320)
+		end
+		if scope ~= "conversations" then
+			local fsx = env.require("runtime/fsx")
+			if fsx.enabled then
+				local inventory, problem = fsx.list("", { scope = "pastes" })
+				if problem then limited = true; notes[#notes + 1] = "Paste inventory incomplete: " .. tostring(problem) end
+				for _, entry in ipairs(inventory) do
+					if aborted(ctx) then return H.fail("conversation search was aborted") end
+					if #matches >= limit then limited = true; break end
+					if not entry.isDir then
+						if files >= SEARCH_PASTES or bytes >= SEARCH_BYTES then limited = true; notes[#notes + 1] = "Paste scan budget reached; narrow with file_search on a pastes/ path."; break end
+						files = files + 1
+						local body = fsx.read(entry.path, { scope = "pastes" })
+						if body then
+							bytes = bytes + #body
+							local at = body:lower():find(needle, 1, true)
+							if at then
+								local path = "pastes/" .. entry.path
+								local text = snippet(body, at)
+								matches[#matches + 1] = { path = path, offset = at, text = text }
+								lines[#lines + 1] = "pasted in " .. path .. ": " .. text
+							end
+						else limited = true; notes[#notes + 1] = "Could not read paste " .. tostring(entry.path) end
+						if files % 4 == 0 then clock.wait() end
+					end
+				end
+			else limited = true; notes[#notes + 1] = "Saved paste access is unavailable." end
+		end
+		if scope ~= "pastes" then
+			local sessions = env.require("agent/session")
+			local function inspect(session, text, role)
+				events = events + 1
+				if events % 128 == 0 then clock.wait() end
+				if aborted(ctx) or events > SEARCH_EVENTS or messageBytes >= SEARCH_BYTES then limited = true; return true end
+				messageBytes = messageBytes + #text
+				local at = text:lower():find(needle, 1, true)
+				if not at then return false end
+				local found = snippet(text, at)
+				matches[#matches + 1] = { id = session.id, title = session.title, role = role, text = found }
+				lines[#lines + 1] = string.format('%s in "%s" [%s]: %s', role, session.title, session.id, found)
+				return true
+			end
+			for _, session in ipairs(sessions.list()) do
+				if aborted(ctx) then return H.fail("conversation search was aborted") end
+				if #matches >= limit or events > SEARCH_EVENTS or messageBytes >= SEARCH_BYTES then limited = true; break end
+				if session ~= (ctx and ctx.session) and not session.headless then
+					local found = false
+					for _, message in ipairs(session.ctx.messages or {}) do
+						local role = not message.internal and (message.role == "user" and "the user" or message.role == "assistant" and "you")
+						if role and inspect(session, tostring(message.content or ""), role) then found = true; break end
+					end
+					if not found then
+						for _, event in ipairs(session.log or {}) do
+							local role = event.kind == "user" and "the user" or event.kind == "assistant:text" and "you"
+							if role and type(event.text) == "string" and inspect(session, event.text, role) then break end
+						end
+					end
+				end
+			end
+			if events > SEARCH_EVENTS or messageBytes >= SEARCH_BYTES then notes[#notes + 1] = "Conversation scan budget reached; narrow using conversation_list and conversation_read." end
+		end
+		if aborted(ctx) then return H.fail("conversation search was aborted") end
+		local heading = #matches == 0 and "No matches found in the searched content."
+			or string.format("%d matches; read a conversation by id or a paste by path:\n%s", #matches, table.concat(lines, "\n"))
+		if limited then notes[#notes + 1] = "Search is incomplete; omitted content may contain more matches." end
+		return { text = heading .. (#notes > 0 and ("\n" .. table.concat(notes, "\n")) or ""),
+			data = { matches = matches, count = #matches, complete = not limited, pastesRead = files, bytesRead = bytes,
+				conversationBytes = messageBytes, eventsScanned = math.min(events, SEARCH_EVENTS) } }
+	end
+
 	return {
 		{
 			name = "todo_write",
@@ -204,11 +288,12 @@ return function(env)
 				properties = {
 					items = {
 						type = "array",
+						maxItems = 24,
 						description = "The complete list, in order. Sending a partial list deletes the rest.",
 						items = {
 							type = "object",
 							properties = {
-								text = { type = "string", description = "What the step is, in the imperative." },
+								text = { type = "string", minLength = 1, maxLength = 160, description = "What the step is, in the imperative." },
 								status = { type = "string", enum = { "pending", "active", "done", "dropped" } },
 							},
 							required = { "text" },
@@ -247,14 +332,12 @@ return function(env)
 			-- ones on disk as well as the live ones.
 			name = "conversation_search",
 			risk = "read",
-			description = "Search this user's other conversations for something they or the agent said earlier. Use it when the current request refers to earlier work -- 'like last time', 'the script you fixed', 'my usual setup' -- and the facts are not in this conversation. Returns the matching lines with which conversation they came from and its [id]; read the whole thread with conversation_read. This conversation is not searched; you already have it.",
+			description = "Search other conversations and saved pastes for prior work using a literal query. Returns exact conversation IDs or paste paths and snippets; read details with conversation_read or file_read. scope can restrict the search. Work is bounded and incomplete searches are disclosed; narrow follow-ups rather than assuming absence. The current conversation is excluded.",
 			parameters = {
 				type = "object",
 				properties = {
-					query = {
-						type = "string",
-						description = "The words to look for, as the user would have written them.",
-					},
+					query = { type = "string", minLength = 1, maxLength = 1000, description = "Literal text to find." },
+					scope = { type = "string", enum = { "all", "conversations", "pastes" }, description = "Default all; conversations avoids reading saved pastes." },
 					limit = {
 						type = "integer",
 						description = "Maximum matches. Default 5.",
@@ -264,84 +347,7 @@ return function(env)
 				},
 				required = { "query" },
 			},
-			run = function(args, ctx)
-				local sessions = env.require("agent/session")
-				local current = ctx and ctx.session or nil
-				local needle = util.trim(tostring(args.query or "")):lower()
-				if needle == "" then return H.fail("a query is required") end
-				local limit = util.clamp(tonumber(args.limit) or 5, 1, 12)
-
-				local lines, seen = {}, {}
-
-				-- Pasted material first: a script the user pasted last week is often the
-				-- thing "that code I sent you" refers to, and it lives in files rather
-				-- than in any conversation's context -- the conversation holds only the
-				-- pointer.
-				local fsx = env.require("runtime/fsx")
-				if fsx.enabled then
-					for _, entry in ipairs(fsx.list("", { scope = "pastes" })) do
-						if not entry.isDir and #lines < limit then
-							local body = fsx.read(entry.path, { scope = "pastes" })
-							if body then
-								local at = body:lower():find(needle, 1, true)
-								if at then
-									lines[#lines + 1] = string.format("pasted in pastes/%s: %s",
-										entry.name, util.ellipsis(body:sub(math.max(at - 60, 1)), 320))
-								end
-							end
-						end
-					end
-				end
-
-				-- All conversation text: the context the model saw plus the transcript
-				-- the user read. The transcript is where a restored conversation keeps
-				-- everything -- a context that has been compacted holds a summary, not
-				-- the words -- so searching only ctx.messages would silently miss old
-				-- threads.
-				for _, session in ipairs(sessions.list()) do
-					if session ~= current and not session.headless then
-						local entries = {}
-						for _, message in ipairs(session.ctx.messages or {}) do
-							local role = message.role == "user" and "the user"
-								or (message.role == "assistant" and "you" or nil)
-							if role then
-								entries[#entries + 1] = { role = role, text = tostring(message.content or "") }
-							end
-						end
-						for _, event in ipairs(session.log or {}) do
-							if (event.kind == "user" or event.kind == "assistant:text")
-								and type(event.text) == "string" then
-								entries[#entries + 1] = {
-									role = event.kind == "user" and "the user" or "you",
-									text = event.text,
-								}
-							end
-						end
-						for _, entry in ipairs(entries) do
-							if #lines >= limit then break end
-							local at = entry.text:lower():find(needle, 1, true)
-							if at then
-								-- One line per conversation, the first match, stated once:
-								-- a thread that mentioned the term six times is one
-								-- lead, not six results.
-								if seen[session.id] then break end
-								seen[session.id] = true
-								lines[#lines + 1] = string.format('%s in "%s" [%s]: %s',
-									entry.role, session.title, session.id,
-									util.ellipsis(entry.text:sub(math.max(at - 60, 1)), 320))
-								break
-							end
-						end
-					end
-					if #lines >= limit then break end
-				end
-
-				if #lines == 0 then
-					return string.format("No other conversation or paste mentions '%s'. The user may be thinking of something from before this client kept threads, or of work in this conversation.", tostring(args.query))
-				end
-				return string.format("%d match%s elsewhere (read a full thread with conversation_read using its [id]):\n%s",
-					#lines, #lines == 1 and "" or "es", table.concat(lines, "\n"))
-			end,
+			run = searchConversations,
 		},
 		{
 			-- The survey: what conversations exist, with the ids the reader needs.
@@ -491,12 +497,14 @@ return function(env)
 				properties = {
 					question = {
 						type = "string",
+						minLength = 1, maxLength = 2000,
 						description = "The question itself, one or two sentences, in the words you would use to the user.",
 					},
 					options = {
 						type = "array",
+						minItems = 2, maxItems = 4,
 						description = "The concrete answers to pick from, 2 to 4. Omit entirely for an open question.",
-						items = { type = "string" },
+						items = { type = "string", minLength = 1, maxLength = 160 },
 					},
 				},
 				required = { "question" },
@@ -563,8 +571,8 @@ return function(env)
 			parameters = {
 				type = "object",
 				properties = {
-					key = { type = "string", description = "Short snake_case key, e.g. 'preferred_shape' or 'main_build_path'." },
-					value = { type = "string", description = "The fact, in one or two sentences." },
+					key = { type = "string", minLength = 1, maxLength = 120, description = "Short snake_case key, e.g. 'preferred_shape' or 'main_build_path'." },
+					value = { type = "string", minLength = 1, maxLength = 600, description = "The fact, in one or two sentences." },
 				},
 				required = { "key", "value" },
 			},

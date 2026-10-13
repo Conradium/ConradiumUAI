@@ -10,7 +10,6 @@
 -- reads as homemade at any size; a small-caps label does not.
 return function(env)
 	local theme = env.require("ui/theme")
-	local config = env.require("runtime/config")
 	local caps = env.require("runtime/caps")
 	local fsx = env.require("runtime/fsx")
 	local assets = env.require("ui/assets")
@@ -64,7 +63,7 @@ return function(env)
 	local function getCustomIcon(name)
 		local mapped = LUCIDE_MAP[name]
 		if not mapped then return nil end
-		if assetCache[name] then return assetCache[name] end
+		if assetCache[mapped] then return assetCache[mapped] end
 
 		if not (caps.fn.customasset and caps.fs) then
 			return nil
@@ -74,24 +73,22 @@ return function(env)
 		local fullPath = fsx.resolve(relPath)
 		if not fullPath then return nil end
 
-		local targetVer = (assets and assets.VERSION) or 1
-		local currentVer = config.get("assets.icons_version", 0)
-		local needsWrite = (not fsx.exists(relPath)) or (currentVer < targetVer)
-
-		if needsWrite and assets and assets.icons and assets.icons[mapped] then
+		-- Verify each requested icon independently. A shared version stamp became
+		-- current after the first icon and left the remaining older files behind.
+		-- Successful asset IDs are cached by mapped name, including aliases.
+		if assets and assets.icons and assets.icons[mapped] then
 			local decoded = assets.decode(assets.icons[mapped])
-			if decoded then
-				fsx.write(relPath, decoded)
+			if type(decoded) ~= "string" or decoded == "" then return nil end
+			if fsx.read(relPath) ~= decoded then
+				if not fsx.write(relPath, decoded) or fsx.read(relPath) ~= decoded then return nil end
 			end
-		end
-
-		if currentVer < targetVer then
-			config.set("assets.icons_version", targetVer)
+		elseif not fsx.exists(relPath) then
+			return nil
 		end
 
 		local ok, asset = pcall(caps.fn.customasset, fullPath)
 		if ok and asset and type(asset) == "string" and asset ~= "" then
-			assetCache[name] = asset
+			assetCache[mapped] = asset
 			return asset
 		end
 
@@ -581,6 +578,7 @@ return function(env)
 		local clock = env.require("runtime/clock")
 		local handle = { instance = frame, busy = false }
 		local tweens, stopBlink = {}, nil
+		local generation, alive = 0, true
 
 		local rest = {
 			{ part = frame, key = "Position", value = UDim2.fromScale(0.5, 0.5) },
@@ -604,6 +602,7 @@ return function(env)
 		end
 
 		local function clearMotion()
+			generation = generation + 1
 			for _, tween in ipairs(tweens) do pcall(function() tween:Cancel() end) end
 			tweens = {}
 			if stopBlink then
@@ -620,9 +619,11 @@ return function(env)
 		end
 
 		local function animate()
+			if not alive then return end
 			clearMotion()
 			settle()
 			if responsive.reduceMotion then return end
+			local mine = generation
 
 			local busy = handle.busy == true
 			local floatPeriod = busy and 0.55 or 1.8
@@ -659,18 +660,20 @@ return function(env)
 
 			-- Natural eye blink cycle
 			stopBlink = clock.interval(busy and 1.8 or 3.6, function()
-				if not frame.Parent then return end
+				if not alive or mine ~= generation or not frame.Parent then return end
 				local function setBlink(shut)
+					if not alive or mine ~= generation then return false end
 					leftEye.Size = UDim2.fromScale(0.12, shut and 0.02 or 0.16)
 					rightEye.Size = UDim2.fromScale(0.12, shut and 0.02 or 0.16)
+					return true
 				end
 				setBlink(true)
 				clock.delay(0.10, function()
-					setBlink(false)
+					if not setBlink(false) then return end
 					-- Occasional cute double-blink when idle
 					if not busy and math.random() > 0.6 then
 						clock.delay(0.12, function()
-							setBlink(true)
+							if not setBlink(true) then return end
 							clock.delay(0.08, function() setBlink(false) end)
 						end)
 					end
@@ -679,6 +682,7 @@ return function(env)
 		end
 
 		function handle.setBusy(value)
+			if not alive then return handle end
 			local wanted = value == true
 			if wanted == handle.busy then return handle end
 			handle.busy = wanted
@@ -687,12 +691,13 @@ return function(env)
 		end
 
 		function handle.stop()
+			if not alive then return end
 			clearMotion()
 			settle()
 		end
 
 		animate()
-		frame.Destroying:Connect(clearMotion)
+		frame.Destroying:Connect(function() alive = false; clearMotion() end)
 		return frame, handle
 	end
 

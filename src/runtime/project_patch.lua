@@ -38,6 +38,7 @@ return function(env)
 	end
 	function M.stage(operations, ctx)
 		prune()
+		if stopped(ctx) then return nil, "Proposal cancelled before reading files" end
 		if not ctx or not ctx.session then return nil, "A conversation is required for project proposals" end
 		if type(operations) ~= "table" or not util.isArray(operations) or #operations < 1 or #operations > 20 then return nil, "Provide 1-20 file operations" end
 		if #order >= 8 then return nil, "Eight proposals/checkpoints are retained; discard one with project_patch_discard" end
@@ -53,9 +54,10 @@ return function(env)
 			seen[path:lower()] = true
 			local before, err = read(path); if before == nil then return nil, err end
 			if before ~= false and not source.valid(before) then return nil, "Existing file exceeds text/size limits: " .. path end
+			local beforeHash = before ~= false and source.hash(before) or nil
 			if before == false then
 				if operation.create ~= true or operation.expected_hash then return nil, "New files require create=true and no expected_hash: " .. path end
-			elseif operation.create or operation.expected_hash ~= source.hash(before) then return nil, "Read the current file hash before replacing it: " .. path end
+			elseif operation.create or operation.expected_hash ~= beforeHash then return nil, "Read the current file hash before replacing it: " .. path end
 			if (operation.content ~= nil) == (operation.edits ~= nil) then return nil, "Provide content or edits, not both" end
 			local after = operation.content
 			if operation.edits then
@@ -65,7 +67,7 @@ return function(env)
 			if not source.valid(after) then return nil, "New content must be UTF-8 text without NUL, at most 256000 bytes" end
 			size = size + #(before or "") + #after
 			if size > 2 * 1024 * 1024 or bytes + size > 8 * 1024 * 1024 then return nil, "Proposal exceeds the 2 MiB change / 8 MiB retention budget" end
-			items[#items + 1] = { path = path, before = before, after = after }
+			items[#items + 1] = { path = path, before = before, after = after, beforeHash = beforeHash, afterHash = source.hash(after) }
 			if stopped(ctx) then return nil, "Proposal cancelled before staging" end
 		end
 		prune()
@@ -86,7 +88,7 @@ return function(env)
 		local items = {}
 		for _, item in ipairs(plan.items) do
 			items[#items + 1] = { path = "files/" .. item.path, created = item.before == false, changed = item.before ~= item.after,
-				beforeHash = item.before ~= false and source.hash(item.before) or nil, afterHash = source.hash(item.after),
+				beforeHash = item.beforeHash, afterHash = item.afterHash,
 				beforeBytes = #(item.before or ""), afterBytes = #item.after }
 		end
 		return { patchId = plan.id, status = plan.status, items = items, expiresAt = plan.expires,

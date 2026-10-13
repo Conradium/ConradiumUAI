@@ -84,7 +84,8 @@ return function(env)
 	-- Numbers come back from JSON as numbers, but a hand-edited or half-written file
 	-- can hold anything, and one string in a counter would poison every sum.
 	local function number(value)
-		return tonumber(value) or 0
+		local parsed = tonumber(value)
+		return parsed and parsed == parsed and parsed >= 0 and parsed < math.huge and parsed or 0
 	end
 
 	local function sanitiseCounters(source, template)
@@ -114,6 +115,24 @@ return function(env)
 			M.data.seededAt = tonumber(stored.seededAt)
 			M.data.totals = sanitiseCounters(stored.totals, blankTotals())
 			M.data.estimated = stored.estimated == true
+			-- Lifetime metadata is persisted beside daily buckets. Reloading only
+			-- the buckets discarded model first/last-use dates and hour totals.
+			for hour, count in pairs(type(stored.hours) == "table" and stored.hours or {}) do
+				local index = tonumber(hour)
+				if index and index >= 0 and index <= 23 and index == math.floor(index) then
+					M.data.hours[tostring(index)] = number(count)
+				end
+			end
+			for id, entry in pairs(type(stored.models) == "table" and stored.models or {}) do
+				if type(id) == "string" and type(entry) == "table" then
+					M.data.models[id] = {
+						requests = number(entry.requests), tokensIn = number(entry.tokensIn),
+						tokensOut = number(entry.tokensOut), cost = number(entry.cost),
+						firstAt = number(entry.firstAt) > 0 and number(entry.firstAt) or nil,
+						lastAt = number(entry.lastAt) > 0 and number(entry.lastAt) or nil,
+					}
+				end
+			end
 			if type(stored.days) == "table" then
 				for key, record in pairs(stored.days) do
 					if clock.dayNumberOfKey(key) and type(record) == "table" then

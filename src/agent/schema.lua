@@ -10,6 +10,7 @@ return function(env)
 	local util = env.require("runtime/util")
 
 	local M = {}
+	local MAX_DEPTH, MAX_VALUES, MAX_ERRORS = 32, 8192, 16
 
 	-- Repair -----------------------------------------------------------------
 
@@ -176,10 +177,36 @@ return function(env)
 		return value, false
 	end
 
-	local function checkValue(schema, value, path, out)
+	local function validationError(out, message)
+		if #out.errors < MAX_ERRORS then out.errors[#out.errors + 1] = message end
+		if #out.errors >= MAX_ERRORS then out.stopped = true end
+	end
+
+	local function checkValue(schema, value, path, out, depth)
+		if out.stopped then return value end
+		out.values = out.values + 1
+		if depth > MAX_DEPTH or out.values > MAX_VALUES then
+			validationError(out, "arguments exceed the validation size/depth limit")
+			out.stopped = true
+			return value
+		end
+		if #out.errors >= MAX_ERRORS then
+			out.stopped = true
+			return value
+		end
 		if type(schema) ~= "table" then return value end
 		local wanted = schema.type
-		if type(wanted) == "table" then wanted = wanted[1] end
+		if type(wanted) == "table" then
+			-- Preserve an already valid union member. Choosing its first type
+			-- alone silently converted SDK tools' number/string/boolean unions.
+			local actual, choices = typeOf(value), wanted
+			wanted = choices[1]
+			for _, choice in ipairs(choices) do
+				if choice == actual or (choice == "integer" and actual == "number" and value == math.floor(value)) then
+					wanted = choice; break
+				end
+			end
+		end
 
 		local coerced, didCoerce = coerce(value, wanted)
 		if didCoerce then out.coercions[#out.coercions + 1] = path end
@@ -194,7 +221,7 @@ return function(env)
 		end
 		if wanted and actual ~= wanted then
 			if not (wanted == "integer" and actual == "number") then
-				out.errors[#out.errors + 1] = string.format("%s should be %s, got %s", path, wanted, actual)
+				validationError(out, string.format("%s should be %s, got %s", path, wanted, actual))
 				return value
 			end
 		end
@@ -205,58 +232,61 @@ return function(env)
 				if option == value then allowed = true end
 			end
 			if not allowed then
-				out.errors[#out.errors + 1] = string.format("%s must be one of: %s",
-					path, table.concat(util.map(schema.enum, tostring), ", "))
+				validationError(out, string.format("%s must be one of: %s",
+					path, table.concat(util.map(schema.enum, tostring), ", ")))
 			end
 		end
 
 		if wanted == "number" or wanted == "integer" then
 			if value ~= value or value == math.huge or value == -math.huge then
-				out.errors[#out.errors + 1] = path .. " must be a finite number"
+				validationError(out, path .. " must be a finite number")
 				return value
 			end
 			if wanted == "integer" and value ~= math.floor(value) then
-				out.errors[#out.errors + 1] = path .. " must be a whole number"
+				validationError(out, path .. " must be a whole number")
 			end
 			if schema.minimum and value < schema.minimum then
-				out.errors[#out.errors + 1] = string.format("%s must be at least %s", path, tostring(schema.minimum))
+				validationError(out, string.format("%s must be at least %s", path, tostring(schema.minimum)))
 			end
 			if schema.maximum and value > schema.maximum then
-				out.errors[#out.errors + 1] = string.format("%s must be at most %s", path, tostring(schema.maximum))
+				validationError(out, string.format("%s must be at most %s", path, tostring(schema.maximum)))
 			end
 		end
 
 		if wanted == "string" and schema.maxLength and #value > schema.maxLength then
-			out.errors[#out.errors + 1] = string.format("%s is longer than %d characters", path, schema.maxLength)
+			validationError(out, string.format("%s is longer than %d characters", path, schema.maxLength))
 		end
 		if wanted == "string" and schema.minLength and #value < schema.minLength then
-			out.errors[#out.errors + 1] = string.format("%s must contain at least %d characters", path, schema.minLength)
+			validationError(out, string.format("%s must contain at least %d characters", path, schema.minLength))
 		end
 
 		if actual == "object" and type(schema.properties) == "table" then
 			for _, key in ipairs(schema.required or {}) do
+				if #out.errors >= MAX_ERRORS then out.stopped = true; break end
 				if value[key] == nil then
-					out.errors[#out.errors + 1] = string.format("%s is required", path .. "." .. key)
+					validationError(out, string.format("%s is required", path .. "." .. key))
 				end
 			end
 			for key, child in pairs(schema.properties) do
+				if out.stopped then break end
 				if value[key] ~= nil then
-					value[key] = checkValue(child, value[key], path .. "." .. key, out)
+					value[key] = checkValue(child, value[key], path .. "." .. key, out, depth + 1)
 				end
 			end
 		end
 
 		if actual == "array" then
 			if schema.minItems and #value < schema.minItems then
-				out.errors[#out.errors + 1] = string.format("%s needs at least %d item(s)", path, schema.minItems)
+				validationError(out, string.format("%s needs at least %d item(s)", path, schema.minItems))
 			end
 			if schema.maxItems and #value > schema.maxItems then
-				out.errors[#out.errors + 1] = string.format("%s allows at most %d item(s)", path, schema.maxItems)
+				validationError(out, string.format("%s allows at most %d item(s)", path, schema.maxItems))
 				return value
 			end
 			if type(schema.items) == "table" then
 				for index, item in ipairs(value) do
-					value[index] = checkValue(schema.items, item, string.format("%s[%d]", path, index), out)
+					if out.stopped then break end
+					value[index] = checkValue(schema.items, item, string.format("%s[%d]", path, index), out, depth + 1)
 				end
 			end
 		end
@@ -268,8 +298,8 @@ return function(env)
 	-- list is fatal; for a tool call it is, and the message goes back to the model
 	-- as a tool error so it can correct itself on the next turn.
 	function M.validate(schema, value)
-		local out = { errors = {}, coercions = {} }
-		local coerced = checkValue(schema or {}, value, "arguments", out)
+		local out = { errors = {}, coercions = {}, values = 0 }
+		local coerced = checkValue(schema or {}, value, "arguments", out, 0)
 		return coerced, out.errors, out.coercions
 	end
 

@@ -180,6 +180,14 @@ return function(env)
 		-- including changing away and back before the old response arrives.
 		local forgetFetchedModels
 		local modelRevision = 0
+		local testButton, testRun
+		local function invalidateTest()
+			testRun = nil
+			if testButton and testButton.instance.Parent then
+				testButton.setText("Test")
+				testButton.setEnabled(true)
+			end
+		end
 
 		local function showProblems()
 			local ok, problems = registry.validate(editing)
@@ -561,8 +569,10 @@ return function(env)
 			modelNote.TextColor3 = bad and theme.color.warn or theme.color.textTertiary
 		end
 
+		local paintedModel
 		local function paintModel()
 			local current = util.trim(editing.model)
+			if current ~= paintedModel then invalidateTest(); paintedModel = current end
 			if modelButton then
 				modelButton.setText(current ~= "" and current or "Choose a model")
 			end
@@ -589,6 +599,7 @@ return function(env)
 			end
 			modelRevision = modelRevision + 1
 			local revision = modelRevision
+			invalidateTest()
 			handle.setEnabled(false)
 			setModelNote("Asking " .. registry.endpoint(target, "/models") .. "...", false)
 			task.spawn(function()
@@ -694,6 +705,7 @@ return function(env)
 
 		forgetFetchedModels = function()
 			modelRevision = modelRevision + 1
+			invalidateTest()
 			fetched = {}
 			if modelButton then modelButton.setEnabled(true) end
 			setModelNote(DEFAULT_MODEL_NOTE, false)
@@ -713,7 +725,6 @@ return function(env)
 		})
 		problemLabel.Size = UDim2.new(1, 0, 0, 0)
 
-		local testButton
 		testButton = P.button(modal.footer, {
 			name = "TestConnection",
 			text = "Test",
@@ -736,16 +747,22 @@ return function(env)
 				handle.setEnabled(false)
 				handle.setText("Testing")
 				local revision = modelRevision
+				local token = {}; testRun = token
+				local candidate = util.deepCopy(editing)
+				candidate.baseUrl = registry.normaliseBaseUrl(candidate.baseUrl)
+				local function aborted()
+					return modal.closed or not handle.instance.Parent or testRun ~= token or revision ~= modelRevision
+				end
 				task.spawn(function()
-					local candidate = util.deepCopy(editing)
-					candidate.baseUrl = registry.normaliseBaseUrl(candidate.baseUrl)
 					local result, err = chat.complete(candidate, {
 						messages = { { role = "user", content = "Reply with the single word: ready" } },
 						stream = false,
 						maxTokens = 12,
 						attempts = 1,
+						aborted = aborted,
 					})
-					if modal.closed or not handle.instance.Parent then return end
+					if aborted() then return end
+					testRun = nil
 					adoptProxy(candidate, revision)
 					handle.setText("Test")
 					handle.setEnabled(true)
@@ -955,6 +972,7 @@ return function(env)
 	function M.new(parent)
 		local panel = {}
 		local selected = nil
+		local selectionRevision = 0
 
 		-- Two columns where there is room for two, stacked where there is not. Same rule
 		-- and same threshold as the settings dialog, which solved this first.
@@ -1189,9 +1207,14 @@ return function(env)
 				options = options,
 				onSelect = function(value)
 					if value == "fetch" then
+						local revision = selectionRevision
+						local function aborted()
+							return not root.Parent or selected ~= record.id or revision ~= selectionRevision or registry.get(record.id) ~= record
+						end
 						overlay.toast("Fetching models from " .. record.label, "info", 2)
 						task.spawn(function()
-							local found, note = models.discover(record, { force = true })
+							local found, note = models.discover(record, { force = true, aborted = aborted })
+							if aborted() then return end
 							overlay.toast(tostring(note), #found > 0 and "good" or "warn", 3)
 							if onDone then pcall(onDone) end
 						end)
@@ -1620,6 +1643,7 @@ return function(env)
 				local active = registry.active()
 				selected = (active and active.id) or (list[1] and list[1].id) or nil
 			end
+			if selected ~= previous then selectionRevision = selectionRevision + 1 end
 			panel.renderRail()
 			panel.renderDetail()
 			detail.instance.CanvasPosition = previous == selected and position or Vector2.new(0, 0)

@@ -805,7 +805,9 @@ return function(env)
 			onClose = props.onCancel,
 		})
 		if not modal then
-			if props.onConfirm then props.onConfirm() end
+			-- An unavailable surface cannot collect confirmation. Complete the
+			-- cancellation path so callers can release their pending action.
+			if props.onCancel then pcall(props.onCancel) end
 			return nil
 		end
 

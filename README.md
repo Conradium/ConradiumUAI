@@ -4,12 +4,12 @@ A universal AI agent that runs inside a Roblox client. It works in any game,
 with Chat Completions and Anthropic Messages endpoints, including compatible
 local servers and relays.
 
-**Version 2.8.0 — October 12, 2026.** More reliable script execution, clearer tool
-failures, and focused fixes from the client audit. Luau guidance follows the
-available tools; read-only subagents keep read-only scopes. The OpenCode extra
-tools introduction and declarations remain available for the provider workaround.
-Runtime fixes cover input results, typed arguments, capability detection and
-credential redaction. UI LIB remains 1.3.0 and the embedding SDK 1.0.0.
+**Version 3.0.0 — October 13, 2026.** Reuse unchanged source analysis, find files
+without reading their contents, and run selected project tests. Larger useful
+result pages and retained HTTP/web snapshots reduce repeated reads. Agent,
+streaming, capture and scheduling changes avoid duplicate work; tool results
+report observed changes, incomplete coverage and unavailable capabilities more
+precisely. UI LIB remains 1.3.0 and the embedding SDK 1.0.0.
 See the [release notes](CHANGELOG.md), [script development manual](docs/SCRIPT_DEVELOPMENT.md)
 and [UI library guide](docs/UI_LIBRARY.md). The client exposes the scripting
 manual through `scripting_docs`: start with `quickstart`, then read only the
@@ -22,8 +22,9 @@ it. The model modal edits the same global effort setting, including for other
 models when **Options → Reasoning support** is enabled. The Thinking row estimates
 visible text only. A long retained trace is labelled
 **Excerpt**, not a 5,999-token model limit. See [provider behavior](docs/PROVIDER_COMPATIBILITY.md).
-Use the [2.8.0 test checklist](docs/TESTING_2.8.0.md) for focused offline checks and
-the features to exercise in Roblox.
+Use the [3.0.0 verification record](docs/TESTING_3.0.0.md) for focused offline checks and
+the features to exercise in Roblox. The [audit ledger](docs/AUDIT_3.0.0.md) records
+module and tool coverage, changes, retained behavior and exclusions.
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai.lua"))()

@@ -3,9 +3,9 @@ return function(env)
 	local lexer = env.require("runtime/code_lexer")
 	local M = { CELLS = 100000 }
 	function M.compare(before, after)
-		local a, b = lexer.lines(before), lexer.lines(after)
 		local result = { before = before, after = after, rows = {}, hunks = {}, added = 0, removed = 0, replacement = false }
 		if before == after then return result end
+		local a, b = lexer.lines(before), lexer.lines(after)
 		local first, lastA, lastB = 1, #a, #b
 		while first <= lastA and first <= lastB and a[first] == b[first] do first = first + 1 end
 		while lastA >= first and lastB >= first and a[lastA] == b[lastB] do lastA, lastB = lastA - 1, lastB - 1 end

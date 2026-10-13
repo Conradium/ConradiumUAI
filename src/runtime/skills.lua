@@ -26,9 +26,15 @@ return function(env)
 	local fsx = env.require("runtime/fsx")
 	local config = env.require("runtime/config")
 	local signal = env.require("runtime/signal")
+	local clock = env.require("runtime/clock")
 
 	local READ_CAP = 12000
 	local INDEX_CAP = 3072
+	local INDEX_TTL_MS = 5000
+	local indexText, indexAt, revision = nil, nil, 0
+	local function invalidate()
+		indexText, indexAt, revision = nil, nil, revision + 1
+	end
 
 	local M = {
 		changed = signal.new("skills"),
@@ -78,9 +84,9 @@ return function(env)
 
 	-- Catalogue ---------------------------------------------------------------
 
-	-- Every skill on disk, parsed. Cheap: skills are small and few, and the
-	-- settings pane and the listing tool both want the whole set anyway.
-	function M.list()
+	-- Explicit inventory/body reads stay fresh. Only the bounded prompt string
+	-- is cached, so retained source cannot grow with the number/size of skills.
+	local function catalogue()
 		local out = {}
 		if not fsx.enabled then return out end
 		local entries = fsx.list("", DIR)
@@ -115,6 +121,10 @@ return function(env)
 			return a.name:lower() < b.name:lower()
 		end)
 		return out
+	end
+	function M.list()
+		invalidate()
+		return catalogue()
 	end
 
 	function M.find(name)
@@ -176,6 +186,7 @@ return function(env)
 			list[tostring(file)] = nil
 		end
 		config.set("skills.disabled", list)
+		invalidate()
 		M.changed:fire(tostring(file), enabled ~= false)
 	end
 
@@ -195,6 +206,7 @@ return function(env)
 		local file = "---\n" .. header .. "---\n\n" .. tostring(body or "")
 		local ok, writeErr = fsx.write(clean .. ".md", file, DIR)
 		if not ok then return false, writeErr end
+		invalidate()
 		M.changed:fire(clean .. ".md", true)
 		return true, clean .. ".md"
 	end
@@ -274,7 +286,10 @@ return function(env)
 	-- Include filenames so even duplicate display names can be read unambiguously.
 	function M.indexBlock()
 		if not fsx.enabled then return nil end
-		local list = M.list()
+		local now = clock.ms()
+		if indexAt and now >= indexAt and now - indexAt < INDEX_TTL_MS then return indexText end
+		local mine = revision
+		local list = catalogue()
 		local lines, bytes, omitted = {}, 0, 0
 		for _, skill in ipairs(list) do
 			if skill.enabled then
@@ -290,9 +305,15 @@ return function(env)
 			end
 		end
 		if omitted > 0 then lines[#lines + 1] = tostring(omitted) .. " more enabled skills; use skills_list for the complete inventory." end
-		if #lines == 0 then return nil end
-		return table.concat(lines, "\n")
+		local text = #lines > 0 and table.concat(lines, "\n") or nil
+		-- A save or policy change during a yielding host read invalidates this scan.
+		if mine == revision then indexText, indexAt = text, now end
+		return text
 	end
+	local disconnect = config.changed:connect(function(path)
+		if path == nil or path == "skills" or tostring(path):sub(1, 15) == "skills.disabled" then invalidate() end
+	end)
+	env.require("runtime/dispose").add(function() disconnect(); invalidate() end, "skill prompt inventory")
 
 	M.READ_CAP = READ_CAP
 	M.DIR = DIR

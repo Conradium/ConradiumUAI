@@ -21,10 +21,11 @@ return function(env)
 			description = "List the installed markdown skills (playbooks) with their one-line "
 				.. "descriptions and whether each is enabled. A bounded enabled index appears in the "
 				.. "environment; use this for omitted entries or to refresh the inventory, including "
-				.. "switched-off ones. Follow continuation offsets to see every entry.",
+				.. "switched-off ones. Filter by name/filename/description with query to find relevant guidance. Follow continuation offsets to see every entry.",
 			parameters = { type = "object", properties = {
 				offset = { type = "integer", description = "1-based byte offset from a previous page. Default 1.", minimum = 1 },
 				limit = { type = "integer", description = "Maximum bytes in this inventory page.", minimum = 200, maximum = 64000 },
+				query = { type = "string", maxLength = 200, description = "Case-insensitive literal substring of a skill name, filename or description." },
 			}, required = {} },
 			run = function(args)
 				local list = skills.list()
@@ -33,17 +34,16 @@ return function(env)
 						.. "in by hand, or install one with skills_install."
 				end
 				local lines = {}
+				local query = tostring(args.query or ""):lower()
 				for _, skill in ipairs(list) do
-					local label = skill.name .. " [" .. skill.file .. "]"
-					if skill.description ~= "" then
-						label = label .. " -- " .. util.ellipsis(skill.description, 90)
+					if query == "" or (skill.name .. "\n" .. skill.file .. "\n" .. skill.description):lower():find(query, 1, true) then
+						local label = skill.name .. " [" .. skill.file .. "]"
+						if skill.description ~= "" then label = label .. " -- " .. util.ellipsis(skill.description, 90) end
+						if not skill.enabled then label = label .. " [off]" end
+						lines[#lines + 1] = label
 					end
-					if not skill.enabled then
-						label = label .. " [off]"
-					end
-					lines[#lines + 1] = label
 				end
-				return H.readSlice(string.format("%d skill%s", #list, #list == 1 and "" or "s"),
+				return H.readSlice(string.format("%d matching skill%s of %d", #lines, #lines == 1 and "" or "s", #list),
 					H.list(lines), args, 6000)
 			end,
 		},

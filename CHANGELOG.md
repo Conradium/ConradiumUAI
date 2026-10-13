@@ -1,5 +1,62 @@
 # Changelog
 
+## 3.0.0 — October 13, 2026
+
+Less repeated work when agents inspect, edit and verify scripts, with more
+precise tool outcomes and bounded runtime work.
+
+### Script authoring and inspection
+
+- Cache lexical outlines and syntax outcomes by exact source and compiler
+  identity. Recheck saved bytes and dependencies; compile execution wrappers
+  fresh. Read Code line ranges without splitting the complete source.
+- Add `file_find` for filename-only discovery and `script_test` module/case
+  selectors for focused verification. Zero matching cases is a failure.
+- Verify exact file edits after writing, reuse staged patch hashes, page saved
+  actions and templates, and expose typed action/template inputs more clearly.
+- Honor advertised script/Explorer page sizes. Retain HTTP and readable web
+  responses for contiguous continuation without refetching. Hidden GUI ancestors,
+  skipped source files and unavailable retained details remain explicit.
+
+### Agents and runtime
+
+- Avoid repeated growing-string copies in fragmented SSE parsing and repeated
+  batch rescans during tool-result repair. Prose previews skip tool arguments.
+  Responses assembly unifies call identities and enforces call/argument limits.
+- Bound recursive schema validation, preserve valid union values, and return
+  useful small result receipts immediately. Conversation search adds explicit
+  scopes and bounded traversal; product metadata uses a short refreshable cache.
+- Include all Anthropic prompt-token categories in context accounting and
+  restore persisted lifetime model/hour statistics.
+- Coalesce debounce bursts into one scheduled wakeup, skip ASCII runs during
+  UTF-8 processing, chunk bytecode encoding, and evict captured calls through a
+  private queue. Summary reads avoid copying unrequested argument graphs.
+
+### Tool outcomes and lifecycle
+
+- Report observed clamped/partial property writes. Validate camera batches
+  before writing and resolve exact player usernames before display-name matches.
+- Own held input until release succeeds; Stop, revocation and unload attempt
+  cleanup without claiming to undo native effects. Performance samples and
+  temporary interaction listeners release their resources.
+- Page IY discovery, accept saved plugin source paths, verify installations,
+  and reuse bounded official Gravity source snapshots. Chat history uses stable
+  backward cursors and channel filters.
+- Cancel unavailable confirmation dialogs, verify embedded icon files
+  individually, and reject stale mascot animation callbacks.
+- Continue queued questions after cancelling one conversation's prompt, and
+  release the composer's parent-size listener when its shell is destroyed.
+- Cancel provider connection tests when their editor closes or connection/model
+  changes. Ignore stale model discovery after provider selection or lifetime changes.
+
+UI LIB remains 1.3.0 and the embedding SDK remains 1.0.0. Bridge, desktop and
+companion changes are outside this release workstream. The site build refreshes
+published version metadata, the tool catalog and the documentation mirror.
+See [focused verification](docs/TESTING_3.0.0.md) and the
+[agent](docs/AUDIT_3.0.0_AGENT.md), [runtime](docs/AUDIT_3.0.0_RUNTIME.md) and
+[scripting](docs/AUDIT_3.0.0_SCRIPTING.md) audit records. Work counters and offline
+fixtures are evidence of avoided work, not native performance benchmarks.
+
 ## 2.8.0 — October 12, 2026
 
 Reliable scripting, clearer failures, larger attachments, and focused audit fixes.

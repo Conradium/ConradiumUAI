@@ -19,6 +19,32 @@ return function(env)
 	local CATEGORY_ORDER = { "added", "improved", "fixed" }
 	local ENTRIES = {
 		{
+			version = "3.0.0",
+			revision = "2026-10-13-agent-and-script-efficiency",
+			date = "October 13, 2026",
+			title = "Less repeated work, clearer tool outcomes",
+			highlights = "Reuse unchanged source analysis, discover files by name, run focused project tests, and continue useful result pages without repeated requests. Agent, capture and scheduling paths avoid duplicate work while preserving ownership and explicit limits.",
+			sections = {
+				{ category = "added", label = "Focused script workflows", items = {
+					"Find workspace files by filename glob without reading their contents. Select declared test modules and case-name filters; a run with no matching cases cannot pass.",
+					"Continue immutable HTTP and readable web responses without fetching them again. Script, Explorer, action, template and IY discovery return useful bounded pages.",
+				} },
+				{ category = "improved", label = "Less repeated work", items = {
+					"Reuse exact-source outlines and syntax outcomes while rechecking saved bytes and dependencies. Fresh execution wrappers preserve run isolation; Code line reads avoid splitting whole documents.",
+					"Avoid repeated SSE string copies and tool-result batch rescans. Bound schema validation, unify Responses call identities, and show useful small result receipts immediately.",
+					"Coalesce debounce bursts, process UTF-8 spans, chunk bytecode encoding and evict captured calls through a private queue. Summary reads skip unrequested argument graphs.",
+					"Filter conversation/skill discovery, reuse short-lived product metadata and official Gravity source snapshots, and include all Anthropic prompt-token categories in context accounting.",
+				} },
+				{ category = "fixed", label = "Observed outcomes and cleanup", items = {
+					"Verify edited file bytes, report observed clamped or partial property writes, validate camera fields before changes, and resolve exact usernames before ambiguous display names.",
+					"Track held input through release, Stop and revocation. Release performance and temporary interaction listeners; native effects are not described as rolled back.",
+					"Keep hidden GUI ancestry, skipped search files and missing retained details explicit. Verify IY installations and restore persisted lifetime model/hour statistics.",
+					"Cancel unavailable confirmations, verify embedded icon files individually and ignore stale mascot callbacks. UI LIB remains 1.3.0 and embedding SDK 1.0.0.",
+					"Continue queued questions after cancelling one conversation's prompt and release composer listeners on destruction. Cancel stale provider tests and model discovery when their editor, selection or connection changes.",
+				} },
+			},
+		},
+		{
 			version = "2.8.0",
 			revision = "2026-10-12-scripting-guide-zen-responses-and-10-mib-attachments",
 			date = "October 12, 2026",

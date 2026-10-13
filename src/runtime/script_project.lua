@@ -6,6 +6,38 @@ return function(env)
 	local caps = env.require("runtime/caps")
 	local M = { MAX_BYTES = 1024 * 1024, MAX_MODULES = 64 }
 	local scope = { scope = "files" }
+	local compiled, compiler, compileBytes, compileCount, sequence = {}, nil, 0, 0, 0
+	local function syntax(item)
+		local currentCompiler = caps.fn.loadstring
+		if currentCompiler ~= compiler then
+			compiled, compiler, compileBytes, compileCount = {}, currentCompiler, 0, 0
+		end
+		if not compiler then return nil, false end
+		local entry = compiled[item.path]
+		sequence = sequence + 1
+		if entry and entry.source == item.source then entry.used = sequence; return entry.error, true end
+		local ok, fn, err = pcall(currentCompiler, item.source, "@" .. item.path)
+		local message
+		if not ok or type(fn) ~= "function" then message = util.ellipsis(tostring(ok and (err or "Host compiler returned no function") or fn), 1200) end
+		-- Do not retain compiled closures or reuse results from a replaced compiler.
+		if currentCompiler == caps.fn.loadstring and compiler == currentCompiler then
+			entry = compiled[item.path]
+			if entry then compileBytes, compileCount = compileBytes - #entry.source, compileCount - 1; compiled[item.path] = nil end
+			while compileCount >= 128 or compileBytes + #item.source > 2 * 1024 * 1024 do
+				local oldest, stamp
+				for path, value in pairs(compiled) do
+					if not stamp or value.used < stamp then oldest, stamp = path, value.used end
+				end
+				if not oldest then break end
+				compileBytes, compileCount = compileBytes - #compiled[oldest].source, compileCount - 1
+				compiled[oldest] = nil
+			end
+			sequence = sequence + 1
+			compiled[item.path] = { source = item.source, error = message, used = sequence }
+			compileBytes, compileCount = compileBytes + #item.source, compileCount + 1
+		end
+		return message, false
+	end
 	function M.path(path)
 		local clean, area, why = fs.userPath(path)
 		if not clean or clean == "" or (area and area ~= "files") then return nil, why or "Use a path under files/" end
@@ -23,6 +55,7 @@ return function(env)
 		return id:sub(1, 1) ~= "/" and id:sub(-1) ~= "/" and not id:find("//", 1, true)
 	end
 	function M.load(path, ctx)
+		if ctx and ctx.aborted and ctx.aborted() then return nil, "Project read cancelled" end
 		local body, manifestPath = M.read(path)
 		if not body then return nil, manifestPath end
 		if #body > 32000 then return nil, "Project manifest exceeds 32000 bytes" end
@@ -68,27 +101,26 @@ return function(env)
 		end
 		return true
 	end
-	function M.analyze(project)
+	function M.analyze(project, ctx)
 		local diagnostics, errors, warnings, omitted = {}, 0, 0, 0
+		local reused, checked, cancelled = 0, 0, false
 		local function report(item, severity, code, message, line, column)
 			if severity == "error" then errors = errors + 1 else warnings = warnings + 1 end
 			if #diagnostics < 512 then diagnostics[#diagnostics + 1] = { path = item.path, severity = severity, code = code, message = util.ellipsis(message, 1200), line = line, column = column }
 			else omitted = omitted + 1 end
 		end
-		for _, id in ipairs(project.ids) do
+		for index, id in ipairs(project.ids) do
+			if ctx and ctx.aborted and ctx.aborted() then cancelled = true; break end
 			local item = project.modules[id]
-			if caps.fn.loadstring then
-				local ok, fn, err = pcall(caps.fn.loadstring, item.source, "@" .. item.path)
-				if not ok or not fn then
-					local message = tostring(ok and err or fn)
-					report(item, "error", "syntax", message, tonumber(message:match(":(%d+):")))
-				end
-			end
+			local message, cached = syntax(item)
+			if cached then reused = reused + 1 elseif caps.fn.loadstring then checked = checked + 1 end
+			if message then report(item, "error", "syntax", message, tonumber(message:match(":(%d+):"))) end
 			for _, dependency in ipairs(item.outline.imports) do
 				if dependency.dynamic then report(item, "warning", "dynamic_require", "Cannot statically resolve this require; only declared project IDs resolve at runtime", dependency.line, dependency.column)
 				elseif not project.modules[dependency.id] then report(item, "error", "missing_module", "Undeclared project module: " .. dependency.id, dependency.line, dependency.column) end
 			end
 			if item.outline.omitted > 0 then report(item, "warning", "outline_limit", "Additional symbols/imports were omitted") end
+			if ctx and index % 8 == 0 then task.wait() end
 		end
 		local visiting, visited = {}, {}
 		local function visit(id)
@@ -98,8 +130,10 @@ return function(env)
 			for _, dep in ipairs(project.modules[id].outline.imports) do if dep.id and project.modules[dep.id] then visit(dep.id) end end
 			visiting[id], visited[id] = nil, true
 		end
-		for _, id in ipairs(project.ids) do visit(id) end
-		return { ok = errors == 0, errors = errors, warnings = warnings, diagnostics = diagnostics, omittedDiagnostics = omitted,
+		cancelled = cancelled or (ctx and ctx.aborted and ctx.aborted()) or false
+		if not cancelled then for _, id in ipairs(project.ids) do visit(id) end end
+		return { ok = errors == 0 and not cancelled, errors = errors, warnings = warnings, diagnostics = diagnostics, omittedDiagnostics = omitted,
+			complete = not cancelled, cancelled = cancelled, compiledModules = checked, reusedModules = reused,
 			compilerAvailable = caps.fn.loadstring ~= nil, typeChecked = false,
 			coverage = "Host syntax compiler plus literal project dependency checks. Lexical imports may be shadowed. No Roblox API/type analysis or runtime validation." }
 	end
@@ -141,5 +175,6 @@ end
 		if #output > M.MAX_BYTES + 64000 then return nil, "Generated bundle exceeds its size budget" end
 		return output, locations
 	end
+	env.require("runtime/dispose").add(function() compiled, compiler, compileBytes, compileCount = {}, nil, 0, 0 end, "Project syntax cache")
 	return M
 end

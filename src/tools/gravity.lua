@@ -1,6 +1,5 @@
 -- Dedicated Gravity tools use the normal UAI permissions and result budgets.
 return function(env)
-	local util = env.require("runtime/util")
 	local gravity = env.require("runtime/gravity")
 	local plugins = env.require("tools/gravity_plugins")
 	local parts = env.require("tools/gravity_parts")
@@ -8,7 +7,13 @@ return function(env)
 	local H = env.require("tools/helpers")
 	local function result(value, err)
 		if not value then return H.fail(err) end
-		return { text = util.encode(value), data = value }
+		local text = value.message or value.note or value.validation
+		if value.shapes or value.controls or value.parts then
+			local rows = value.shapes or value.controls or value.parts
+			text = string.format("Gravity: %d of %d matching records%s.", #rows, value.total or value.totalControls or #rows,
+				value.nextOffset and ("; continue at offset " .. value.nextOffset) or "")
+		end
+		return { text = text or ("Gravity " .. tostring(value.action or (value.available == false and "unavailable") or "operation completed") .. ". See structured results."), data = value }
 	end
 	return {
 		{ name = "gravity_status", risk = "read", description = "Inspect the connected Project Gravity engine, selected shape, targets, held part count and settings. Reports when Gravity is not loaded.",
@@ -84,6 +89,7 @@ return function(env)
 			parameters = { type = "object", properties = {
 				plugin = { type = "string" }, section = { type = "string", enum = { "guide", "template" } },
 				origin = { type = "string", enum = { "auto", "local" } },
+				refresh = { type = "boolean", description = "Refresh official source; otherwise pagination reuses a bounded five-minute snapshot. Local source is always read fresh." },
 				offset = { type = "integer", minimum = 1 }, limit = { type = "integer", minimum = 200, maximum = 6000 },
 			}, required = {} }, run = function(args, ctx)
 				if not args.plugin then return H.readSlice("Gravity " .. (args.section or "guide"), args.section == "template" and docs.template or docs.guide, args, 4000) end

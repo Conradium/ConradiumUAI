@@ -40,7 +40,7 @@ return function(env)
 	-- buffered bodies so the two transports accept exactly the same SSE syntax.
 	function M.decoder(onFrame)
 		local self = {}
-		local buffer, data, eventName = "", {}, nil
+		local pending, pendingBytes, data, eventName = {}, 0, {}, nil
 		local bytes, blockBytes, chunks = 0, 0, 0
 		local skipLF, first, failure, prefix = false, true, nil, ""
 		local function fail(message)
@@ -84,29 +84,39 @@ return function(env)
 				skipLF = false
 			end
 			if fragment:sub(-1) == "\r" then skipLF = true end
-			buffer = buffer .. fragment:gsub("\r\n", "\n"):gsub("\r", "\n")
+			fragment = fragment:gsub("\r\n", "\n"):gsub("\r", "\n")
 			local from = 1
 			while true do
-				local at = buffer:find("\n", from, true)
+				local at = fragment:find("\n", from, true)
 				if not at then break end
-				local ok, why = line(buffer:sub(from, at - 1))
+				local part = fragment:sub(from, at - 1)
+				if pendingBytes + #part > 0 and pendingBytes + #part + blockBytes + 1 > M.limits.frame then return fail("frame exceeds 1 MiB") end
+				if pendingBytes > 0 then
+					pending[#pending + 1] = part
+					part = table.concat(pending)
+					pending, pendingBytes = {}, 0
+				end
+				local ok, why = line(part)
 				if not ok then return false, why end
 				from = at + 1
 			end
-			buffer = buffer:sub(from)
-			if #buffer + blockBytes > M.limits.frame then return fail("frame exceeds 1 MiB") end
+			local tail = fragment:sub(from)
+			if pendingBytes + #tail + blockBytes > M.limits.frame then return fail("frame exceeds 1 MiB") end
+			-- Keep partial lines as fragments. Copying the entire unfinished line
+			-- on every socket message made a byte-fragmented frame quadratic.
+			if tail ~= "" then pending[#pending + 1] = tail; pendingBytes = pendingBytes + #tail end
 			return true
 		end
 		function self.finish()
 			if failure then return false, failure end
 			if first and prefix ~= "" then return fail("incomplete UTF-8 BOM") end
-			if buffer ~= "" then
-				local ok, why = line(buffer); buffer = ""
+			if pendingBytes > 0 then
+				local ok, why = line(table.concat(pending)); pending, pendingBytes = {}, 0
 				if not ok then return false, why end
 			end
 			return dispatch()
 		end
-		function self.idle() return buffer == "" and #data == 0 and blockBytes == 0 end
+		function self.idle() return pendingBytes == 0 and #data == 0 and blockBytes == 0 end
 		return self
 	end
 
@@ -125,7 +135,8 @@ return function(env)
 	-- `function.arguments` arrives as string fragments that must be concatenated
 	-- in order. Providers also disagree about whether index starts at 0, so the
 	-- slots are keyed by the raw index and only flattened at the end.
-	function M.assembler()
+	function M.assembler(opts)
+		local collectCalls = not opts or opts.toolCalls ~= false
 		local self = {
 			content = {},
 			reasoning = {},
@@ -201,7 +212,7 @@ return function(env)
 				end
 			end
 
-			if type(part.tool_calls) == "table" then
+			if collectCalls and type(part.tool_calls) == "table" then
 				for position, call in ipairs(part.tool_calls) do
 					-- Streamed fragments carry index; a whole message does not, so its
 					-- array position stands in.

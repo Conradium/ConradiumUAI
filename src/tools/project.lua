@@ -31,8 +31,9 @@ return function(env)
 		return true
 	end
 	local function load(args, ctx) return project.load(args.manifest, ctx) end
-	local function ready(value)
-		local analysis = project.analyze(value)
+	local function ready(value, ctx)
+		local analysis = project.analyze(value, ctx)
+		if analysis.cancelled then return nil, "Project analysis cancelled" end
 		if not analysis.compilerAvailable then return nil, "This host has no source compiler" end
 		if not analysis.ok then return nil, "Project has syntax/dependency errors; inspect script_analyze" end
 		return analysis
@@ -119,24 +120,35 @@ return function(env)
 			-- Single-file requires lack a declared project graph; report their hints, not missing-module errors.
 			local imports
 			if args.path then imports = value.modules.source.outline.imports; value.modules.source.outline.imports = {} end
-			local analysis = project.analyze(value)
+			local analysis = project.analyze(value, ctx)
 			if args.path then analysis.path, analysis.hash, analysis.imports = "files/" .. value.modules.source.path, value.modules.source.outline.hash, imports end
-			return result(analysis, string.format("%d error(s), %d warning(s); compiler %s; typeChecked=false", analysis.errors, analysis.warnings, analysis.compilerAvailable and "available" or "unavailable"))
+			return result(analysis, analysis.cancelled and "Project analysis cancelled; results are incomplete" or string.format("%d error(s), %d warning(s); compiler %s; %d compiled, %d reused; typeChecked=false", analysis.errors, analysis.warnings, analysis.compilerAvailable and "available" or "unavailable", analysis.compiledModules, analysis.reusedModules))
 		end)
-	local testTool = add("script_test", "danger", "Run declared project test modules (tables of named functions receiving t and fixtures). t.equal, t.truthy and t.raises are provided. Fresh module cache/fixtures per case; native game state is shared. Uses managed run_luau deadlines, not a security sandbox or isolated Roblox process. Returns assertions, errors and bundle source locations. Review source before running.",
-		{ manifest = str, fixtures = { type = "object" }, timeout = { type = "number", minimum = 1, maximum = 60 } }, { "manifest" }, function(args, ctx, prepared)
+	local testTool = add("script_test", "danger", "Run declared project tests; choose modules and a case-name filter to verify only relevant behavior. Test modules return named functions receiving t and fixtures (t.equal, t.truthy, t.raises). Fresh module cache/fixtures per case; native game state is shared. Managed deadlines apply; not a sandbox. Review source before running. No matching cases is an explicit failure.",
+		{ manifest = str, modules = { type = "array", minItems = 1, maxItems = 16, items = str, description = "Subset of test IDs declared by this manifest; default all declared tests." }, filter = { type = "string", maxLength = 120, description = "Case-sensitive literal substring of test case names; default all cases." }, fixtures = { type = "object" }, timeout = { type = "number", minimum = 1, maximum = 60 } }, { "manifest" }, function(args, ctx, prepared)
 			if not prepared then return N.fail("Missing project snapshot") end
 			local current, why = project.current(prepared); if not current then return N.fail(why) end
-			local analysis, err = ready(prepared); if not analysis then return N.fail(err) end
+			local analysis, err = ready(prepared, ctx); if not analysis then return N.fail(err) end
 			if #prepared.tests == 0 then return N.fail("Declare test module IDs in the manifest's tests array") end
+			local testIds = prepared.tests
+			if args.modules then
+				local declared, seen = {}, {}
+				for _, id in ipairs(prepared.tests) do declared[id] = true end
+				for _, id in ipairs(args.modules) do
+					if not declared[id] or seen[id] then return N.fail("modules must name distinct declared test IDs") end
+					seen[id] = true
+				end
+				testIds = args.modules
+			end
 			local fixtures, fixtureErr = testing.fixtures(args.fixtures); if not fixtures then return N.fail(fixtureErr) end
-			local code, locations = project.bundle(prepared, prepared.entry, testing.program(prepared.tests)); if not code then return N.fail(locations) end
+			local code, locations = project.bundle(prepared, prepared.entry, testing.program(testIds, args.filter)); if not code then return N.fail(locations) end
 			local report
 			local run = execution.run({ code = code, timeout = args.timeout, parameters = { n = 1, fixtures } }, ctx, function(value) report = value end)
 			if type(report) ~= "table" then return run end
 			local unchanged = project.current(prepared)
 			report.ok, report.sourcesCurrent, report.locations = run.ok and report.failed == 0 and report.complete ~= false and unchanged, unchanged, locations
 			report.execution, report.coverage = run.data, "Managed client tests; native game state is shared; host input/rendering not validated"
+			report.testModules = util.copy(testIds)
 			return result(report, string.format("%d passed, %d failed; source versions %s.%s\n%s", report.passed, report.failed, unchanged and "unchanged" or "changed during tests", report.reason and (" " .. report.reason .. ".") or "", run.text))
 		end, load, { "fs", "exec" })
 	testTool.timeout = function(args) return execution.timeout(args) + 5 end
@@ -144,7 +156,7 @@ return function(env)
 		{ manifest = str, output = str, expected_hash = str }, { "manifest", "output" }, function(args, ctx, prepared)
 			if not prepared then return N.fail("Missing build snapshot") end
 			local current, why = project.current(prepared); if not current then return N.fail(why) end
-			local analysis, err = ready(prepared); if not analysis then return N.fail(err) end
+			local analysis, err = ready(prepared, ctx); if not analysis then return N.fail(err) end
 			local output, outputErr = project.path(args.output); if not output then return N.fail(outputErr) end
 			if not output:match("%.lua$") then return N.fail("Output must end in .lua") end
 			if output:lower() == prepared.manifest:lower() then return N.fail("Output would overwrite the manifest") end

@@ -52,13 +52,33 @@ return function(env)
 	function M.run.instance_get(args)
 		local object, why = refs.select(args); if not object then return N.fail(why) end
 		local out = { H.pathOf(object) .. " [" .. object.ClassName .. "]" }
-		for _, name in ipairs(schema.names(object, args.properties)) do
-			local ok, value = fields.read(object, "property", name)
-			if ok then out[#out + 1] = name .. " = " .. (name == "Source" and ("<" .. #(value or "") .. " bytes; use script_source>") or values.format(values.node(value))) end
+		local unreadable, omitted, seen = {}, 0, {}
+		for _, name in ipairs(args.only_properties and (args.properties or {}) or schema.names(object, args.properties)) do
+			if not seen[name] then
+				seen[name] = true
+				if name == "Source" then out[#out + 1] = "Source = <use script_source; source was not read>"
+				else
+					local ok, value = fields.read(object, "property", name)
+					if ok then out[#out + 1] = name .. " = " .. values.format(values.node(value))
+					else unreadable[#unreadable + 1] = name end
+				end
+			end
 		end
-		local ok, attributes = pcall(function() return object:GetAttributes() end)
-		if ok then for _, key in ipairs(util.keys(attributes, true)) do out[#out + 1] = "Attribute " .. key .. " = " .. values.format(values.node(attributes[key])) end end
-		return N.result({ instanceId = refs.id(object), metadata = schema.coverage }, table.concat(out, "\n"))
+		if args.attributes ~= false then
+			local ok, attributes = pcall(function() return object:GetAttributes() end)
+			if ok and type(attributes) == "table" then
+				for index, key in ipairs(util.keys(attributes, true)) do
+					if index <= 100 then out[#out + 1] = "Attribute " .. key .. " = " .. values.format(values.node(attributes[key])) else omitted = omitted + 1 end
+				end
+			else unreadable[#unreadable + 1] = "attributes" end
+		end
+		if args.tags ~= false then
+			local ok, tags = pcall(function() return object:GetTags() end)
+			if ok and type(tags) == "table" then
+				for index, tag in ipairs(tags) do if index <= 100 then out[#out + 1] = "Tag = " .. tag else omitted = omitted + 1 end end
+			else unreadable[#unreadable + 1] = "tags" end
+		end
+		return N.result({ instanceId = refs.id(object), metadata = schema.coverage, unreadable = unreadable, omitted = omitted }, table.concat(out, "\n"))
 	end
 	for _, name in ipairs({ "instance_clone", "instance_parent", "instance_destroy" }) do
 		M.prepare[name] = function(args)
@@ -92,9 +112,17 @@ return function(env)
 		if not M.run[tool.name] then return end
 		tool.run, tool.prepare = M.run[tool.name], M.prepare[tool.name]
 		local p = tool.parameters.properties
-		if tool.name ~= "instance_create" then p.instance_id = { type = "string" } end
-		if p.parent then p.parent_id = { type = "string" } end
-		if tool.name == "instance_set" or tool.name == "instance_attribute" then p.typed_value, p.expected_value = { type = "object" }, { type = "object" } end
+		if tool.name ~= "instance_create" then p.instance_id = { type = "string", description = "Exact epoch-scoped identity from inspection; use instead of path to survive rename/reparent." } end
+		if p.parent then p.parent_id = { type = "string", description = "Exact destination identity; use instead of parent path." } end
+		if tool.name == "instance_set" or tool.name == "instance_attribute" then
+			p.typed_value = { type = "object", description = "Typed value node from inspection, e.g. {kind='number', value=10}; use instead of legacy value." }
+			p.expected_value = { type = "object", description = "Typed prior value to require before writing. A conflict makes no change." }
+		end
+		if tool.name == "instance_get" then
+			p.only_properties = { type = "boolean", description = "Read only the named properties; skip class defaults. Default false." }
+			p.attributes = { type = "boolean", description = "Include up to 100 attributes, default true." }
+			p.tags = { type = "boolean", description = "Include up to 100 tags, default true." }
+		end
 		if tool.name == "instance_attribute" then p.remove = { type = "boolean" } end
 		local required = {}; for _, key in ipairs(tool.parameters.required) do if key ~= "path" and key ~= "value" and key ~= "parent" then required[#required + 1] = key end end; tool.parameters.required = required
 		if tool.name == "instance_create" then tool.description = "Create an instance detached, validate/apply properties, then parent it. Legacy property maps use sorted property names. Failed setup destroys only the new owned instance." end

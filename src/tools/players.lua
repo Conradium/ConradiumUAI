@@ -9,17 +9,17 @@ return function(env)
 	local function findPlayer(query)
 		local needle = util.trim(query):lower()
 		if needle == "" then return nil, "give a player name" end
-		local matches = {}
+		local matches, exact = {}, {}
 		for _, player in ipairs(env.players:GetPlayers()) do
 			local name = tostring(player.Name):lower()
 			local display = tostring(player.DisplayName or ""):lower()
-			if name == needle or display == needle then
-				return player
-			end
+			if name == needle then return player end
+			if display == needle then exact[#exact + 1] = player end
 			if name:find(needle, 1, true) or display:find(needle, 1, true) then
 				matches[#matches + 1] = player
 			end
 		end
+		if #exact > 0 then matches = exact end
 		if #matches == 1 then return matches[1] end
 		if #matches > 1 then
 			local names = util.map(matches, function(player) return player.Name end)
@@ -45,32 +45,44 @@ return function(env)
 		{
 			name = "players_list",
 			risk = "read",
-			description = "List everyone in the server with their distance from you.",
+			description = "Page players by distance, with username/display-name filter and deterministic ties. Distances are captured once per call. Continue with offset; restart if players move or leave.",
 			parameters = {
 				type = "object",
 				properties = {
 					limit = { type = "integer", minimum = 1, maximum = 100 },
+					offset = { type = "integer", minimum = 1 },
+					name = { type = "string", description = "Case-insensitive username/display-name substring." },
 				},
 				required = {},
 			},
 			run = function(args)
-				local players = env.players:GetPlayers()
-				if #players == 0 then return "No players are in the server." end
+				local players = {}
+				local needle = util.trim(args.name):lower()
+				local mine = rootOf(env.plr)
+				local origin = mine and mine.Position
+				for _, player in ipairs(env.players:GetPlayers()) do
+					if needle == "" or player.Name:lower():find(needle, 1, true) or tostring(player.DisplayName):lower():find(needle, 1, true) then
+						local root = rootOf(player)
+						players[#players + 1] = { player = player, distance = origin and root and (root.Position - origin).Magnitude or nil }
+					end
+				end
 				table.sort(players, function(a, b)
-					return (distanceTo(a) or math.huge) < (distanceTo(b) or math.huge)
+					local left, right = a.distance or math.huge, b.distance or math.huge
+					if left == right then return a.player.Name < b.player.Name end
+					return left < right
 				end)
-				return string.format("%d player(s):\n%s", #players,
-					H.list(players, H.limit(args.limit, 40, 100), function(player)
+				return H.page(players, args, tostring(#players) .. " matching player(s):", function(item)
+						local player = item.player
 						local bits = { player.Name }
 						if player.DisplayName and player.DisplayName ~= player.Name then
 							bits[#bits + 1] = "(" .. player.DisplayName .. ")"
 						end
 						if player == env.plr then bits[#bits + 1] = "[you]" end
-						local distance = distanceTo(player)
+						local distance = item.distance
 						if distance then bits[#bits + 1] = string.format("%.0f studs", distance) end
 						if not player.Character then bits[#bits + 1] = "no character" end
 						return table.concat(bits, " ")
-					end))
+					end, 40, 100)
 			end,
 		},
 		{
@@ -79,7 +91,7 @@ return function(env)
 			description = "Details for one player: ids, team, character state, position and distance.",
 			parameters = {
 				type = "object",
-				properties = { player = { type = "string", description = "Username or display name; a substring is enough." } },
+				properties = { player = { type = "string", description = "Exact username wins; display names and substrings must match one player." } },
 				required = { "player" },
 			},
 			run = function(args)
@@ -131,7 +143,7 @@ return function(env)
 				},
 				required = { "player" },
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local player, err = findPlayer(args.player)
 				if not player then return H.fail(err) end
 				if player == env.plr then return "That is you." end
@@ -143,11 +155,7 @@ return function(env)
 
 				local offset = util.clamp(tonumber(args.offset) or 4, 0, 60)
 				local destination = target.Position + Vector3.new(offset, 0, 0)
-				local ok, setErr = pcall(function()
-					mine.CFrame = CFrame.new(destination)
-				end)
-				if not ok then return H.fail(tostring(setErr)) end
-				return string.format("Moved to %s at %s", player.Name, H.show(destination))
+				return H.writeProperties(mine, { { property = "CFrame", value = CFrame.new(destination) } }, "Move next to " .. player.Name, ctx)
 			end,
 		},
 	}

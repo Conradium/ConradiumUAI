@@ -770,7 +770,7 @@ return function(env)
 		end)
 		modelLabel:GetPropertyChangedSignal("TextBounds"):Connect(fitLabels)
 		attachRow:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() resizeComposer() end)
-		parent:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() resizeComposer() end)
+		local parentSizeConnection = parent:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() resizeComposer() end)
 
 		-- Everything on the meta row, from the real records ---------------------
 
@@ -969,6 +969,7 @@ return function(env)
 		shell.Destroying:Connect(function()
 			saveDraft()
 			destroyed = true
+			parentSizeConnection:Disconnect()
 			if draftId and draftViews[draftId] == draftView then draftViews[draftId] = nil end
 			pcall(unsubscribeResponsive)
 			pcall(unsubscribeProviders)

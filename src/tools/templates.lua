@@ -69,12 +69,14 @@ for _, p in ipairs(game:GetService("Players"):GetPlayers()) do
 	if p ~= me and p.Character then
 		local their = p.Character:FindFirstChild("HumanoidRootPart")
 		if their then
-			rows[#rows + 1] = string.format("%s (%d studs)", p.Name, (their.Position - root.Position).Magnitude)
+			rows[#rows + 1] = { name = p.Name, distance = (their.Position - root.Position).Magnitude }
 		end
 	end
 end
-table.sort(rows)
-return #rows == 0 and "Nobody else has a character." or table.concat(rows, "\n")
+table.sort(rows, function(a, b) if a.distance == b.distance then return a.name < b.name end; return a.distance < b.distance end)
+local output = {}
+for i, row in ipairs(rows) do output[i] = string.format("%s (%d studs)", row.name, row.distance) end
+return #output == 0 and "Nobody else has a character." or table.concat(output, "\n")
 ]] },
 			params = {},
 			notes = "Everyone needs a HumanoidRootPart; ghosts report no distance.",
@@ -153,6 +155,7 @@ return "Fired " .. count .. " times."
 				SECONDS = "How long to keep firing, in seconds",
 			},
 			literals = { ACTION = true },
+			types = { REMOTE = "string", SECONDS = "number" },
 			notes = "A real server call every 0.5s. Repeated firing can be logged by anticheat.",
 		},
 		{
@@ -169,6 +172,7 @@ return HttpService:JSONEncode(data)
 				JSON = "The JSON text to check",
 			},
 			literals = { JSON = true },
+			types = { JSON = "string" },
 			notes = "Decodes then re-encodes: a syntax error in the JSON is the failure you get.",
 		},
 	}
@@ -189,6 +193,8 @@ return HttpService:JSONEncode(data)
 				type = "object",
 				properties = {
 					id = { type = "string", description = "Show this one template's code and parameters." },
+					offset = { type = "integer", minimum = 1, description = "Resume a template detail page from nextOffset." },
+					limit = { type = "integer", minimum = 200, maximum = 16000 },
 				},
 				required = {},
 			},
@@ -210,7 +216,7 @@ return HttpService:JSONEncode(data)
 					if t.notes then lines[#lines + 1] = "Notes: " .. t.notes end
 					lines[#lines + 1] = "Code:"
 					lines[#lines + 1] = tostring(t.arguments.code)
-					return table.concat(lines, "\n")
+					return H.readSlice("Template " .. id, table.concat(lines, "\n"), args, 4000)
 				end
 
 				local rows = {}
@@ -228,6 +234,7 @@ return HttpService:JSONEncode(data)
 			name = "template_run",
 			risk = "danger",
 			needs = { "exec" },
+			timeout = function(args) return env.require("tools/execution").timeout(args) + 5 end,
 			description = "Run a script template by id with the given values. The expanded code appears in the permission prompt before it runs -- what you approve is what runs, because placeholders are filled before the permission decision, not after.",
 			parameters = {
 				type = "object",
@@ -237,6 +244,7 @@ return HttpService:JSONEncode(data)
 						type = "object",
 						description = "The template's values. Keys are the parameter names template_list showed.",
 					},
+					timeout = { type = "number", minimum = 1, maximum = 60, description = "Shared managed execution deadline, default 10 seconds." },
 				},
 				required = { "id" },
 			},
@@ -244,6 +252,11 @@ return HttpService:JSONEncode(data)
 				local t = byId(util.trim(tostring(args.id or "")))
 				if not t then return H.fail("no template named '" .. tostring(args.id) .. "'") end
 				local values = type(args.values) == "table" and args.values or {}
+				for key, value in pairs(values) do
+					if not t.params[key] then return H.fail("unknown template parameter: " .. tostring(key)) end
+					if t.types and t.types[key] and type(value) ~= t.types[key] then return H.fail(key .. " must be a " .. t.types[key]) end
+				end
+				if t.id == "remote_spam" and type(values.SECONDS) == "number" and (values.SECONDS <= 0 or values.SECONDS > 60) then return H.fail("SECONDS must be greater than zero and at most 60") end
 				local final = {}
 				for key, pattern in pairs(t.arguments) do
 					if type(pattern) == "string" and pattern:find("{", 1, true) then
@@ -254,6 +267,7 @@ return HttpService:JSONEncode(data)
 						final[key] = pattern
 					end
 				end
+				if args.timeout ~= nil then final.timeout = args.timeout end
 				local call = {
 					id = "template:" .. t.id,
 					["function"] = { name = t.tool, arguments = util.encode(final) },

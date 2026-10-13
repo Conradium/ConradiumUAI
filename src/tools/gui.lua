@@ -5,6 +5,53 @@ return function(env)
 	local caps = env.require("runtime/caps")
 	local clock = env.require("runtime/clock")
 	local H = env.require("tools/helpers")
+	local scan = env.require("runtime/instance_scan")
+	local function aborted(ctx)
+		if not ctx or not ctx.aborted then return false end
+		local ok, value = pcall(ctx.aborted); return not ok or value == true
+	end
+	local function hold(beginHold, endHold, seconds, ctx, label)
+		if aborted(ctx) then return H.fail(label .. " cancelled before dispatch") end
+		local pending, stopped, releasing, requested = true, false, false, false
+		local released, releaseResult = false, nil
+		local function finish()
+			requested = true
+			if releasing then return end
+			repeat
+				requested, releasing = false, true
+				local wasPending = pending
+				released, releaseResult = pcall(endHold)
+				releasing = false
+				if wasPending and not pending then requested = true end
+			until not requested
+		end
+		local stopWatch
+		local disposer = env.require("runtime/dispose")
+		local release = disposer.add(function()
+			stopped = true
+			if stopWatch then stopWatch() end
+			-- A native end may yield. Unload must still release unrelated resources;
+			-- ordinary completion waits for its end result before reporting success.
+			if disposer.draining then clock.spawn(finish) else finish() end
+		end, "tool " .. label)
+		if stopped then pending = false; return H.fail(label .. " cancelled before dispatch") end
+		stopWatch = clock.interval(0.05, function() if aborted(ctx) then release() end end)
+		local began, result = pcall(beginHold)
+		pending = false
+		if stopped or aborted(ctx) or not began or result == false then
+			if stopped then finish() else release() end
+			return H.fail(label .. " interrupted or rejected; release attempted and begin effects may have occurred")
+		end
+		local start = clock.ms()
+		local waited, why = pcall(function()
+			while not stopped and clock.since(start) < seconds * 1000 and not aborted(ctx) do clock.wait(0.05) end
+		end)
+		local cancelled = stopped or aborted(ctx)
+		release()
+		if not waited or releasing or not released or releaseResult == false then return H.fail(label .. " release was not confirmed: " .. tostring(why or releaseResult)) end
+		if cancelled then return { ok = false, text = label .. " cancelled and released; begin effects may have occurred.", data = { status = "aborted" } } end
+		return { text = label .. " completed and released.", data = { status = "completed", localObservation = true } }
+	end
 
 	local function guiRoots()
 		local roots = {}
@@ -49,46 +96,52 @@ return function(env)
 		{
 			name = "gui_tree",
 			risk = "read",
-			description = "List the on-screen interfaces: every ScreenGui in PlayerGui and CoreGui, with whether it is enabled.",
+			description = "Page top-level interfaces in PlayerGui and CoreGui, with enabled state and direct child counts. Does not enumerate every GUI descendant.",
 			parameters = {
 				type = "object",
 				properties = {
 					limit = { type = "integer", minimum = 1, maximum = 80 },
+					offset = { type = "integer", minimum = 1 },
 				},
 				required = {},
 			},
 			run = function(args)
-				local found = {}
+				local found, unreadable = {}, 0
 				for _, root in ipairs(guiRoots()) do
-					for _, child in ipairs(root:GetChildren()) do
+					local readable, children = pcall(function() return root:GetChildren() end)
+					if not readable then unreadable = unreadable + 1; children = {} end
+					for _, child in ipairs(children) do
 						local ok, isGui = pcall(function() return child:IsA("LayerCollector") end)
 						if ok and isGui then found[#found + 1] = child end
 					end
 				end
-				if #found == 0 then return "No screen interfaces are present." end
-				return string.format("%d interface(s):\n%s", #found,
-					H.list(found, H.limit(args.limit, 40, 80), function(gui)
-						local okCount, descendants = pcall(function() return #gui:GetDescendants() end)
+				local result = H.page(found, args, tostring(#found) .. " interface(s):", function(gui)
+						local okCount, descendants = pcall(function() return #gui:GetChildren() end)
 						return string.format("%s [%s] %s, %s",
 							H.pathOf(gui), gui.ClassName,
 							gui.Enabled and "enabled" or "disabled",
-							okCount and util.pluralise(descendants, "element") or "unknown size")
-					end))
+							okCount and util.pluralise(descendants, "direct child") or "unknown size")
+					end, 40, 80)
+				if result.data then result.data.unreadableRoots, result.data.complete = unreadable, unreadable == 0 end
+				return result
 			end,
 		},
 		{
 			name = "gui_text",
 			risk = "read",
-			description = "Read the visible text under a GUI element, in layout order. Use it to find out what is actually on screen.",
+			description = "Read visible text under GUI roots using bounded cooperative traversal. Checks ancestor visibility and ScreenGui.Enabled; include_hidden opts into hidden text. Traversal order is not visual stacking order. Continue with the returned offset and identical filters.",
 			parameters = {
 				type = "object",
 				properties = {
 					path = { type = "string", description = "Dotted path to a ScreenGui or frame. Defaults to every screen interface." },
 					limit = { type = "integer", minimum = 1, maximum = 120 },
+					offset = { type = "integer", minimum = 1, maximum = 20001 },
+					include_hidden = { type = "boolean", description = "Include text beneath hidden frames or disabled screens; default false." },
+					text = { type = "string", description = "Case-insensitive literal text filter." },
 				},
 				required = {},
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local targets = {}
 				if args.path and util.trim(args.path) ~= "" then
 					local instance, err = H.resolve(args.path)
@@ -98,32 +151,44 @@ return function(env)
 					targets = guiRoots()
 				end
 
-				local rows = {}
-				for _, root in ipairs(targets) do
-					local ok, descendants = pcall(function() return root:GetDescendants() end)
-					if ok then
-						for _, node in ipairs(descendants) do
-							local okText, text = pcall(function() return node.Text end)
-							if okText and type(text) == "string" and util.trim(text) ~= "" then
-								local visible = true
-								pcall(function() visible = node.Visible end)
-								rows[#rows + 1] = {
-									text = util.ellipsis(text, 90),
-									path = H.pathOf(node),
-									class = node.ClassName,
-									visible = visible,
-								}
-							end
+				local rows, scanned, unreadable, complete, nextOffset, reason = {}, 0, 0, true, nil, nil
+				local limit, offset = H.limit(args.limit, 50, 120), H.limit(args.offset, 1, 20001)
+				local budget, used = H.resultBudget() - 500, 0
+				if budget < 128 then return H.fail("increase the result budget to at least 628 bytes") end
+				local needle = tostring(args.text or ""):lower()
+				local function inspect(node, index)
+					if index < offset then return end
+					local readable, value, visible = pcall(function()
+						if not (node:IsA("TextLabel") or node:IsA("TextButton") or node:IsA("TextBox")) then return nil end
+						local ancestor, depth = node, 0
+						while ancestor and depth < 128 do
+							if (ancestor:IsA("GuiObject") and not ancestor.Visible) or (ancestor:IsA("LayerCollector") and not ancestor.Enabled) then return node.Text, false end
+							ancestor, depth = ancestor.Parent, depth + 1
 						end
-					end
+						return node.Text, ancestor == nil
+					end)
+					if not readable then unreadable = unreadable + 1; return end
+					if type(value) ~= "string" or not value:find("%S") or (not visible and not args.include_hidden) or not value:lower():find(needle, 1, true) then return end
+					local line = string.format("%q %s[%s] %s", util.ellipsis(value, 160), visible and "" or "(hidden) ", node.ClassName, H.pathOf(node))
+					if used + #line + 1 > budget then nextOffset = index; return false end
+					rows[#rows + 1] = line; used = used + #line + 1
+					if #rows >= limit then nextOffset = index + 1; return false end
 				end
-
-				if #rows == 0 then return "No text elements found." end
-				return string.format("%d text element(s):\n%s", #rows,
-					H.list(rows, H.limit(args.limit, 50, 120), function(row)
-						return string.format("%q %s[%s] %s", row.text,
-							row.visible and "" or "(hidden) ", row.class, row.path)
-					end))
+				for rootIndex, root in ipairs(targets) do
+					if ctx and ctx.aborted and ctx.aborted() then return { ok = false, text = "GUI text scan cancelled.", data = { status = "aborted" } } end
+					scanned = scanned + 1
+					if inspect(root, scanned) == false then complete = false; break end
+					local base = scanned
+					local stats = scan.descendants(root, ctx, function(node, index) return inspect(node, base + index) end, math.max(0, 20000 - scanned))
+					scanned, unreadable = scanned + stats.scanned, unreadable + stats.unreadable
+					if not stats.complete then complete = false; reason = stats.reason end
+					if scanned >= 20000 and rootIndex < #targets then complete, reason = false, "scan limit" end
+					if nextOffset or scanned >= 20000 or stats.reason == "aborted" then break end
+				end
+				if #rows == 0 and nextOffset then return H.fail("one GUI row exceeds the result budget; narrow the root or increase the budget") end
+				complete = complete and unreadable == 0
+				return { ok = reason ~= "aborted", text = string.format("%d text element(s); %d nodes scanned%s.\n%s", #rows, scanned, complete and "" or "; incomplete traversal", table.concat(rows, "\n")),
+					data = { count = #rows, scanned = scanned, unreadable = unreadable, complete = complete, nextOffset = nextOffset, reason = reason } }
 			end,
 		},
 		{
@@ -143,7 +208,7 @@ return function(env)
 				},
 				required = { "path" },
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local button, err = H.resolve(args.path)
 				if not button then return H.fail(err) end
 				local okA, isButton = pcall(function() return button:IsA("GuiButton") end)
@@ -160,36 +225,37 @@ return function(env)
 					return H.fail("could not read the connections on that signal")
 				end
 				if #connections == 0 then
-					return string.format("%s has no %s handlers, so pressing it would do nothing.",
-						H.pathOf(button), signalName)
+					return H.fail(string.format("%s has no %s handlers; nothing was fired", H.pathOf(button), signalName))
 				end
+				if #connections > 256 then return H.fail("more than 256 handlers; select a more specific button or signal") end
 
 				local fired = 0
 				for _, connection in ipairs(connections) do
-					local okFire = pcall(function() connection:Fire() end)
-					if okFire then fired = fired + 1 end
+					if ctx and ctx.aborted and ctx.aborted() then break end
+					local okFire, value = pcall(function() return connection:Fire() end)
+					if okFire and value ~= false then fired = fired + 1 end
 				end
-				return string.format("Fired %d of %d %s handler(s) on %s",
-					fired, #connections, signalName, H.pathOf(button))
+				return { ok = fired == #connections, text = string.format("Fired %d of %d %s handler(s) on %s", fired, #connections, signalName, H.pathOf(button)),
+					data = { fired = fired, total = #connections, status = fired == #connections and "dispatched" or "partial" } }
 			end,
 		},
 		{
 			name = "click_detector_fire",
 			risk = "danger",
-			needs = { "hooks" },
-			description = "Trigger a ClickDetector or a part's TouchInterest as if the player had interacted with it. This reaches the server.",
+			description = "Submit a ClickDetector, ProximityPrompt hold, or part touch interaction. Prompt/touch holds are released on cancellation or unload; host acceptance does not prove a server response.",
 			parameters = {
 				type = "object",
 				properties = {
 					path = { type = "string", description = "Path to the ClickDetector, or to a part containing one." },
-					distance = { type = "number", description = "Reported click distance. Default 0." },
+					distance = { type = "number", minimum = 0, maximum = 10000, description = "Reported click distance. Default 0." },
 				},
 				required = { "path" },
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local instance, err = H.resolve(args.path)
 				if not instance then return H.fail(err) end
 
+				if aborted(ctx) then return H.fail("interaction cancelled before dispatch") end
 				local detector = instance
 				local okA, isDetector = pcall(function() return instance:IsA("ClickDetector") end)
 				if not (okA and isDetector) then
@@ -198,18 +264,16 @@ return function(env)
 
 				if detector and caps.fn.fireclickdetector then
 					local ok, fireErr = pcall(caps.fn.fireclickdetector, detector, tonumber(args.distance) or 0)
-					if not ok then return H.fail(tostring(fireErr)) end
+					if not ok or fireErr == false then return H.fail("click was rejected: " .. tostring(fireErr)) end
 					return "Clicked " .. H.pathOf(detector)
 				end
 
-				local prompt = instance:FindFirstChildOfClass("ProximityPrompt")
+				local prompt = instance:IsA("ProximityPrompt") and instance or instance:FindFirstChildOfClass("ProximityPrompt")
 				if prompt then
-					local ok = pcall(function() prompt:InputHoldBegin() end)
-					if ok then
-						clock.wait(math.min(prompt.HoldDuration or 0, 2) + 0.05)
-						pcall(function() prompt:InputHoldEnd() end)
-						return "Triggered the ProximityPrompt on " .. H.pathOf(prompt)
-					end
+					local duration = tonumber(prompt.HoldDuration) or 0
+					if duration ~= duration or duration < 0 or duration > 20 then return H.fail("prompt hold duration is outside the supported 0–20 second range") end
+					return hold(function() return prompt:InputHoldBegin() end, function() return prompt:InputHoldEnd() end,
+						duration + 0.05, ctx, "Prompt hold on " .. H.pathOf(prompt))
 				end
 
 				if caps.fn.firetouchinterest then
@@ -217,10 +281,8 @@ return function(env)
 						and (env.plr.Character:FindFirstChild("HumanoidRootPart") or env.plr.Character.PrimaryPart)
 					local okPart, isPart = pcall(function() return instance:IsA("BasePart") end)
 					if root and okPart and isPart then
-						pcall(caps.fn.firetouchinterest, root, instance, 0)
-						clock.wait(0.05)
-						pcall(caps.fn.firetouchinterest, root, instance, 1)
-						return "Simulated a touch on " .. H.pathOf(instance)
+						return hold(function() return caps.fn.firetouchinterest(root, instance, 0) end,
+							function() return caps.fn.firetouchinterest(root, instance, 1) end, 0.05, ctx, "Touch on " .. H.pathOf(instance))
 					end
 				end
 
@@ -244,27 +306,29 @@ return function(env)
 				local instance, err = H.resolve(args.path)
 				if not instance then return H.fail(err) end
 
-				local okNew, highlight = pcall(function() return Instance.new("Highlight") end)
-				if not okNew or not highlight then return H.fail("this host has no Highlight class") end
-
 				local colour = Color3.fromRGB(0, 225, 190)
 				if args.colour and util.trim(args.colour) ~= "" then
 					local parsed = H.coerce(args.colour, colour)
-					if parsed then colour = parsed end
+					if not parsed then return H.fail("colour must be valid RGB or #rrggbb") end
+					colour = parsed
 				end
+				local okNew, highlight = pcall(function() return Instance.new("Highlight") end)
+				if not okNew or not highlight then return H.fail("this host has no Highlight class") end
+				local release = env.require("runtime/dispose").add(function() highlight:Destroy() end, "tool highlight")
 
-				highlight.Name = "UAI_Highlight"
-				highlight.FillColor = colour
-				highlight.OutlineColor = colour
-				highlight.FillTransparency = 0.65
-				highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-				highlight.Adornee = instance
-				highlight.Parent = instance
+				local configured, problem = pcall(function()
+					highlight.Name = "UAI_Highlight"
+					highlight.FillColor = colour
+					highlight.OutlineColor = colour
+					highlight.FillTransparency = 0.65
+					highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+					highlight.Adornee = instance
+					highlight.Parent = instance
+				end)
+				if not configured then release(); return H.fail("highlight could not be configured: " .. tostring(problem)) end
 
 				local seconds = util.clamp(tonumber(args.seconds) or 6, 1, 30)
-				clock.delay(seconds, function()
-					pcall(function() highlight:Destroy() end)
-				end)
+				clock.delay(seconds, release)
 				return string.format("Highlighted %s for %.0f seconds", H.pathOf(instance), seconds)
 			end,
 		},
@@ -283,7 +347,7 @@ return function(env)
 			run = function(args)
 				local overlay = env.require("ui/overlay")
 				local text = util.ellipsis(args.text, 140)
-				overlay.toast(text, args.tone or "info")
+				if not overlay.toast(text, args.tone or "info") then return H.fail("the client interface is not mounted; notification was not shown") end
 				return "Shown to the user: " .. text
 			end,
 		},
@@ -301,8 +365,8 @@ return function(env)
 				local text = tostring(args.text or "")
 				if text == "" then return "Nothing to copy." end
 				local ok, err = pcall(caps.fn.clipboard, text)
-				if not ok then return H.fail(tostring(err)) end
-				return string.format("Copied %d characters to the clipboard.", #text)
+				if not ok or err == false then return H.fail("clipboard write was rejected: " .. tostring(err)) end
+				return string.format("Copied %d bytes to the clipboard.", #text)
 			end,
 		},
 	}

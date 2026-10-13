@@ -19,6 +19,8 @@ Turn a clear scripting request into a small working result:
    existing file, read its relevant source. For a selected Code document, use
    `code_read` so unsaved edits are included. For a new self-contained script using
    standard services, begin authoring; game-wide discovery is unnecessary.
+   When only a filename or extension is known, use `file_find` with a narrow path
+   and filename glob; it discovers reusable paths without reading file contents.
 3. Inspect only unknown facts the implementation depends on: a target's exact
    path/class, a property, an existing callback or a remote's observed arguments.
    Batch independent reads. Do not guess a remote, module API or executor function.
@@ -66,6 +68,7 @@ Choose the shortest workflow that can satisfy the request:
 | --- | --- | --- |
 | New simple utility using known Roblox services | Author one saved script | One syntax check and one authorized execution |
 | Change a named saved script | Read that file or search within it | Exact edits and a focused behavior check |
+| Locate source by filename or extension | `file_find` under the current game directory | `file_read_many` for selected returned paths |
 | Fix the user's open Code document | `code_tabs`, then `code_read` | Revision-guarded edit and `code_run` |
 | Add controls to a standalone script | `ui_library_docs` Quickstart, Controls and Lifecycle | Other UI sections for the actual controls/layout |
 | Understand one game behavior | Narrow instance/script query under the relevant root | Read selected source or observe the relevant remote |
@@ -77,7 +80,7 @@ Tool availability matters more than a familiar tool name. The OpenCode provider
 may include `bash`, `read`, `edit`, `glob`, `grep` and `list` solely as required
 compatibility declarations. They are not local shell/filesystem implementations
 unless the actual client explicitly supplies those tools. Use `file_read`,
-`file_search`, `file_list`, `file_edit` and the other real offered tools with their
+`file_find`, `file_search`, `file_list`, `file_edit` and the other real offered tools with their
 own schemas. Do not send shell commands to `run_luau`. If an unknown-tool response
 suggests an available tool, construct a new call using that tool's schema; changing
 the name while retaining another API's arguments is not a repair.
@@ -88,6 +91,18 @@ scope and deliverable; do not have multiple workers edit the same file or mutate
 the same runtime state. The default read subagent cannot implement a change. Use
 an appropriate available preset when changes are part of its authorized task.
 Collect relevant reports before claiming the delegated work is complete.
+
+Project tests accept `modules` containing declared test IDs and `filter` containing
+a case-name substring. Run the selection relevant to the change, inspect its
+pass/fail and skipped counts, and expand only when the change requires broader
+coverage. Zero matching cases is a failure. Unchanged sources reuse bounded
+lexical and syntax caches; saved files and dependencies are still rechecked.
+
+For external documentation, `web_read` returns a `pageId` and `nextOffset`. Continue
+with `page_id` and `offset` to read the same retained text without another HTTP
+request. These snapshots expire after five minutes or eviction; refetch an expired
+URL when needed. `skills_list` can filter installed names, filenames and descriptions
+with `query` before reading only relevant skill bodies.
 
 Do not turn uncertainty into broad refusals. A missing API, a server-owned state
 or a denied tool is a specific limit. Complete the useful authorized parts that

@@ -21,6 +21,7 @@ return function(env)
 	local clock = env.require("runtime/clock")
 	local log = env.require("runtime/log")
 	local iy = env.require("runtime/iy")
+	local plugins = env.require("runtime/iy_plugins")
 
 	local API_URL = "https://iyplugins.pages.dev/data/api.json"
 	local SITE = "https://iyplugins.pages.dev/"
@@ -143,7 +144,7 @@ return function(env)
 	end
 
 	-- Download, write to the workspace root, register with IY.
-	function M.install(plugin)
+	function M.install(plugin, ctx)
 		local wanted = util.trim(tostring(plugin or ""))
 		if wanted == "" then return false, "no plugin named" end
 
@@ -180,13 +181,14 @@ return function(env)
 		if type(registered) ~= "function" then
 			return false, "IY is loaded but its plugin loader is not reachable"
 		end
-		local fileName = entry.file.name
-		local okPresent = false
-		local okRead = pcall(function()
-			local existing = read(fileName)
-			okPresent = type(existing) == "string" and #existing > 0
-		end)
-		if okRead and okPresent then
+		local fileName, filenameError = plugins.filename(entry.file.name)
+		if not fileName or fileName ~= entry.file.name then return false, filenameError or "the store supplied a noncanonical plugin filename" end
+		if not caps.fn.isfile then return false, "isfile is required to avoid overwriting an existing plugin" end
+		local checked, present = pcall(caps.fn.isfile, fileName)
+		if not checked then return false, "could not check the plugin destination" end
+		if present then
+			local readable, existing = pcall(read, fileName)
+			if not readable or type(existing) ~= "string" then return false, "existing plugin is unreadable; refusing to overwrite it" end
 			return true, fileName .. " is already installed; load it with plugin " .. fileName:gsub("%.iy$", "")
 		end
 
@@ -197,6 +199,12 @@ return function(env)
 		end
 		local source = tostring(res.body or "")
 		if #source == 0 then return false, "the download was empty" end
+		if #source > 2 * 1024 * 1024 then return false, "plugin source exceeds 2 MiB" end
+		if ctx and ctx.aborted and ctx.aborted() then return false, "cancelled before writing the plugin" end
+		-- A native download can yield long enough for a local editor to create the
+		-- destination. Do not overwrite those bytes or register an unverified file.
+		local nowChecked, existsNow = pcall(caps.fn.isfile, fileName)
+		if not nowChecked or existsNow then return false, "plugin destination changed or became unreadable during download; inspect it before retrying" end
 
 		-- A size sanity check against the index: a body wildly larger than the
 		-- catalogue's number is an error page or a redirect, not a plugin.
@@ -206,25 +214,27 @@ return function(env)
 
 		local okWrite = pcall(write, fileName, source)
 		if not okWrite then return false, "could not write " .. fileName .. " to the workspace" end
+		local verified, saved = pcall(read, fileName)
+		if not verified or saved ~= source then return false, "plugin write could not be verified; it was not loaded" end
+		if ctx and ctx.aborted and ctx.aborted() then return false, "plugin was saved but loading was cancelled" end
 
 		local okLoad, loadErr = pcall(registered, fileName)
 		if not okLoad then
 			pcall(function()
-				if caps.fn.delfile then caps.fn.delfile(fileName) end
+				if caps.fn.delfile and read(fileName) == source then caps.fn.delfile(fileName) end
 			end)
 			return false, "saved, but IY could not load it: " .. tostring(loadErr)
 		end
 
 		log.info("iy-store", "installed " .. fileName .. " from the store")
-		return true, fileName
+		return true, "Saved " .. fileName .. " and requested registration through IY"
 	end
 
 	-- Unregister from IY, then remove the file.
 	function M.uninstall(plugin)
 		if iy.getMode() == "off" then return false, "Infinite Yield integration is off in Settings" end
-		local wanted = util.trim(tostring(plugin or "")):lower()
-		if wanted == "" then return false, "no plugin named" end
-		if wanted:sub(-3) ~= ".iy" then wanted = wanted .. ".iy" end
+		local wanted, why = plugins.filename(plugin)
+		if not wanted then return false, why end
 
 		local remover = iyFunction("deletePlugin")
 		if type(remover) ~= "function" then

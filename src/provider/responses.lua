@@ -205,12 +205,16 @@ return function(env)
 						end
 					end
 				elseif item.type == "function_call" then
+					if #calls >= sse.limits.calls then return "", "", {}, "tool call limit exceeded" end
+					local arguments = item.arguments == nil and "{}" or item.arguments
+					if type(arguments) ~= "string" then return "", "", {}, "tool arguments must be a string" end
+					if #arguments > sse.limits.arguments then return "", "", {}, "tool argument limit exceeded" end
 					calls[#calls + 1] = {
 						id = tostring(item.call_id or item.id or ""),
 						type = "function",
 						["function"] = {
 							name = tostring(item.name or ""),
-							arguments = tostring(item.arguments or "{}"),
+							arguments = arguments,
 						},
 					}
 				elseif item.type == "reasoning" then
@@ -229,14 +233,45 @@ return function(env)
 		local content, reasoning, slots, order = {}, {}, {}, {}
 		local usage, model, id, streamError, frames = nil, nil, nil, nil, 0
 		local completed = false
-		local function slotFor(callId)
-			local key = tostring(callId or "")
-			if not slots[key] then
-				if #order >= sse.limits.calls then return nil end
-				slots[key] = { id = key ~= "" and key or nil, name = nil, args = {} }
-				order[#order + 1] = key
+		local function slotFor(itemId, callId, outputIndex)
+			local keys = {}
+			if type(itemId) == "string" and itemId ~= "" then keys[#keys + 1] = "id:" .. itemId end
+			if type(callId) == "string" and callId ~= "" then keys[#keys + 1] = "id:" .. callId end
+			if type(outputIndex) == "number" and outputIndex >= 0 and outputIndex < math.huge and outputIndex == math.floor(outputIndex) then
+				keys[#keys + 1] = "index:" .. tostring(outputIndex)
 			end
-			return slots[key]
+			if #keys == 0 then error("tool call has no item, call or output identity", 0) end
+			local slot
+			for _, key in ipairs(keys) do
+				local existing = slots[key]
+				if existing then
+					if slot and slot ~= existing then error("conflicting tool call identities", 0) end
+					slot = existing
+				end
+			end
+			if not slot then
+				if #order >= sse.limits.calls then error("tool call limit exceeded", 0) end
+				slot = { id = itemId, args = {}, bytes = 0 }
+				order[#order + 1] = slot
+			end
+			if type(callId) == "string" and callId ~= "" then
+				if slot.callId and slot.callId ~= callId then error("conflicting tool call identity", 0) end
+				slot.id, slot.callId = callId, callId
+			end
+			for _, key in ipairs(keys) do slots[key] = slot end
+			return slot
+		end
+		local function argumentsFor(slot, arguments, replace)
+			if arguments == nil then return end
+			if type(arguments) ~= "string" then error("tool arguments must be a string", 0) end
+			local bytes = (replace and 0 or slot.bytes) + #arguments
+			if bytes > sse.limits.arguments then error("tool argument limit exceeded", 0) end
+			if replace then slot.args = { arguments }
+			else
+				if slot.complete then error("tool argument delta arrived after completion", 0) end
+				slot.args[#slot.args + 1] = arguments
+			end
+			slot.bytes = bytes
 		end
 		local decoder = sse.decoder(function(frame)
 			frames = frames + 1
@@ -253,17 +288,23 @@ return function(env)
 			if kind == "response.output_text.delta" and type(decoded.delta) == "string" then
 				content[#content + 1] = decoded.delta
 			elseif kind == "response.function_call_arguments.delta" then
-				local slot = slotFor(decoded.item_id)
-				if slot and type(decoded.delta) == "string" then slot.args[#slot.args + 1] = decoded.delta end
-			elseif kind == "response.output_item.done" and type(decoded.item) == "table" then
+				local slot = slotFor(decoded.item_id, decoded.call_id, decoded.output_index)
+				argumentsFor(slot, decoded.delta, false)
+			elseif kind == "response.function_call_arguments.done" then
+				local slot = slotFor(decoded.item_id, decoded.call_id, decoded.output_index)
+				argumentsFor(slot, decoded.arguments, true)
+				slot.complete = true
+			elseif (kind == "response.output_item.added" or kind == "response.output_item.done") and type(decoded.item) == "table" then
 				local item = decoded.item
 				if item.type == "function_call" then
-					local slot = slotFor(item.call_id or item.id)
-					if slot then
-						if type(item.name) == "string" then slot.name = item.name end
-						if type(item.arguments) == "string" and item.arguments ~= "" then slot.args[#slot.args + 1] = item.arguments end
-					end
-				elseif item.type == "reasoning" then
+					local slot = slotFor(item.id, item.call_id, decoded.output_index)
+					if type(item.name) == "string" then slot.name = item.name end
+					-- Done items contain the full value, not another delta. Bind both
+					-- IDs to one slot and replace fragments even when IDs coincide.
+					if kind == "response.output_item.done" then
+						argumentsFor(slot, item.arguments, true); slot.complete = true
+					elseif item.arguments ~= nil and item.arguments ~= "" then argumentsFor(slot, item.arguments, true) end
+				elseif item.type == "reasoning" and kind == "response.output_item.done" then
 					for _, part in ipairs(type(item.summary) == "table" and item.summary or {}) do
 						if type(part) == "table" and type(part.text) == "string" and part.text ~= "" then
 							reasoning[#reasoning + 1] = part.text
@@ -280,14 +321,16 @@ return function(env)
 				-- text already streamed as deltas, so a non-empty final output
 				-- replaces the accumulated partials rather than doubling them.
 				if type(response.output) == "table" then
-					local finalContent, finalReasoning, finalCalls = assembleOutput(response.output)
+					local finalContent, finalReasoning, finalCalls, finalError = assembleOutput(response.output)
+					if finalError then error(finalError, 0) end
 					if finalContent ~= "" then content = { finalContent } end
 					if finalReasoning ~= "" then reasoning = { finalReasoning } end
-					if #finalCalls > 0 then
+					if #response.output > 0 then
 						slots, order = {}, {}
 						for _, call in ipairs(finalCalls) do
-							local slot = slotFor(call.id)
-							if slot then slot.name, slot.args = call["function"].name, { call["function"].arguments } end
+							local slot = slotFor(nil, call.id)
+							slot.name = call["function"].name
+							argumentsFor(slot, call["function"].arguments, true)
 						end
 					end
 				end
@@ -298,8 +341,7 @@ return function(env)
 		if ok then ok, why = decoder.finish() end
 		streamError = streamError or (not ok and why or nil)
 		local calls = {}
-		for _, key in ipairs(order) do
-			local slot = slots[key]
+		for _, slot in ipairs(order) do
 			if slot.name then
 				calls[#calls + 1] = {
 					id = slot.id or ("call_" .. tostring(#calls + 1)),
@@ -326,7 +368,7 @@ return function(env)
 		if type(decoded) ~= "table" then return nil end
 		local output = decoded.output
 		if type(decoded) == "table" and decoded.object == "response" and output == nil then output = {} end
-		local content, reasoning, calls = assembleOutput(output)
+		local content, reasoning, calls, outputError = assembleOutput(output)
 		local usage = type(decoded.usage) == "table" and decoded.usage or nil
 		return {
 			role = "assistant",
@@ -338,7 +380,7 @@ return function(env)
 			id = decoded.id,
 			usage = usage,
 			frames = 0,
-			streamError = nil,
+			streamError = outputError and ("malformed_stream: " .. outputError) or nil,
 		}
 	end
 

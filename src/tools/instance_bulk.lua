@@ -17,7 +17,7 @@ return function(env)
 		return {}
 	end
 
-	local function project(node, properties, attributes)
+	local function project(node, properties, attributes, includeTyped)
 		local row = { instanceId = refs.id(node), path = util.ellipsis(H.pathOf(node), 300), class = node.ClassName, properties = util.emptyObject() }
 		local props, attrs, failures, typedProps, typedAttrs = {}, {}, {}, {}, {}
 		local function typed(value)
@@ -34,17 +34,17 @@ return function(env)
 			if key == "Source" then props[key] = "<use script_source>"
 			else
 				local ok, value = fields.read(node, "property", key)
-				if ok and type(value) ~= "function" then props[key], typedProps[key] = shown(value), typed(value)
+				if ok and type(value) ~= "function" then props[key], typedProps[key] = shown(value), includeTyped ~= false and typed(value) or nil
 				else failures[key] = "property is unreadable" end
 			end
 		end
 		for _, key in ipairs(attributes or {}) do
 			local ok, value = fields.read(node, "attribute", key)
-			if ok then attrs[key], typedAttrs[key] = shown(value), typed(value)
+			if ok then attrs[key], typedAttrs[key] = shown(value), includeTyped ~= false and typed(value) or nil
 			else failures["attribute:" .. key] = "attribute is unreadable" end
 		end
-		if next(props) then row.properties, row.typedProperties = props, typedProps end
-		if next(attrs) then row.attributes, row.typedAttributes = attrs, typedAttrs end
+		if next(props) then row.properties = props; if next(typedProps) then row.typedProperties = typedProps end end
+		if next(attrs) then row.attributes = attrs; if next(typedAttrs) then row.typedAttributes = typedAttrs end end
 		if next(failures) then row.errors = failures end
 		return row
 	end
@@ -56,7 +56,7 @@ return function(env)
 		if cap < 512 then return H.fail("instance_query needs a result budget of at least 512 bytes") end
 		local needle, class = util.trim(args.name):lower(), util.trim(args.class)
 		local limit, remaining = args.limit or 20, cap - 300
-		local items, nextOffset, tooLarge = {}, nil, false
+		local items, nextOffset, tooLarge, unreadable = {}, nil, false, 0
 		local stats = scan.descendants(root, ctx, function(node, index)
 			local ok, matches = pcall(function()
 				if needle ~= "" and not node.Name:lower():find(needle, 1, true) then return false end
@@ -68,8 +68,9 @@ return function(env)
 				end
 				return true
 			end)
-			if not ok or not matches then return end
-			local row = project(node, args.properties, args.attributes)
+			if not ok then unreadable = unreadable + 1; return end
+			if not matches then return end
+			local row = project(node, args.properties, args.attributes, args.typed_values)
 			local text = util.encode(row)
 			if #text + 1 > remaining then
 				nextOffset, tooLarge = index, #items == 0
@@ -79,6 +80,7 @@ return function(env)
 			remaining = remaining - #text - 1
 			if #items >= limit then nextOffset = index + 1; return false end
 		end, 20000, args.offset or 1)
+		if unreadable > 0 then stats.complete = false; stats.reason = stats.reason or "unreadable filters" end
 		if tooLarge then return H.fail("one result exceeds the output budget; request fewer properties or increase agent.resultCap") end
 		if nextOffset and nextOffset > 20000 then nextOffset = nil; stats.reason = "scan limit" end
 		local summary = string.format("%d instance(s); %d nodes scanned; %d unreadable subtree(s).", #items, stats.scanned, stats.unreadable)
@@ -87,7 +89,7 @@ return function(env)
 		local footer = nextOffset and ("\nContinue with offset=" .. nextOffset .. " and the same query. The tree is live.") or ""
 		return { ok = stats.reason ~= "aborted" and stats.reason ~= "unreadable root", text = summary .. footer,
 			data = { items = items, scanned = stats.scanned, nextOffset = nextOffset, complete = stats.complete,
-				unreadable = stats.unreadable, status = stats.reason == "aborted" and "aborted" or "completed" } }
+				unreadable = stats.unreadable + unreadable, reason = stats.reason, status = stats.reason == "aborted" and "aborted" or "completed" } }
 	end
 
 	local function getMany(args, ctx)
@@ -95,12 +97,13 @@ return function(env)
 		if cap < 512 then return H.fail("batch inspection needs a result budget of at least 512 bytes") end
 		local start = args.start_index or 1
 		if start > #args.paths then return H.fail("start_index is beyond the paths array") end
-		local rows, remaining, succeeded = {}, cap - 300, 0
+		local rows, remaining, succeeded, cache = {}, cap - 300, 0, {}
 		local nextIndex, stopped = start, false
 		for index = start, #args.paths do
 			if ctx and ctx.aborted and ctx.aborted() then stopped = true; break end
 			local node, err = H.resolve(args.paths[index])
-			local row = node and project(node, args.properties, args.attributes) or { path = util.ellipsis(args.paths[index], 300), error = util.ellipsis(err, 200) }
+			if node and not cache[node] then cache[node] = project(node, args.properties, args.attributes, args.typed_values) end
+			local row = node and util.deepCopy(cache[node]) or { path = util.ellipsis(args.paths[index], 300), error = util.ellipsis(err, 200) }
 			row.index, row.ok = index, node ~= nil
 			local text = util.encode(row)
 			if #text + 1 > remaining then
@@ -126,6 +129,7 @@ return function(env)
 				root = { type = "string", description = "Default Workspace." },
 				name = { type = "string" }, class = { type = "string" }, tag = { type = "string", minLength = 1 },
 				properties = names, attributes = names,
+				typed_values = { type = "boolean", description = "Include typed value graphs for later guarded edits; default true. False returns lighter display values." },
 				limit = { type = "integer", minimum = 1, maximum = 100, description = "Default 20; also bounded by result size." },
 				offset = { type = "integer", minimum = 1, maximum = 20000, description = "Resume at the returned traversal offset." },
 			}, required = {} },
@@ -137,6 +141,7 @@ return function(env)
 			parameters = { type = "object", properties = {
 				paths = { type = "array", minItems = 1, maxItems = 20, items = { type = "string", minLength = 1, maxLength = 4096 } },
 				properties = names, attributes = names,
+				typed_values = { type = "boolean", description = "Include typed value graphs for later guarded edits; default true. False returns lighter display values." },
 				start_index = { type = "integer", minimum = 1, maximum = 20, description = "Resume at this request index if the result budget filled." },
 			}, required = { "paths" } },
 			run = getMany,

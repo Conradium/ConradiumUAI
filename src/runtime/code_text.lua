@@ -38,6 +38,26 @@ return function()
 		while low < high do local mid = math.ceil((low + high) / 2); if starts[mid] <= offset then low = mid else high = mid - 1 end end
 		return low
 	end
+	-- Locate a requested source page without allocating every line of a document.
+	function M.lineRange(text, firstLine, count)
+		if type(firstLine) ~= "number" or firstLine < 1 or firstLine == math.huge or firstLine ~= math.floor(firstLine) then return nil, "Invalid start line" end
+		if count ~= nil and (type(count) ~= "number" or count < 1 or count == math.huge or count ~= math.floor(count)) then return nil, "Invalid line count" end
+		local at = 1
+		for _ = 2, firstLine do
+			local newline = text:find("\n", at, true)
+			if not newline then return nil, "Line is outside source" end
+			at = newline + 1
+		end
+		local after = at
+		if count then
+			for _ = 1, count do
+				local newline = text:find("\n", after, true)
+				if not newline then after = #text + 1; break end
+				after = newline + 1
+			end
+		else after = #text + 1 end
+		return at, after
+	end
 	local function wordByte(byte) return byte and (byte >= 128 or (byte >= 48 and byte <= 57) or (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122) or byte == 95) end
 	function M.search(text, query, options)
 		options = options or {}

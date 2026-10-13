@@ -63,13 +63,14 @@ return function(env)
 		local context, err = gravity.current()
 		if not context then return nil, err end
 		local matches, selectionCount, overrideCount = {}, 0, 0
+		local needle = util.trim(args.query):lower()
 		local entries = held(context)
 		for _, entry in ipairs(entries) do
 			local picked, override = (context.x6.pc_selected or {})[entry.part] == true, overridden(entry.record)
 			if picked then selectionCount = selectionCount + 1 end
 			if override then overrideCount = overrideCount + 1 end
 			if (args.filter ~= "selected" or picked) and (args.filter ~= "overridden" or override)
-				and tostring(entry.part.Name):lower():find(util.trim(args.query):lower(), 1, true) then matches[#matches + 1] = entry end
+				and tostring(entry.part.Name):lower():find(needle, 1, true) then matches[#matches + 1] = entry end
 		end
 		local offset, limit, results = args.offset or 1, args.limit or 10, {}
 		for index = offset, math.min(#matches, offset + limit - 1) do
@@ -77,7 +78,7 @@ return function(env)
 			results[#results + 1] = { id = e.id, name = e.part.Name, path = util.truncate(H.pathOf(e.part), 300),
 				position = vector(e.part.Position), target = vector(d.pc_target), slot = d.slot,
 				selected = (context.x6.pc_selected or {})[e.part] == true, mode = d.pc_mode or "normal",
-				shape = d.pc_shape, ride = d.pc_ride == true, physics = d.pc_phys }
+				shape = d.pc_shape, ride = d.pc_ride == true, physics = d.pc_phys and util.copy(d.pc_phys) }
 		end
 		return { parts = results, total = #matches, held = #entries, selected = selectionCount, overridden = overrideCount,
 			nextOffset = offset + #results <= #matches and offset + #results or nil }

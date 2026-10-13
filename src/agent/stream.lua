@@ -7,7 +7,9 @@ return function(env)
 	local M = { previewBytes = 65536 }
 	function M.new(session, model, aborted)
 		local handle = { id = util.uid("stream") }
-		local assembly, content, reasoning = sse.assembler(), "", ""
+		-- Previews need prose only. The transport's authoritative assembler owns
+		-- tool arguments and validates them; retaining them here duplicates source.
+		local assembly, content, reasoning = sse.assembler({ toolCalls = false }), "", ""
 		local closed, pending, last, generation = false, false, nil, 0
 		local full = {}
 		local function append(value, parts, channel)

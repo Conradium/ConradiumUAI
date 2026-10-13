@@ -389,70 +389,52 @@ return function(env)
 		-- is nothing it can be attached to. An unanswered call is *answered*, because
 		-- dropping it instead would discard what the model actually did.
 		function ctx.repair()
-			local kept, dropped = {}, 0
+			local out, dropped, filled = {}, 0, 0
+			local owner, pending = nil, nil
+			local function finishOwner()
+				if not owner then return end
+				for _, call in ipairs(owner.toolCalls) do
+					if call.id ~= nil and pending[tostring(call.id)] then
+						pending[tostring(call.id)] = nil
+						out[#out + 1] = {
+							role = "tool", tool_call_id = call.id,
+							name = (call["function"] and call["function"].name) or call.name or "tool",
+							content = "This call did not complete: the turn ended before a result was recorded.",
+							at = owner.at,
+						}
+						filled = filled + 1
+					end
+				end
+				owner, pending = nil, nil
+			end
+			-- One forward pass indexes the immediately preceding batch. Each result
+			-- consumes its ID once, preventing duplicate receipts from poisoning the
+			-- provider request without rescanning siblings or the whole call list.
 			for _, message in ipairs(ctx.messages) do
 				if message.role == "tool" then
-					-- The nearest assistant turn behind this one, looking past the sibling
-					-- results that arrived with it.
-					local owner = nil
-					for back = #kept, 1, -1 do
-						local candidate = kept[back]
-						if candidate.role == "assistant" then
-							owner = candidate
-							break
-						elseif candidate.role ~= "tool" then
-							break
-						end
-					end
-					local matched = false
-					for _, call in ipairs((owner and owner.toolCalls) or {}) do
-						if call.id ~= nil and tostring(call.id) == tostring(message.tool_call_id) then
-							matched = true
-						end
-					end
-					if matched then
-						kept[#kept + 1] = message
-					else
-						dropped = dropped + 1
-					end
+					local key = message.tool_call_id ~= nil and tostring(message.tool_call_id) or nil
+					if pending and key and pending[key] then
+						pending[key] = nil
+						out[#out + 1] = message
+					else dropped = dropped + 1 end
 				else
-					kept[#kept + 1] = message
-				end
-			end
-
-			local out, index, filled = {}, 1, 0
-			while index <= #kept do
-				local message = kept[index]
-				out[#out + 1] = message
-				index = index + 1
-				if message.role == "assistant" and message.toolCalls and #message.toolCalls > 0 then
-					local answered = {}
-					while index <= #kept and kept[index].role == "tool" do
-						answered[tostring(kept[index].tool_call_id)] = true
-						out[#out + 1] = kept[index]
-						index = index + 1
-					end
-					for _, call in ipairs(message.toolCalls) do
-						if call.id ~= nil and not answered[tostring(call.id)] then
-							out[#out + 1] = {
-								role = "tool",
-								tool_call_id = call.id,
-								name = (call["function"] and call["function"].name) or call.name or "tool",
-								content = "This call did not complete: the turn ended before a result "
-									.. "was recorded.",
-								at = message.at,
-							}
-							filled = filled + 1
+					finishOwner()
+					out[#out + 1] = message
+					if message.role == "assistant" and message.toolCalls and #message.toolCalls > 0 then
+						owner, pending = message, {}
+						for _, call in ipairs(message.toolCalls) do
+							if call.id ~= nil then pending[tostring(call.id)] = true end
 						end
 					end
 				end
 			end
+			finishOwner()
 
 			if dropped > 0 or filled > 0 then
 				ctx.messages = out
 				log.warn("context", string.format(
 					"repaired tool pairing: %s dropped, %s filled in",
-					util.pluralise(dropped, "orphaned result"),
+					util.pluralise(dropped, "orphaned or duplicate result"),
 					util.pluralise(filled, "unanswered call")))
 			end
 			return dropped, filled

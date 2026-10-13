@@ -9,10 +9,12 @@ return function(env)
 		if tool.name == "script_list" then
 			tool.run = function(args, ctx)
 				local root, why = H.resolve(args.root or "game"); if not root then return N.fail(why) end
-				local result, err = explorer.query({ rootId = refs.id(root), class = args.kind and args.kind ~= "any" and args.kind or "LuaSourceContainer", limit = math.min(args.limit or 5, 5), cursor = args.cursor }, ctx)
+				local result, err = explorer.query({ rootId = refs.id(root), class = args.kind and args.kind ~= "any" and args.kind or "LuaSourceContainer", limit = math.min(args.limit or 25, 100), cursor = args.cursor, name = args.name }, ctx)
 				return N.result(N.page(result), err or "Script source references")
 			end
 			tool.parameters.properties.cursor = { type = "string" }
+			tool.parameters.properties.name = { type = "string", maxLength = 200, description = "Optional case-insensitive name substring to find relevant scripts before reading source." }
+			tool.description = "Find script instances by root, kind and optional name substring. Returns source references and a stable continuation cursor. Default 25, maximum 100 per page; bounded tree scans disclose incomplete coverage. Read only relevant sources."
 		elseif tool.name == "script_source" then
 			tool.parameters.properties.instance_id, tool.parameters.properties.source_id = { type = "string" }, { type = "string" }
 			tool.parameters.required = {}

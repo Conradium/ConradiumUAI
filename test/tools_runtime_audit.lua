@@ -27,29 +27,33 @@ end)
 
 case("input providers must actually accept each supported operation", function()
 	local f = F.new(); local h = f.h
+	local ctx = { session = {}, aborted = function() return false end }
+	local function dispatch(name, args) return f.dispatch(name, args, ctx) end
 	h.services.VirtualInputManager, h.services.VirtualUser = {}, {}
 	f.tools({ "input" })
-	check("missing key APIs fail", not f.dispatch("key_press", { key = "E" }).ok)
+	check("missing key APIs fail", not dispatch("key_press", { key = "E" }).ok)
 	h.services.VirtualInputManager.SendKeyEvent = function() return false end
 	h.sandbox.keypress, h.sandbox.keyrelease = function() return false end, function() return false end
 	h.services.VirtualUser.CaptureController = function() end
 	h.services.VirtualUser.SetKeyDown = function() error("denied") end
 	h.services.VirtualUser.SetKeyUp = function() return false end
-	check("refused providers fail", not f.dispatch("key_press", { key = "E" }).ok)
+	check("refused providers fail", not dispatch("key_press", { key = "E" }).ok)
 	local down, up = 0, 0
 	h.services.VirtualUser.SetKeyDown = function() down = down + 1 end
 	h.services.VirtualUser.SetKeyUp = function() up = up + 1 end
-	check("working final fallback succeeds", f.dispatch("key_press", { key = "E", duration = 0.1 }).ok and down == 1 and up == 1)
+	check("uncertain prior hold can be released explicitly", dispatch("key_press", { key = "E", action = "up" }).ok and up == 1)
+	check("working final fallback succeeds", dispatch("key_press", { key = "E", duration = 0.1 }).ok and down == 1 and up == 2)
 	h.services.VirtualInputManager.SendMouseButtonEvent = function() return false end
 	h.sandbox.mouse1click = function() error("denied") end
-	check("failed executor mouse click fails", not f.dispatch("mouse_click", { button = "left" }).ok)
-	check("missing movement API cannot report success", not f.dispatch("mouse_click", { action = "move" }).ok)
+	check("failed executor mouse click fails", not dispatch("mouse_click", { button = "left" }).ok)
+	check("missing movement API cannot report success", not dispatch("mouse_click", { action = "move" }).ok)
 	local right = 0
 	h.services.VirtualUser.Button2Down = function() right = right + 1 end
-	check("right down uses the right native button", f.dispatch("mouse_click", { action = "down", button = "right" }).ok and right == 1)
-	check("unsupported middle fallback fails", not f.dispatch("mouse_click", { action = "down", button = "middle" }).ok)
+	h.services.VirtualUser.Button2Up = function() end
+	check("right down uses the right native button", dispatch("mouse_click", { action = "down", button = "right" }).ok and right == 1)
+	check("unsupported middle fallback fails", not dispatch("mouse_click", { action = "down", button = "middle" }).ok)
 	h.services.VirtualInputManager.SendMouseMoveEvent = function() end
-	check("void native success remains supported", f.dispatch("mouse_click", { action = "move" }).ok)
+	check("void native success remains supported", dispatch("mouse_click", { action = "move" }).ok)
 	f.healthy(); f.close()
 end)
 
@@ -102,7 +106,7 @@ case("world fallbacks scan children and disclose interrupted results", function(
 	local tools = f.env.require("tools/world"); local near
 	for _, tool in ipairs(tools) do if tool.name == "parts_near" then near = tool end end
 	local cancelled = near.run({ position = "0, 0, 0" }, { aborted = function() return true end })
-	check("incomplete empty scan never proves absence", contains(cancelled, "Scan incomplete") and contains(cancelled, "aborted"))
+	check("cancelled scans fail without claiming absence", not cancelled.ok and contains(cancelled.text, "cancelled") and not contains(cancelled.text, "No parts found"))
 	f.healthy(); f.close()
 end)
 

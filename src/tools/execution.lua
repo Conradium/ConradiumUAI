@@ -8,6 +8,7 @@ return function(env)
 	local H = env.require("tools/helpers")
 	local M = { DEFAULT_TIMEOUT = 10, MAX_TIMEOUT = 60 }
 	local active = {}
+	local checkedSources, checkedOrder, checkedBytes, checkedCompiler = {}, {}, 0, nil
 	local OUTPUT_BYTES, OUTPUT_LINES = 16000, 120
 	local STOP = {}
 	local unpackValues = table.unpack or unpack
@@ -127,9 +128,23 @@ return function(env)
 	function M.check(code)
 		if type(code) ~= "string" or util.trim(code) == "" then return { ok = false, text = "Nothing to compile.", data = { status = "source_error" } } end
 		if #code > W.MAX_BYTES then return { ok = false, text = "Source exceeds the 2 MiB execution limit.", data = { status = "source_error" } } end
+		if checkedCompiler ~= caps.fn.loadstring then
+			checkedSources, checkedOrder, checkedBytes, checkedCompiler = {}, {}, 0, caps.fn.loadstring
+		end
+		if checkedSources[code] then
+			return { ok = true, text = "Luau syntax is unchanged since its successful check. No code was executed.", data = { status = "compiled", reused = true } }
+		end
+		local compiler = caps.fn.loadstring
 		local fn, err = compile(code)
 		if not fn then return { ok = false, text = "Compile error: " .. tostring(err), data = { status = "compile_error" } } end
-		return { ok = true, text = "Luau compiled successfully. No code was executed.", data = { status = "compiled" } }
+		if compiler == caps.fn.loadstring and compiler == checkedCompiler and not checkedSources[code] then
+			while #checkedOrder >= 16 or checkedBytes + #code > W.MAX_BYTES do
+				local oldest = table.remove(checkedOrder, 1)
+				checkedSources[oldest], checkedBytes = nil, checkedBytes - #oldest
+			end
+			checkedSources[code], checkedOrder[#checkedOrder + 1], checkedBytes = true, code, checkedBytes + #code
+		end
+		return { ok = true, text = "Luau compiled successfully. No code was executed.", data = { status = "compiled", reused = false } }
 	end
 
 	-- Tables are useful results, not the opaque "{table}" that used to reach the
@@ -168,6 +183,7 @@ return function(env)
 
 	env.require("runtime/dispose").add(function()
 		for execution in pairs(active) do execution.stop("aborted") end
+		checkedSources, checkedOrder, checkedBytes, checkedCompiler = {}, {}, 0, nil
 	end, "Luau executions")
 
 	-- Source comes either inline via `code` or by reference via `path`. The path

@@ -17,22 +17,33 @@ return function(env)
 				},
 				required = {},
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local sample = util.clamp(tonumber(args.sample) or 1, 0.2, 3)
-				local frames, elapsed = 0, 0
+				local frames, elapsed, fastest, slowest, alive = 0, 0, math.huge, 0, true
 				-- Counting Heartbeat deltas measures real frames rather than dividing
 				-- by a clock read, which on a stuttering client reads very differently.
 				local connection = env.run.Heartbeat:Connect(function(delta)
+					if not alive or type(delta) ~= "number" or delta ~= delta or delta <= 0 or delta == math.huge then return end
 					frames = frames + 1
 					elapsed = elapsed + delta
+					fastest, slowest = math.min(fastest, delta), math.max(slowest, delta)
 				end)
-				clock.wait(sample)
-				pcall(function() connection:Disconnect() end)
+				local release = env.require("runtime/dispose").add(function() alive = false; connection:Disconnect() end, "tool performance sample")
+				local start = clock.ms()
+				local waited, why = pcall(function()
+					while alive and clock.since(start) < sample * 1000 and not (ctx and ctx.aborted and ctx.aborted()) do clock.wait(0.05) end
+				end)
+				local stopped = not alive or (ctx and ctx.aborted and ctx.aborted())
+				release()
+				if not waited then return H.fail("sampling failed: " .. tostring(why)) end
+				if stopped then return { ok = false, text = "Performance sample cancelled; listener released.", data = { status = "aborted", frames = frames } } end
 
 				local rows = {
 					{ "FPS", elapsed > 0 and string.format("%.1f", frames / elapsed) or "unknown" },
 					{ "Frames sampled", tostring(frames) },
+					{ "Sample duration", string.format("%.3fs", elapsed) },
 				}
+				if frames > 0 then rows[#rows + 1] = { "Frame time", string.format("%.2fms average, %.2fms fastest, %.2fms slowest", elapsed * 1000 / frames, fastest * 1000, slowest * 1000) } end
 
 				local stats = env.services.Stats
 				local okMemory, memory = pcall(function() return stats:GetTotalMemoryUsageMb() end)
@@ -51,7 +62,7 @@ return function(env)
 					rows[#rows + 1] = { "Ping", string.format("%.0f ms", ping) }
 				end
 
-				return H.keyValues(rows)
+				return { text = H.keyValues(rows), data = { frames = frames, elapsedSeconds = elapsed, fps = frames > 0 and frames / elapsed or nil, minFrameMs = frames > 0 and fastest * 1000 or nil, maxFrameMs = frames > 0 and slowest * 1000 or nil } }
 			end,
 		},
 		{
@@ -63,6 +74,7 @@ return function(env)
 				properties = {
 					root = { type = "string", description = "Where to count. Defaults to Workspace." },
 					limit = { type = "integer", description = "Classes to list, 1-40. Default 20.", minimum = 1, maximum = 40 },
+					offset = { type = "integer", minimum = 1 },
 				},
 				required = {},
 			},
@@ -85,11 +97,12 @@ return function(env)
 				end)
 
 				if total == 0 then return H.pathOf(root) .. (scanned.complete and " is empty." or " has no readable counted descendants.") .. note end
-				return string.format("%s contains %s across %d classes:\n%s",
-					H.pathOf(root), util.pluralise(total, "instance"), #rows,
-					H.list(rows, H.limit(args.limit, 20, 40), function(row)
+				local result = H.page(rows, args, string.format("%s contains %s across %d classes.%s", H.pathOf(root), util.pluralise(total, "instance"), #rows, note), function(row)
 						return string.format("%-28s %s", row.class, util.formatNumber(row.count))
-					end)) .. note
+					end, 20, 40)
+				if result.data then result.data.complete, result.data.scanned = scanned.complete, scanned.scanned end
+				if scanned.reason == "aborted" then result.ok = false end
+				return result
 			end,
 		},
 		{
@@ -107,14 +120,16 @@ return function(env)
 
 				local record = providers.active()
 				local stats = registry.stats()
+				local owner = ctx and ctx.session or {}
+				local offered = #registry.definitions({ only = owner.toolFilter, groups = owner.toolGroups, exclude = owner.toolExclude })
 				local rows = {
 					{ "Provider", record and (record.label .. " (" .. record.id .. ")") or "none configured" },
 					{ "Model", record and record.model or "-" },
 					{ "Identity", ua.enabled() and ua.userAgent() or "client identity disabled" },
 					{ "Transport", caps.http .. (caps.uaSupported and "" or " (cannot set User-Agent)") },
 					{ "Permissions", permissions.mode() },
-					{ "Tools", string.format("%d available, %d unavailable here", stats.total, #stats.unavailable) },
-					{ "Session tokens", usage.line() },
+					{ "Tools", string.format("%d offered to this conversation, %d registered, %d missing host capabilities", offered, stats.total, #stats.unavailable) },
+					{ "Loaded client tokens", usage.line() },
 				}
 				if ctx and ctx.session then
 					local contextStats = ctx.session.ctx.stats()

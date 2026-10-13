@@ -96,11 +96,12 @@ return function(env)
 	function M.validUtf8(text)
 		text = tostring(text or "")
 		local size = #text
-		local index = 1
-		while index <= size do
+		-- The native pattern scan skips ordinary source/prose runs in one call.
+		local index = text:find("[\128-\255]")
+		while index do
 			local width = widthAt(text, index, size)
 			if width == 0 then return false, index end
-			index = index + width
+			index = text:find("[\128-\255]", index + width)
 		end
 		return true
 	end
@@ -110,20 +111,21 @@ return function(env)
 	function M.sanitise(text)
 		text = tostring(text or "")
 		local size = #text
-		local index = 1
+		local index = text:find("[\128-\255]")
+		local start = 1
 		local out = nil
-		while index <= size do
+		while index do
 			local width = widthAt(text, index, size)
-			if width > 0 then
-				if out then out[#out + 1] = text:sub(index, index + width - 1) end
-				index = index + width
-			else
-				if not out then out = { text:sub(1, index - 1) } end
+			if width == 0 then
+				out = out or {}
+				if start < index then out[#out + 1] = text:sub(start, index - 1) end
 				out[#out + 1] = REPLACEMENT
-				index = index + 1
+				start, width = index + 1, 1
 			end
+			index = text:find("[\128-\255]", index + width)
 		end
 		if not out then return text, false end
+		if start <= size then out[#out + 1] = text:sub(start) end
 		return table.concat(out), true
 	end
 

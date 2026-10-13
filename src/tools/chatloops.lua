@@ -17,7 +17,8 @@ return function(env)
 			local job, err = loops.start(kind, args, ctx)
 			if not job then return H.fail(err) end
 			return { text = string.format("Started %s loop %s in %s. %d rounds/messages, interval %gs. Runs in the background; use chat_loop_status or chat_loop_stop.",
-				kind, job.id, job.channel, job.count, job.interval), data = { id = job.id, state = job.state } }
+				kind, job.id, job.channel, job.count, job.interval), data = { id = job.id, state = job.state, kind = kind, channel = job.channel,
+				count = job.count, interval = job.interval, expiresAt = job.deadline } }
 		end
 	end
 	return {
@@ -30,17 +31,17 @@ return function(env)
 				count = { type = "integer", minimum = 1, maximum = 100, description = "Maximum replies; default 100. Inference attempts are capped at three times this count." },
 			}, {}), run = start("bot") },
 		{ name = "auto_chat", risk = "write", description = "Start a background loop cycling through supplied Roblox chat messages. Returns immediately. Stop with chat_loop_stop.",
-			parameters = parameters({ messages = { type = "array", minItems = 1, maxItems = 30, items = { type = "string" } } }, { "messages" }), run = start("auto") },
+			parameters = parameters({ messages = { type = "array", minItems = 1, maxItems = 30, items = { type = "string", minLength = 1, maxLength = 800, description = "At most 200 Unicode code points." } } }, { "messages" }), run = start("auto") },
 		{ name = "quiz_bot", risk = "write", description = "Host a quiz in Roblox chat: ask questions, detect the first correct player answer, keep scores, reveal unanswered answers, and repeat. Supply questions and answers. Returns a managed loop ID.",
 			parameters = parameters({ questions = { type = "array", minItems = 1, maxItems = 30, items = { type = "object", properties = {
-				question = { type = "string" }, answer = { type = "string" }, aliases = { type = "array", maxItems = 10, items = { type = "string" } },
+				question = { type = "string", minLength = 1, maxLength = 800 }, answer = { type = "string", minLength = 1, maxLength = 800 }, aliases = { type = "array", maxItems = 10, items = { type = "string", minLength = 1, maxLength = 800 } },
 			}, required = { "question", "answer" } } } }, { "questions" }), run = start("quiz") },
 		{ name = "auto_reply", risk = "write", description = "Start keyword-based auto-replies to other players in Roblox chat. Uses supplied rules, ignores self/system messages, and sends at most one reply per interval. No ongoing inference requests.",
 			parameters = parameters({ rules = { type = "array", minItems = 1, maxItems = 20, items = { type = "object", properties = {
-				trigger = { type = "string" }, response = { type = "string" }, exact = { type = "boolean", description = "Match the whole message instead of a substring." },
+				trigger = { type = "string", minLength = 1, maxLength = 800 }, response = { type = "string", minLength = 1, maxLength = 800 }, exact = { type = "boolean", description = "Match the whole message instead of a substring." },
 			}, required = { "trigger", "response" } } } }, { "rules" }), run = start("reply") },
 		{ name = "chat_loop_status", risk = "read", description = "List managed chat loops and independent chatbots, progress, failures, and quiz scores.",
-			parameters = { type = "object", properties = { id = { type = "string" } }, required = {} },
+			parameters = { type = "object", properties = { id = { type = "string", minLength = 1, description = "Exact loop ID from a start receipt; omit to inspect the bounded recent loop history." } }, required = {} },
 			run = function(args)
 				local lines, records = {}, {}
 				for _, job in ipairs(loops.list()) do
@@ -62,7 +63,7 @@ return function(env)
 				return { text = #lines == 0 and "No matching chat loops." or table.concat(lines, "\n"), data = records }
 			end },
 		{ name = "chat_loop_stop", risk = "write", description = "Stop a managed chat loop immediately, or use id='all' to stop every chat loop. An already submitted message cannot be recalled.",
-			parameters = { type = "object", properties = { id = { type = "string" } }, required = { "id" } },
+			parameters = { type = "object", properties = { id = { type = "string", minLength = 1, description = "Exact loop ID, or all to stop every loop." } }, required = { "id" } },
 			run = function(args) return "Stopped " .. loops.stop(args.id) .. " chat loop(s)." end },
 	}
 end

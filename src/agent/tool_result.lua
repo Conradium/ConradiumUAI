@@ -84,7 +84,10 @@ return function(env)
 			reference = nil
 		end
 		local json = copied ~= nil and util.encode(inlineData(copied, text)) or nil
-		if not reference and json and #text + #MARK + #json <= budget then return text .. MARK .. json end
+		-- A native receipt can already contain a bounded useful summary and its
+		-- own detail pointer. Deliver both immediately when they fit; forcing an
+		-- extra reader call here spent a model round trip to recover the same text.
+		if json and #text + #MARK + #json <= budget and (not reference or available(reference.readTool)) then return text .. MARK .. json end
 		local reader = reference and reference.readTool or details.reader(group)
 		if reader and available(reader) then
 			local key = reference and reference.resultId

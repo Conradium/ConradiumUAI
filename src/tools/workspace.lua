@@ -110,7 +110,7 @@ return function(env)
 			local prefix = "edit " .. index .. ": "
 			if type(edit.old_text) ~= "string" or edit.old_text == "" then return H.fail(prefix .. "old_text must not be empty") end
 			if type(edit.new_text) ~= "string" then return H.fail(prefix .. "new_text must be a string") end
-			local count, at = 0, 1
+			local count, at, uniqueFirst, uniqueLast = 0, 1
 			while true do
 				local first, last = content:find(edit.old_text, at, true)
 				if not first then break end
@@ -119,6 +119,7 @@ return function(env)
 					if content:find(edit.old_text, first + 1, true) then
 						return H.fail(prefix .. "old_text matches more than once; include more surrounding text or set replace_all=true")
 					end
+					uniqueFirst, uniqueLast = first, last
 					break
 				end
 				if count % 4096 == 0 then
@@ -133,7 +134,13 @@ return function(env)
 			if #content + count * (#edit.new_text - #edit.old_text) > M.MAX_BYTES then
 				return H.fail(prefix .. "edited output would exceed 2 MB")
 			end
-			content = content:gsub(util.escapePattern(edit.old_text), function() return edit.new_text end)
+			if uniqueFirst then
+				-- The exact match is already known. Slicing avoids a second pattern
+				-- scan and makes long literal edits independent of Lua pattern cost.
+				content = content:sub(1, uniqueFirst - 1) .. edit.new_text .. content:sub(uniqueLast + 1)
+			else
+				content = content:gsub(util.escapePattern(edit.old_text), function() return edit.new_text end)
+			end
 			counts[#counts + 1], total = count, total + count
 		end
 		if M.stopped(ctx) then return aborted("edit stopped before writing") end
@@ -144,6 +151,8 @@ return function(env)
 		if content ~= original then
 			local ok, result = fsx.write(path, content, M.scope)
 			if not ok then return H.fail(result) end
+			local observed, verifyErr = fsx.read(path, M.scope)
+			if observed ~= content then return H.fail("edit write could not be verified; read the current file before retrying: " .. tostring(verifyErr or "host read-back differs")) end
 		end
 		return {
 			text = string.format("Replaced %d occurrence(s) in %s (%d bytes; %d edit(s), %s).",

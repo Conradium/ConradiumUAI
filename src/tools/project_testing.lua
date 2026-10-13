@@ -2,12 +2,12 @@
 return function(env)
 	local util = env.require("runtime/util")
 	local M = {}
-	function M.program(ids)
+	function M.program(ids, filter)
 		local quoted = {}
 		for _, id in ipairs(ids) do quoted[#quoted + 1] = string.format("%q", id) end
-		return "local __testIds = {" .. table.concat(quoted, ",") .. "}\n" .. [[
+		return "local __testIds = {" .. table.concat(quoted, ",") .. "}\nlocal __filter = " .. string.format("%q", filter or "") .. "\n" .. [[
 local __fixtures = ... or {}
-local __report = { passed = 0, failed = 0, total = 0, cases = {}, complete = true }
+local __report = { passed = 0, failed = 0, total = 0, skipped = 0, cases = {}, complete = true, filter = __filter }
 local function __copy(value, seen)
 	if type(value) ~= "table" then return value end
 	seen = seen or {}
@@ -62,23 +62,28 @@ for _, id in ipairs(__testIds) do
 			table.sort(names)
 			if #names == 0 then __record(id, "empty", false, "Test module contains no cases") end
 			for _, name in ipairs(names) do
-				if __report.total >= 100 then
-					__report.complete, __report.reason = false, "At most 100 test cases per run; remaining cases were not executed"
-					break
+				if __filter ~= "" and not string.find(name, __filter, 1, true) then
+					__report.skipped = __report.skipped + 1
+				else
+					if __report.total >= 100 then
+						__report.complete, __report.reason = false, "At most 100 test cases per run; remaining cases were not executed"
+						break
+					end
+					local passed, why = xpcall(function()
+						-- Each case reloads project modules and fixtures; native game state is shared.
+						local fixture = __copy(__fixtures)
+						local require = __newRequire(fixture)
+						local fresh = require(id)
+						if type(fresh) ~= "table" or type(fresh[name]) ~= "function" then error("Test exports changed during discovery") end
+						fresh[name](__copy(__assertions), fixture)
+					end, __trace)
+					__record(id, name, passed, why)
 				end
-				local passed, why = xpcall(function()
-					-- Each case reloads project modules and fixtures; native game state is shared.
-					local fixture = __copy(__fixtures)
-					local require = __newRequire(fixture)
-					local fresh = require(id)
-					if type(fresh) ~= "table" or type(fresh[name]) ~= "function" then error("Test exports changed during discovery") end
-					fresh[name](__copy(__assertions), fixture)
-				end, __trace)
-				__record(id, name, passed, why)
 			end
 		end
 	end
 end
+if __report.total == 0 then __report.complete, __report.reason = false, "No test cases matched the requested filter" end
 return __report
 ]]
 	end

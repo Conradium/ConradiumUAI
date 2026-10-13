@@ -6,8 +6,6 @@
 -- types: the model states them.
 return function(env)
 	local util = env.require("runtime/util")
-	local caps = env.require("runtime/caps")
-	local clock = env.require("runtime/clock")
 	local H = env.require("tools/helpers")
 
 	local REMOTE_CLASSES = { "RemoteEvent", "RemoteFunction", "UnreliableRemoteEvent" }
@@ -98,29 +96,7 @@ return function(env)
 
 				local wanted = H.limit(args.count, 3, 10)
 				local limit = util.clamp(tonumber(args.timeout) or 8, 1, 20)
-				local captured = {}
-
-				local connection = remote.OnClientEvent:Connect(function(...)
-					if #captured >= wanted then return end
-					local parts = {}
-					for index = 1, select("#", ...) do
-						parts[#parts + 1] = string.format("%d: %s", index, H.show((select(index, ...))))
-					end
-					captured[#captured + 1] = #parts > 0 and table.concat(parts, ", ") or "(no arguments)"
-				end)
-
-				local waited = 0
-				while #captured < wanted and waited < limit do
-					if ctx and ctx.aborted and ctx.aborted() then break end
-					waited = waited + (clock.wait(0.1) or 0.1)
-				end
-				pcall(function() connection:Disconnect() end)
-
-				if #captured == 0 then
-					return string.format("%s sent nothing in %.0f seconds.", H.pathOf(remote), waited)
-				end
-				return string.format("%s fired %d time(s) in %.1fs:\n%s",
-					H.pathOf(remote), #captured, waited, H.list(captured, wanted))
+				return H.watch(remote.OnClientEvent, wanted, limit, ctx, H.pathOf(remote))
 			end,
 		},
 		{
@@ -146,7 +122,6 @@ return function(env)
 
 				local wanted = H.limit(args.count, 3, 10)
 				local limit = util.clamp(tonumber(args.timeout) or 8, 1, 20)
-				local captured = {}
 
 				-- Reading the signal is the risk-free half; connecting to it is where
 				-- hosts differ, so both the read and the connect are guarded.
@@ -154,32 +129,7 @@ return function(env)
 				if not okSignal or not target then
 					return H.fail(instance.ClassName .. " has no signal named '" .. signalName .. "'")
 				end
-				local okConnect, connection = pcall(function()
-					return target:Connect(function(...)
-						if #captured >= wanted then return end
-						local parts = {}
-						for index = 1, select("#", ...) do
-							parts[#parts + 1] = string.format("%d: %s", index, H.show((select(index, ...))))
-						end
-						captured[#captured + 1] = #parts > 0 and table.concat(parts, ", ") or "(no arguments)"
-					end)
-				end)
-				if not okConnect or not connection then
-					return H.fail("could not connect to " .. signalName .. " on " .. H.pathOf(instance))
-				end
-
-				local waited = 0
-				while #captured < wanted and waited < limit do
-					if ctx and ctx.aborted and ctx.aborted() then break end
-					waited = waited + (clock.wait(0.1) or 0.1)
-				end
-				pcall(function() connection:Disconnect() end)
-
-				if #captured == 0 then
-					return string.format("%s.%s fired nothing in %.0f seconds.", H.pathOf(instance), signalName, waited)
-				end
-				return string.format("%s.%s fired %d time(s) in %.1fs:\n%s",
-					H.pathOf(instance), signalName, #captured, waited, H.list(captured, wanted))
+				return H.watch(target, wanted, limit, ctx, H.pathOf(instance) .. "." .. signalName)
 			end,
 		},
 	}

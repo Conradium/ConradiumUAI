@@ -8,8 +8,17 @@ return function(env)
 	local util = env.require("runtime/util")
 	local http = env.require("net/http")
 	local H = env.require("tools/helpers")
+	local clock = env.require("runtime/clock")
 
 	local PAGE_CAP = 4000
+	local pages, order, serial, retained = {}, {}, 0, 0
+	local function prune()
+		while #order > 0 and (#order > 4 or retained > 4 * 1024 * 1024 or clock.ms() - pages[order[1]].at > 300000) do
+			local key = table.remove(order, 1); retained = retained - #pages[key].text; pages[key] = nil
+		end
+	end
+	local function cancelled(ctx) return ctx and ctx.aborted and ctx.aborted() end
+	env.require("runtime/dispose").add(function() pages, order, retained = {}, {}, 0 end, "Web text pages")
 
 	-- Sanitised at the end, not only at encode time.
 	--
@@ -21,10 +30,10 @@ return function(env)
 	local function toText(html)
 		local text = tostring(html)
 			:gsub("<!%-%-.-%-%->", " ")
-			:gsub("<script.-</script>", " ")
-			:gsub("<style.-</style>", " ")
-			:gsub("<noscript.-</noscript>", " ")
-			:gsub("<svg.-</svg>", " ")
+			:gsub("<[sS][cC][rR][iI][pP][tT][^>]*>.-</[sS][cC][rR][iI][pP][tT]%s*>", " ")
+			:gsub("<[sS][tT][yY][lL][eE][^>]*>.-</[sS][tT][yY][lL][eE]%s*>", " ")
+			:gsub("<[nN][oO][sS][cC][rR][iI][pP][tT][^>]*>.-</[nN][oO][sS][cC][rR][iI][pP][tT]%s*>", " ")
+			:gsub("<[sS][vV][gG][^>]*>.-</[sS][vV][gG]%s*>", " ")
 			:gsub("<br%s*/?>", "\n")
 			:gsub("</p>", "\n\n")
 			:gsub("</h%d>", "\n\n")
@@ -44,14 +53,15 @@ return function(env)
 			parameters = {
 				type = "object",
 				properties = {
-					query = { type = "string" },
+					query = { type = "string", minLength = 1, maxLength = 1000 },
 					limit = { type = "integer", description = "Results to return, 1-10. Default 5.", minimum = 1, maximum = 10 },
 				},
 				required = { "query" },
 			},
-			run = function(args)
+			run = function(args, ctx)
 				local query = util.trim(args.query)
-				if query == "" then return "Give a query." end
+				if query == "" then return H.fail("Give a query.") end
+				if cancelled(ctx) then return H.fail("Search cancelled") end
 
 				local res, err = http.send({
 					url = "https://html.duckduckgo.com/html/",
@@ -60,20 +70,27 @@ return function(env)
 					headers = { ["Content-Type"] = "application/x-www-form-urlencoded" },
 					body = "q=" .. util.urlEncode(query) .. "&b=&kl=us-en",
 					attempts = 2,
+					timeout = 20, aborted = ctx and ctx.aborted,
 					tag = "tool:web_search",
 				})
 				if not res then return H.fail(err) end
 				if not res.ok then return H.fail("search returned status " .. tostring(res.status)) end
+				if cancelled(ctx) then return H.fail("Search cancelled") end
+				if #res.body > 2 * 1024 * 1024 then return H.fail("Search response exceeds the 2 MiB inspection limit") end
 
 				local limit = H.limit(args.limit, 5, 10)
 				local records = {}
-				for href, title in res.body:gmatch('<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>(.-)</a>') do
+				for attributes, title in res.body:gmatch('<a%s+([^>]*)>(.-)</a>') do
 					if #records >= limit then break end
-					-- Results are wrapped in a redirect; the real URL is the uddg param.
-					local link = href:match("[?&]uddg=([^&]+)")
-					link = link and util.urlDecode(link) or href
-					if not link:find("^https://duckduckgo%.com") then
-						records[#records + 1] = { title = toText(title), url = link }
+					local href = attributes:match('href="([^"]*)"') or attributes:match("href='([^']*)'")
+					local class = attributes:match('class="([^"]*)"') or attributes:match("class='([^']*)'") or ""
+					if href and (" " .. class .. " "):find(" result__a ", 1, true) then
+						-- Results are wrapped in a redirect; the real URL is the uddg param.
+						local link = href:match("[?&]uddg=([^&]+)")
+						link = link and util.urlDecode(link) or href
+						if link:match("^https?://") and not link:find("^https://duckduckgo%.com") then
+							records[#records + 1] = { title = util.ellipsis(toText(title), 240), url = util.htmlEntities(link) }
+						end
 					end
 				end
 
@@ -93,50 +110,67 @@ return function(env)
 					blocks[#blocks + 1] = string.format("%d. %s\n   %s\n   %s",
 						position, record.title, record.url, record.snippet or "(no snippet)")
 				end
-				return table.concat(blocks, "\n\n")
+				return { text = table.concat(blocks, "\n\n"), data = { results = records, count = #records } }
 			end,
 		},
 		{
 			name = "web_read",
 			risk = "read",
 			needs = { "http" },
-			description = "Fetch a web page and return its readable text, with markup and scripts stripped.",
+			description = "Fetch a web page as readable text or JSON. Returns contiguous UTF-8 pages: continue with page_id and offset without downloading it again. Snapshots last five minutes; four pages / 4 MiB retained. Reading does not execute page scripts.",
 			parameters = {
 				type = "object",
 				properties = {
-					url = { type = "string" },
-					limit = { type = "integer", description = "Maximum characters. Default 4000.", minimum = 200, maximum = 64000 },
+					url = { type = "string", minLength = 1, maxLength = 4000 },
+					page_id = { type = "string", description = "Returned snapshot ID for continuation; provide this or url." },
+					offset = { type = "integer", minimum = 1, description = "One-based UTF-8 byte offset from nextOffset." },
+					limit = { type = "integer", description = "Maximum bytes in this contiguous page, also bounded by the result budget. Default 4000.", minimum = 200, maximum = 64000 },
 				},
-				required = { "url" },
+				required = {},
 			},
-			run = function(args)
-				local url = util.trim(args.url)
-				if not url:find("^https?://") then url = "https://" .. url end
+			run = function(args, ctx)
+				if (args.url ~= nil) == (args.page_id ~= nil) then return H.fail("Provide url or page_id, not both") end
+				if cancelled(ctx) then return H.fail("Page read cancelled") end
+				prune()
+				local page = args.page_id and pages[args.page_id]
+				if args.page_id and not page then return H.fail("Web snapshot expired; fetch the URL again") end
+				if not page then
+					local url = util.trim(args.url)
+					if url == "" then return H.fail("Give a URL") end
+					if not url:find("^https?://") then
+						if url:find("^[%a][%w+%.%-]*:") then return H.fail("Only HTTP(S) URLs are supported") end
+						url = "https://" .. url
+					end
+					local res, err = http.send({
+						url = url,
+						method = "GET",
+						identity = "browser",
+						attempts = 2,
+						timeout = 20, aborted = ctx and ctx.aborted,
+						tag = "tool:web_read",
+					})
+					if not res then return H.fail(err) end
+					if not res.ok then return H.fail("the page returned status " .. tostring(res.status)) end
+					if cancelled(ctx) then return H.fail("Page read cancelled") end
 
-				local res, err = http.send({
-					url = url,
-					method = "GET",
-					identity = "browser",
-					attempts = 2,
-					tag = "tool:web_read",
-				})
-				if not res then return H.fail(err) end
-				if not res.ok then return H.fail("the page returned status " .. tostring(res.status)) end
+					local body = tostring(res.body)
+					if #body > 2 * 1024 * 1024 then return H.fail("Web response exceeds the 2 MiB inspection limit") end
+					-- JSON text does not pass through an HTML stripper.
+					local trimmed = util.trim(body)
+					local looksJson = trimmed:sub(1, 1) == "{" or trimmed:sub(1, 1) == "["
+					local text = looksJson and util.sanitise(trimmed) or toText(body)
+					if text == "" then return "The page returned no readable text." end
+					if #text > 4 * 1024 * 1024 then return H.fail("Readable text exceeds the 4 MiB snapshot limit") end
 
-				local body = tostring(res.body)
-				-- A JSON endpoint reached through this tool should not be run through
-				-- an HTML stripper. Still sanitised: a JSON body is only UTF-8 by
-				-- convention, and this one came from a stranger.
-				local looksJson = util.trim(body):sub(1, 1) == "{" or util.trim(body):sub(1, 1) == "["
-				local text = looksJson and (util.sanitise(util.trim(body))) or toText(body)
-				if text == "" then return "The page returned no readable text." end
-
-				local title = body:match("<title[^>]*>(.-)</title>")
-				local trimmed, truncated = util.truncate(text, tonumber(args.limit) or PAGE_CAP)
-				return string.format("%s%s\n\n%s",
-					title and (toText(title) .. "\n" .. url) or url,
-					truncated and string.format("\n(%d characters, trimmed)", #text) or "",
-					trimmed)
+					local title = body:match("<[tT][iI][tT][lL][eE][^>]*>(.-)</[tT][iI][tT][lL][eE]>")
+					serial = serial + 1
+					page = { id = "web-page:" .. serial, url = url, title = title and util.ellipsis(toText(title), 200), text = text, at = clock.ms() }
+					pages[page.id], order[#order + 1], retained = page, page.id, retained + #text
+					prune()
+				end
+				local result = H.readSlice(page.title or page.url, page.text, args, PAGE_CAP)
+				if result.data then result.data.pageId, result.data.url, result.data.title = page.id, page.url, page.title end
+				return result
 			end,
 		},
 	}

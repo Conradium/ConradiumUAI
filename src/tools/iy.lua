@@ -28,7 +28,7 @@ return function(env)
 			risk = "read",
 			description = "Report Infinite Yield: the Settings mode, whether it is loaded, how it was "
 				.. "obtained (already running, or loaded by this client), the command count and prefix. "
-				.. "Call this before iy_cmd when you do not know whether IY is available.",
+				.. "This inspection does not load IY; command tools ensure availability themselves.",
 			parameters = { type = "object", properties = util.emptyObject(), required = {} },
 			run = function()
 				return H.keyValues(iy.status())
@@ -40,12 +40,12 @@ return function(env)
 			timeout = 120,
 			description = "Run an Infinite Yield command by its command string, exactly as typed into "
 				.. "IY's own bar: 'speed 100', 'noclip', 'tp PlayerName', 'esp players'. Supports IY's "
-				.. "repeat prefixes ('5^speed 100', 'inf^0.5^esp'). Check iy_status first; when the "
+				.. "repeat prefixes ('5^speed 100', 'inf^0.5^esp'). When the "
 				.. "setting is on but IY is not loaded, this call loads it.",
 			parameters = {
 				type = "object",
 				properties = {
-					command = { type = "string", description = "The command string, without IY's ';' prefix." },
+					command = { type = "string", minLength = 1, maxLength = 4000, description = "The command string, without IY's ';' prefix. Returns dispatch acceptance, not completion." },
 				},
 				required = { "command" },
 			},
@@ -77,7 +77,8 @@ return function(env)
 				properties = {
 					filter = { type = "string", description = "Case-insensitive substring to match against command names and aliases." },
 					plugin = { type = "string", description = "Only commands from this plugin, e.g. 'emotemanager.iy'." },
-					limit = { type = "integer", description = "Maximum lines. Default 80." },
+					limit = { type = "integer", minimum = 1, maximum = 300, description = "Maximum lines. Default 80; the result budget can reduce the page." },
+					offset = { type = "integer", minimum = 1, description = "Continue at nextOffset with the same filters; restart after commands change." },
 				},
 				required = {},
 			},
@@ -90,7 +91,6 @@ return function(env)
 
 				local needle = util.trim(tostring(args.filter or "")):lower()
 				local pluginNeedle = util.trim(tostring(args.plugin or "")):lower()
-				local shown = H.limit(args.limit, LIST_CAP, 300)
 				local descriptions = {}
 				for _, entry in ipairs(iy.descriptions() or {}) do
 					if type(entry) == "table" and type(entry.NAME) == "string" and type(entry.DESC) == "string" then
@@ -105,7 +105,7 @@ return function(env)
 					end
 				end
 
-				local lines, matched, plugins = {}, 0, {}
+				local lines, matched = {}, 0
 				for _, cmd in ipairs(cmds) do
 					if type(cmd) == "table" and type(cmd.NAME) == "string" then
 						local name = cmd.NAME
@@ -127,16 +127,15 @@ return function(env)
 						end
 						if nameMatch and pluginMatch then
 							matched = matched + 1
-							if #lines < shown then
+							do
 								local label = name
 								if type(cmd.ALIAS) == "table" and #cmd.ALIAS > 0 then
-									label = label .. " (alias: " .. table.concat(cmd.ALIAS, ", ") .. ")"
+									local aliases = {}
+									for _, alias in ipairs(cmd.ALIAS) do if type(alias) == "string" then aliases[#aliases + 1] = alias end end
+									label = label .. " (alias: " .. util.ellipsis(table.concat(aliases, ", "), 300) .. ")"
 								end
 								if type(cmd.PLUGIN) == "string" and cmd.PLUGIN ~= "" then
 									label = label .. " [" .. cmd.PLUGIN .. "]"
-									if not plugins[cmd.PLUGIN] then
-										plugins[cmd.PLUGIN] = true
-									end
 								end
 								local description = descriptions[nameLower]
 								if not description and type(cmd.ALIAS) == "table" then
@@ -148,7 +147,7 @@ return function(env)
 									end
 								end
 								if description then
-									label = label .. " | " .. description.signature .. " - " .. util.ellipsis(description.desc:gsub("%s+", " "), 120)
+									label = label .. " | " .. util.ellipsis(description.signature, 400) .. " - " .. util.ellipsis(description.desc:gsub("%s+", " "), 120)
 								end
 								lines[#lines + 1] = label
 							end
@@ -161,7 +160,7 @@ return function(env)
 				end
 				local head = string.format("%d of %d command%s matched",
 					matched, #cmds, #cmds == 1 and "" or "s")
-				return head .. "\n" .. H.list(lines, shown)
+				return H.page(lines, args, head, nil, LIST_CAP, 300)
 			end,
 		},
 		{
@@ -244,7 +243,7 @@ return function(env)
 			run = function(args, ctx)
 				local result, err = control.run(args, ctx)
 				if not result then return H.fail(err) end
-				return { text = util.encode(result), data = result }
+				return { text = "IY " .. args.action .. ". " .. (result.warning or result.persistence or "See structured results and continuation offsets."), data = result }
 			end,
 		},
 		{
@@ -272,20 +271,28 @@ return function(env)
 			description = "Create or update a custom Infinite Yield .iy plugin. Get the template with iy_plugin_read. "
 				.. "Source may declare shared locals/globals above local Plugin, and must return a table with PluginName, "
 				.. "PluginDescription and Commands. Each command has ListName, Description, Aliases and Function(args, speaker). "
-				.. "Checks syntax before saving. By default executes setup once, validates the returned table and loads/reloads it "
+				.. "Prefer a saved path for long source. Checks syntax before saving. By default executes setup once, validates the returned table and loads/reloads it "
 				.. "through IY, returning actual registered command names. load=false only saves syntax-checked source. "
 				.. "Set overwrite=true to replace an existing file. Reloading replaces commands; plugin-owned event connections "
 				.. "or loops need cleanup in the plugin's own setup/unload command.",
 			parameters = { type = "object", properties = {
 				plugin = { type = "string", minLength = 1, maxLength = 83, description = "Plain filename, e.g. myplugin.iy. Paths and IY_FE.iy are refused." },
 				source = { type = "string", minLength = 1, maxLength = 256000, description = "Complete Luau plugin source, including return Plugin; multiple commands and top-level globals are supported." },
+				path = { type = "string", minLength = 1, description = "Workspace or pastes/ source path; provide source or path, not both. Maximum 256000 source bytes." },
 				overwrite = { type = "boolean", description = "Explicitly replace an existing file; default false." },
 				load = { type = "boolean", description = "Load/reload after saving. Default true; false never executes the source." },
-			}, required = { "plugin", "source" } },
+			}, required = { "plugin" } },
 			run = function(args, ctx)
+				if args.path then
+					if args.source ~= nil then return H.fail("provide source or path, not both") end
+					if ctx and ctx.aborted and ctx.aborted() then return H.fail("cancelled before reading plugin source") end
+					local source, why = env.require("runtime/fsx").readUser(args.path)
+					if not source then return H.fail(why) end
+					args = util.copy(args); args.source = source
+				end
 				local result, err = plugins.write(args, ctx)
 				if not result then return H.fail(err) end
-				return { text = util.encode(result), data = result }
+				return { text = "Saved " .. result.plugin .. "; " .. result.validation .. ".", data = result }
 			end,
 		},
 		{
@@ -300,7 +307,8 @@ return function(env)
 				type = "object",
 				properties = {
 					query = { type = "string", description = "What to look for, e.g. 'dex', 'esp', 'aimlock'." },
-					limit = { type = "integer", description = "Maximum results. Default 10." },
+					limit = { type = "integer", minimum = 1, maximum = 30, description = "Maximum results. Default 10." },
+					offset = { type = "integer", minimum = 1, description = "Continue at nextOffset with the same query." },
 				},
 				required = { "query" },
 			},
@@ -308,20 +316,17 @@ return function(env)
 				local query = util.trim(tostring(args.query or ""))
 				if query == "" then return H.fail("no query given") end
 
-				local results, err = store.search(query, H.limit(args.limit, 10, 30))
+				local results, err = store.search(query)
 				if not results then return H.fail(err) end
 				if #results == 0 then
 					return "Nothing on the store matches '" .. query .. "'."
 				end
 
-				local lines = {}
-				for index, entry in ipairs(results) do
+				return H.page(results, args, string.format("%d plugins matched '%s':", #results, query), function(entry)
 					local author = entry.author ~= "" and (" by " .. entry.author) or ""
 					local file = entry.file and (" [" .. entry.file.name .. "]") or ""
-					lines[#lines + 1] = entry.name .. author .. file
-				end
-				return string.format("%d plugin%s matched '%s':\n%s",
-					#results, #results == 1 and "" or "s", query, H.list(lines, 30))
+					return entry.name .. author .. file .. " (id: " .. entry.id .. ")"
+				end, 10, 30)
 			end,
 		},
 		{
@@ -339,11 +344,10 @@ return function(env)
 				},
 				required = { "plugin" },
 			},
-			run = function(args)
-				local ok, result = store.install(args.plugin)
+			run = function(args, ctx)
+				local ok, result = store.install(args.plugin, ctx)
 				if not ok then return H.fail(result) end
-				return "Installed " .. result
-					.. ". Its commands are live; list them with iy_cmds filtered by the plugin name."
+				return result .. ". Inspect registered commands with iy_cmds(plugin=...)."
 			end,
 		},
 		{
