@@ -246,17 +246,32 @@ return function(env)
 		return table.concat(t)
 	end
 
-	local function randomHex(len)
-		local t = {}
-		for i = 1, len do
-			local r = math.random(0, 15)
-			t[i] = string.format("%x", r)
-		end
-		return table.concat(t)
-	end
-
+	-- OpenCode edge gateways validate that session and request IDs carry a valid
+	-- 48-bit millisecond timestamp (with a 12-bit counter). Session IDs (ses_)
+	-- invert the timestamp bytes (~n) in big-endian hex, followed by 14 Base62
+	-- characters. Request IDs (req_) use uninverted timestamp bytes.
+	local lastOpencodeMs, opencodeCounter = 0, 0
 	local function opencodeId(prefix)
-		return (prefix or "ses_") .. randomHex(12) .. randomBase62(14)
+		prefix = prefix or "ses_"
+		local ms = math.floor((clock and clock.ms and clock.ms()) or (os.time() * 1000))
+		if ms ~= lastOpencodeMs then
+			lastOpencodeMs = ms
+			opencodeCounter = 0
+		end
+		opencodeCounter = (opencodeCounter + 1) % 4096
+		local n = ms * 4096 + opencodeCounter
+		local inverted = (prefix == "ses_")
+		local bytes = {}
+		local temp = n
+		for i = 6, 1, -1 do
+			local b = math.floor(temp % 256)
+			temp = math.floor(temp / 256)
+			if inverted then
+				b = 255 - b
+			end
+			bytes[i] = string.format("%02x", b)
+		end
+		return prefix .. table.concat(bytes) .. randomBase62(14)
 	end
 	M.opencodeId = opencodeId
 

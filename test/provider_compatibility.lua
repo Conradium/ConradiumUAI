@@ -500,6 +500,13 @@ case("a failed Responses attempt never pins the lane", function()
 	f.healthy(); f.close()
 end)
 
+case("the Responses lane uses the documented Console endpoint", function()
+	local f = F.new(); local responses = f.env.require("provider/responses")
+	local direct = recordFor(f, "zen")
+	check("direct records use the Console responses URL", responses.endpointFor(direct) == "https://opencode.ai/inference/v1/responses")
+	f.healthy(); f.close()
+end)
+
 case("Responses function calls surface as normal tool calls", function()
 	local f = F.new(); local adapter = f.env.require("provider/responses")
 	local body = table.concat({
@@ -522,6 +529,29 @@ case("optional body controls respect explicit stream and tool choices", function
 	record.params = { stream = false }
 	body = adapter.buildBody(record, { stream = true })
 	check("nonstreaming override removes stream-only options", body.stream == false and body.stream_options == nil)
+	f.healthy(); f.close()
+end)
+
+case("OpenCode session and request IDs encode monotonic timestamps", function()
+	local f = F.new(); local registry = f.env.require("provider/registry"); local clock = f.env.require("runtime/clock")
+	local ses = registry.opencodeId("ses_")
+	local req = registry.opencodeId("req_")
+	check("session ID starts with ses_", ses:sub(1, 4) == "ses_")
+	check("request ID starts with req_", req:sub(1, 4) == "req_")
+	check("session ID length is 30", #ses == 30)
+	check("request ID length is 30", #req == 30)
+	local sesHex = ses:sub(5, 16)
+	local reqHex = req:sub(5, 16)
+	check("session hex is 12 hex characters", sesHex:match("^%x+$") ~= nil)
+	check("request hex is 12 hex characters", reqHex:match("^%x+$") ~= nil)
+	local recovered = 0
+	for i = 1, 12, 2 do
+		local b = 255 - tonumber(sesHex:sub(i, i + 1), 16)
+		recovered = recovered * 256 + b
+	end
+	local sesMs = math.floor(recovered / 4096)
+	local expectedMs = math.floor(clock.ms()) % (2 ^ 36)
+	check("recovered session timestamp matches clock.ms() modulo 2^36", math.abs(sesMs - expectedMs) < 5000)
 	f.healthy(); f.close()
 end)
 

@@ -2,7 +2,7 @@
 --
 -- Zen serves some models (muse-spark contributor builds) exclusively on the
 -- Responses protocol: /chat/completions answers ModelProtocolUnsupported for
--- them, while /inference/openai/v1/responses streams full reasoning and text.
+-- them, while the Responses endpoint streams full reasoning and text.
 -- This adapter speaks that lane and returns the same normalised result the
 -- chat adapter does, so everything above it is unchanged.
 --
@@ -78,13 +78,15 @@ return function(env)
 		return false
 	end
 
-	-- The lane a record's responses go to. Zen answers directly; records pointed
-	-- at the project proxy stay on it, which maps /responses too.
+	-- The lane a record's responses go to: the documented Console endpoint.
+	-- Zen answers directly; records pointed at the project proxy stay on it,
+	-- which maps /responses too. (An older /inference/openai/v1 prefix also
+	-- routes, but the documented /inference/v1 form is canonical.)
 	function M.endpointFor(record)
 		if registry.proxyProvider(record) then
 			return registry.endpoint(record, "/responses")
 		end
-		return "https://opencode.ai/inference/openai/v1/responses"
+		return "https://opencode.ai/inference/v1/responses"
 	end
 
 	local function textOf(content)
