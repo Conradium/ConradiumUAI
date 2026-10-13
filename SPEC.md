@@ -259,6 +259,12 @@ endpoint. Applying it replaces the editor draft's key pool and resets rotation;
 it neither replaces saved credentials nor selects a guessed model. Keys remain
 masked in the provider UI, including this intentionally distributed shared key.
 
+Provider key pools select ready credentials round-robin, advancing the shared
+cursor before network work can yield. Quota refusals bench their rejected key;
+proxy recovery and transport retries retain the selected request key. Intentional
+request snapshots share the originating record's cursor, while independent
+provider-editor drafts remain isolated. Cached model discovery uses no key slot.
+
 **Models are never guessed.** Presets carry no model list. `provider/models`
 resolves a provider's models from exactly two sources — ids the user added by
 hand (which rank first, and persist on the record) and whatever `GET /v1/models`

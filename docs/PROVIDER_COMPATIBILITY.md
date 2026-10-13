@@ -165,7 +165,10 @@ UAI socket gateway has its own upstream origin and cannot route this proxy switc
   field without duplicating it, and other base query values are preserved.
 - Auth styles are literal: Bearer, x-api-key, api-key, both, or none. Native
   Anthropic presets select x-api-key; an explicit Bearer choice is honored for
-  Messages gateways. Key pools choose one credential for discovery and inference.
+  Messages gateways. Key pools rotate ready credentials round-robin on each new
+  discovery or inference request. Rate-limited keys are skipped during cooldown;
+  proxy recovery keeps the selected credential. Transport retries of one request
+  keep that request's key. Cached model lists consume no pool slot.
   Later header maps override earlier names case-insensitively.
 - Discovered ids are cached for ten minutes for that connection/auth configuration.
   Unsaved drafts are separate. Changing settings, invalidating or starting a newer

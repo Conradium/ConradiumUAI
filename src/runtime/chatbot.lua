@@ -134,7 +134,7 @@ return function(env)
 				if not active(job) then return end
 				local record = providers.get(bot.providerId)
 				if not record or record.enabled == false then error("Chatbot provider was removed or disabled.", 0) end
-				record = util.copy(record)
+				record = providers.shareKeyRotation(record, util.copy(record))
 				record.model = bot.model
 				local system = "You are an independent chatbot in Roblox public chat, speaking through "
 					.. tostring(env.plr and env.plr.Name or "the local player") .. ".\n"

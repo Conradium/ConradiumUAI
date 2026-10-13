@@ -68,7 +68,7 @@ scenario filter, record the exact selector with its outcome.
 
 ## Recorded artifact and outcomes
 
-Final build: **3.0.0-43f82d8ab5b100e0**, 206 bundled modules, **3,337,357 bytes**.
+Original release build: **3.0.0-43f82d8ab5b100e0**, 206 bundled modules, **3,337,357 bytes**.
 Bundle SHA-256:
 `6b9bd51e7d63d4ec4ae8d7bc994daa54778ec31bcf771e180f46b61097bb6f36`.
 The generated manifest uses its existing `uai-dual32-v1` source identity; the
@@ -124,6 +124,44 @@ Manual source review records:
 the eight named bridge/relay/library modules are excluded. All **174** exported
 tool names are accounted for across the ledgers; `ui_library_docs` is protected
 from direct change. Protected source/guide/bundle files remain unchanged.
+
+## API key rotation follow-up
+
+The original release used the same API key until a quota refusal. This fix
+advances through ready keys on each new request, shares the cursor with request
+snapshots, and retains the selected credential during proxy/transport retries.
+Quota recovery selects the next key once. Independent editor drafts stay isolated.
+
+Changed source, documentation and regression tests were manually reviewed before
+verification; reviewed client inputs were rebuilt and the generated bundle and
+manifest inspected before tests. Only the seven intended client module hashes
+changed. The original twenty-file release pass above was not repeated.
+
+Follow-up build: **3.0.0-dddf35b93158e58b**, 206 modules, **3,337,782 bytes**.
+Bundle SHA-256:
+`a845bdcbe1252c536d609a0d244f8527698c58c29bed3b62a90ab67e5ef52c66`.
+
+| Command | Result |
+| --- | --- |
+| `luajit test/provider_key_rotation.lua` | 8 cases, 42 assertions, 0 failures |
+| `luajit test/provider_key_snapshots.lua` | 6 cases, 19 assertions, 0 failures |
+| `luajit test/provider_compatibility.lua` | 40 cases, 637 assertions, 0 failures |
+| `luajit test/provider_proxy.lua` | 16 cases, 127 assertions, 0 failures |
+| `luajit test/release_provider_ui.lua` | 4 cases, 12 assertions, 0 failures |
+| `luajit test/chat_bot.lua` | 89 checks, 0 failed scenarios |
+| Official Luau compiler: seven changed source files and `dist/uai.lua` | Pass |
+| `luajit test/check.lua --native` | 202 files, 0 failures, 0 warnings |
+| `luajit tools/bundle.lua --native --check` | Bundle, manifest and icons current |
+| `node tools/build_site.js --check` | Current; no website changes needed |
+
+The six selected Lua files passed **926 assertions/checks**. The added snapshot
+cases cover shared discovery/cooldown state, cache hits, default Anthropic auth,
+overlapping requests, independent editor drafts and discovery proxy recovery.
+
+The adjusted quota-rotation expectation in `test/run.lua` was manually reviewed;
+that monolithic file and the entire native suite were not run. Tests observe
+synthetic outgoing credentials without real provider requests. Logs are under
+`refer/key-rotation-3.0.0/` (ignored by Git).
 
 ## Native follow-up
 

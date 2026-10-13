@@ -20,6 +20,9 @@ precise tool outcomes and bounded runtime work.
 
 ### Agents and runtime
 
+- Rotate ready API keys across successful requests, including model discovery
+  and request snapshots. Preserve the selected key during proxy recovery and
+  skip rate-limited keys without advancing twice.
 - Avoid repeated growing-string copies in fragmented SSE parsing and repeated
   batch rescans during tool-result repair. Prose previews skip tool arguments.
   Responses assembly unifies call identities and enforces call/argument limits.

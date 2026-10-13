@@ -748,7 +748,7 @@ return function(env)
 				handle.setText("Testing")
 				local revision = modelRevision
 				local token = {}; testRun = token
-				local candidate = util.deepCopy(editing)
+				local candidate = registry.shareKeyRotation(editing, util.deepCopy(editing))
 				candidate.baseUrl = registry.normaliseBaseUrl(candidate.baseUrl)
 				local function aborted()
 					return modal.closed or not handle.instance.Parent or testRun ~= token or revision ~= modelRevision

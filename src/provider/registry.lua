@@ -28,11 +28,9 @@ return function(env)
 	-- minute, so N keys in one record is N times the ceiling with no second
 	-- provider to configure.
 	--
-	-- The selection is sticky, not round-robin: the same key is used until it
-	-- is rate limited, then the next one takes over instantly. Round-robin
-	-- would spread the limit evenly but also spend every key's quota on
-	-- requests a single exhausted key could have answered, and it makes a
-	-- genuinely dead key indistinguishable from a cooling one.
+	-- New requests rotate through ready keys. Selection advances before any
+	-- network yield, so overlapping requests share the pool in order. Quota
+	-- refusals additionally bench the rejected key until its cooldown expires.
 	local KEY_COOLDOWN_SECONDS = 30
 
 	function M.keysOf(record)
@@ -64,8 +62,14 @@ return function(env)
 		return record.keyRotation
 	end
 
-	-- The key a request should use. Sticky: the current index unless that key
-	-- is on cooldown, then the next one that is not. When every key is cooling,
+	-- Request snapshots keep their existing copy semantics, but own one shared
+	-- cursor with the record they were copied from, even before the first request.
+	function M.shareKeyRotation(record, snapshot)
+		if M.keyPoolSize(record) > 1 then snapshot.keyRotation = keyState(record) end
+		return snapshot
+	end
+
+	-- The next ready key, advancing past it for the following request. When every key is cooling,
 	-- the one whose cooldown expires soonest -- a pool that is entirely spent
 	-- is a pool that was just load-balanced, and waiting out the shortest
 	-- remaining bench is faster than hammering any single key.
@@ -85,19 +89,20 @@ return function(env)
 		for offset = 0, #keys - 1 do
 			local index = ((state.index - 1 + offset) % #keys) + 1
 			if ready(index) then
-				state.index = index
+				state.index = index % #keys + 1
 				return keys[index]
 			end
 		end
 
 		-- All cooling: soonest to expire.
-		local best, bestAt = nil, math.huge
+		local best, bestAt, bestIndex = nil, math.huge, nil
 		for index = 1, #keys do
 			local until_ = state.cooldowns[keys[index]] or 0
 			if until_ < bestAt then
-				best, bestAt = keys[index], until_
+				best, bestAt, bestIndex = keys[index], until_, index
 			end
 		end
+		if bestIndex then state.index = bestIndex % #keys + 1 end
 		return best
 	end
 

@@ -138,15 +138,16 @@ return function(env)
 
 		local key, token, scope = keyFor(record), {}, scopeFor(record)
 		pending[key] = token
-		local snapshot = util.deepCopy(record)
+		local snapshot = registry.shareKeyRotation(record, util.deepCopy(record))
 		local url = registry.endpoint(snapshot, "/models")
+		local headers = env.require("provider/chat").headers(snapshot)
 		local deadline = clock.ms() + math.max(1, math.min(300, tonumber(opts.timeout) or 120)) * 1000
 		local recovery = proxy.new(record, { aborted = opts.aborted, onRetry = opts.onRetry, deadlineMs = deadline })
 		local function fetch()
 			return http.send({
 				url = url,
 				method = "GET",
-				headers = env.require("provider/chat").headers(snapshot),
+				headers = headers,
 				identity = registry.identityFor(snapshot),
 				identityRequired = registry.requiresClaude(snapshot),
 				attempts = 2,

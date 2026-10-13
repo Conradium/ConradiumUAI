@@ -20,7 +20,7 @@ return function(env)
 	local ENTRIES = {
 		{
 			version = "3.0.0",
-			revision = "2026-10-13-agent-and-script-efficiency",
+			revision = "2026-10-13-agent-and-script-efficiency-key-rotation",
 			date = "October 13, 2026",
 			title = "Less repeated work, clearer tool outcomes",
 			highlights = "Reuse unchanged source analysis, discover files by name, run focused project tests, and continue useful result pages without repeated requests. Agent, capture and scheduling paths avoid duplicate work while preserving ownership and explicit limits.",
@@ -36,6 +36,7 @@ return function(env)
 					"Filter conversation/skill discovery, reuse short-lived product metadata and official Gravity source snapshots, and include all Anthropic prompt-token categories in context accounting.",
 				} },
 				{ category = "fixed", label = "Observed outcomes and cleanup", items = {
+					"Rotate pooled API keys across successful requests and model discovery. Share rotation with request snapshots, preserve keys during proxy recovery and skip rate-limited keys without double advancement.",
 					"Verify edited file bytes, report observed clamped or partial property writes, validate camera fields before changes, and resolve exact usernames before ambiguous display names.",
 					"Track held input through release, Stop and revocation. Release performance and temporary interaction listeners; native effects are not described as rolled back.",
 					"Keep hidden GUI ancestry, skipped search files and missing retained details explicit. Verify IY installations and restore persisted lifetime model/hour statistics.",

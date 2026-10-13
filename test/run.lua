@@ -6818,7 +6818,7 @@ scenario("a key pool rotates on a rate limit without delay", function()
 	-- The benched key is skipped on the next completion too: its cooldown is
 	-- 30s and the virtual clock has not moved that far.
 	local nextKey = registry.nextKey(record)
-	check("the cooled key is not selected again", nextKey, "key-two")
+	check("the next request advances past the successful key and skips the cooled key", nextKey, "key-three")
 end)
 
 scenario("quota wording in a 200-body style refusal also rotates", function()

@@ -931,17 +931,13 @@ return function(env)
 
 		local url = registry.endpoint(record, "/chat/completions")
 		local pool = registry.keysOf(record)
-		local currentKey = nil
+		local currentKey = registry.nextKey(record)
 		local currentKeyIndex = 0
 
 		local function rebuildHeaders()
-			-- With a pool, the key is chosen per attempt; without one this is the
-			-- record's own key and nothing changes from before the pool existed.
-			if #pool > 1 then
-				currentKey = registry.nextKey(record)
-				for index, key in ipairs(pool) do
-					if key == currentKey then currentKeyIndex = index end
-				end
+			-- Rebuilding proxy/identity headers must not consume another pool slot.
+			for index, key in ipairs(pool) do
+				if key == currentKey then currentKeyIndex = index end
 			end
 			return headerMap.merge(registry.authHeaders(record, currentKey), registry.opencodeHeaders(record, request),
 				record.headers, { Accept = body.stream and "text/event-stream" or "application/json" })
@@ -1031,9 +1027,6 @@ return function(env)
 				local benched = currentKey or pool[1]
 				registry.cooldownKey(record, benched)
 				currentKey = registry.nextKey(record)
-				for index, key in ipairs(pool) do
-					if key == currentKey then currentKeyIndex = index end
-				end
 				headers = rebuildHeaders()
 				local label = "rate limited, rotating to key #" .. currentKeyIndex
 				log.info("provider", record.label .. ": " .. label)
