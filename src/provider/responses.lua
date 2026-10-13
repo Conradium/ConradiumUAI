@@ -29,6 +29,16 @@ return function(env)
 		return registry.isOpencode(record)
 	end
 
+	-- Models verified to speak only the Responses lane (live 200 on
+	-- /inference/openai/v1/responses with chat refused). Proactive so the
+	-- first turn never burns a chat refusal: on the direct route the free-tier
+	-- gate answers 403 before protocol validation runs, so a reactive switch
+	-- would never fire there.
+	function M.wantsResponses(record)
+		if not M.eligible(record) then return false end
+		return tostring(record and record.model or ""):find("muse-spark", 1, true) ~= nil
+	end
+
 	function M.isProtocolRefusal(res)
 		if not res or tonumber(res.status) ~= 400 then return false end
 		local decoded = util.decode(tostring(res.body or ""))
@@ -40,6 +50,21 @@ return function(env)
 		if type(failure) == "table" then
 			if tostring(failure.type or "") == "ModelProtocolUnsupported" then return true end
 			return tostring(failure.message or ""):find("does not support this protocol", 1, true) ~= nil
+		end
+		return false
+	end
+
+	function M.isFreeTierRefusal(res)
+		if not res or tonumber(res.status) ~= 403 then return false end
+		local decoded = util.decode(tostring(res.body or ""))
+		if type(decoded) ~= "table" then return false end
+		local failure = decoded.error
+		if type(failure) == "string" then
+			return failure:find("free tier can only be used from within OpenCode", 1, true) ~= nil
+		end
+		if type(failure) == "table" then
+			if tostring(failure.type or "") == "FreeTierError" then return true end
+			return tostring(failure.message or ""):find("free tier can only be used from within OpenCode", 1, true) ~= nil
 		end
 		return false
 	end

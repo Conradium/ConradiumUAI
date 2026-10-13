@@ -924,8 +924,9 @@ return function(env)
 		applyRemembered(record, body)
 		local requestScope = registry.compatibilityKey(record)
 
-		-- A record that already learned the Responses lane skips chat entirely.
-		if responses.remembered(record) and responses.eligible(record) then
+		-- A record that already learned the Responses lane, or names a model
+		-- verified to speak only that lane, skips chat entirely.
+		if responses.eligible(record) and (responses.remembered(record) or responses.wantsResponses(record)) then
 			return responses.complete(record, request)
 		end
 
@@ -1040,18 +1041,23 @@ return function(env)
 
 		local res, err = fireWithRotation(body)
 		-- Some Zen models only speak the Responses protocol: /chat/completions
-		-- answers ModelProtocolUnsupported for them. Switch lanes and retry there;
-		-- when that lane also fails, the original refusal falls through below to
-		-- the normal repair and failure path.
-		if res and registry.compatibilityKey(record) == requestScope
-			and responses.eligible(record) and responses.isProtocolRefusal(res) then
-			remember(record, responses.key())
-			log.info("provider", record.label .. ": chat protocol refused, retrying on the Responses lane")
+		-- answers ModelProtocolUnsupported for them. Switch lanes and retry there.
+		-- On the direct route the free-tier gate can answer 403 before protocol
+		-- validation runs, so that refusal tries the lane too. The lane is only
+		-- remembered after it answers, so a failed attempt never pins the record;
+		-- when it also fails, the original refusal falls through below to the
+		-- normal repair and failure path.
+		if res and registry.compatibilityKey(record) == requestScope and responses.eligible(record)
+			and (responses.isProtocolRefusal(res) or responses.isFreeTierRefusal(res)) then
+			log.info("provider", record.label .. ": chat route refused, retrying on the Responses lane")
 			if request.onRetry then
-				request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = "model needs the Responses protocol", status = res.status })
+				request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = "model may need the Responses protocol", status = res.status })
 			end
 			local switched, switchErr, switchRes = responses.complete(record, request)
-			if switched then return switched, nil, switchRes end
+			if switched then
+				remember(record, responses.key())
+				return switched, nil, switchRes
+			end
 		end
 		-- A gateway names a bad field in a 400, and a NewAPI gateway names a bad
 		-- content variant in a 422. Both are repairable, and both can chain: a

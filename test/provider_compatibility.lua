@@ -431,6 +431,75 @@ case("a model that only speaks Responses switches lanes and assembles once", fun
 	f.healthy(); f.close()
 end)
 
+-- On the direct route the free-tier gate answers 403 before protocol validation
+-- runs, so a muse-spark record would never reach the reactive switch. Known
+-- Responses-only models skip chat from the first turn.
+case("verified Responses-only models skip chat proactively", function()
+	local f = F.new(); local record = recordFor(f, "zen"); record.model = "muse-spark-1.3-contributor-free"
+	local chatBodies, responsesBodies = {}, {}
+	f.h.http.handler = function(entry)
+		if entry.url:find("/responses", 1, true) then
+			responsesBodies[#responsesBodies + 1] = f.h.json.decode(entry.body)
+			return { StatusCode = 200, Body = f.h.json.encode({ id = "resp_1", object = "response", status = "completed",
+				model = record.model, output = { { type = "message", id = "msg_1", content = { { type = "output_text", text = "hi" } } } },
+				usage = { input_tokens = 2, output_tokens = 1 } }) }
+		end
+		chatBodies[#chatBodies + 1] = f.h.json.decode(entry.body)
+		return { StatusCode = 403, Body = f.h.json.encode({ error = { type = "FreeTierError", message = "OpenCode's free tier can only be used from within OpenCode" } }) }
+	end
+	local result = complete(f, record, { messages = { { role = "user", content = "hi" } }, stream = true })
+	check("no chat request is sent at all", result ~= nil and #chatBodies == 0 and #responsesBodies == 1)
+	check("the reply arrives in chat shape", result and result.content == "hi")
+	f.healthy(); f.close()
+end)
+
+-- A 403 free-tier refusal on an unlisted model still deserves one lane attempt:
+-- the direct route fires the gate before protocol validation, so without this
+-- the reactive switch would never see those models.
+case("a free-tier refusal also tries the Responses lane once", function()
+	local f = F.new(); local record = recordFor(f, "zen")
+	local chatBodies, responsesBodies = {}, {}
+	f.h.http.handler = function(entry)
+		if entry.url:find("/responses", 1, true) then
+			responsesBodies[#responsesBodies + 1] = f.h.json.decode(entry.body)
+			return { StatusCode = 200, Body = f.h.json.encode({ id = "resp_1", object = "response", status = "completed",
+				model = record.model, output = { { type = "message", id = "msg_1", content = { { type = "output_text", text = "recovered" } } } } }) }
+		end
+		chatBodies[#chatBodies + 1] = f.h.json.decode(entry.body)
+		return { StatusCode = 403, Body = f.h.json.encode({ error = { type = "FreeTierError", message = "OpenCode's free tier can only be used from within OpenCode" } }) }
+	end
+	local result = complete(f, record, { messages = { { role = "user", content = "hi" } }, stream = true })
+	check("the turn recovers on the Responses lane", result ~= nil and #chatBodies == 1 and #responsesBodies == 1)
+	check("with the recovered text", result and result.content == "recovered")
+	check("the lane is remembered only after answering", f.env.require("provider/responses").remembered(record))
+	check("the next turn skips chat entirely", complete(f, record, { messages = { { role = "user", content = "again" } }, stream = true }) ~= nil and #chatBodies == 1 and #responsesBodies == 2)
+	f.healthy(); f.close()
+end)
+
+-- A failed lane attempt must not pin the record: the next turn tries chat
+-- again instead of repeating a lane known only to fail.
+case("a failed Responses attempt never pins the lane", function()
+	local f = F.new(); local record = recordFor(f, "zen")
+	local chatBodies, responsesBodies = {}, {}
+	f.h.http.handler = function(entry)
+		if entry.url:find("/responses", 1, true) then
+			responsesBodies[#responsesBodies + 1] = f.h.json.decode(entry.body)
+			return { StatusCode = 400, Body = f.h.json.encode({ error = { message = "bad request" } }) }
+		end
+		chatBodies[#chatBodies + 1] = f.h.json.decode(entry.body)
+		if #chatBodies == 1 then
+			return { StatusCode = 400, Body = f.h.json.encode({ error = { type = "ModelProtocolUnsupported", message = "Model does not support this protocol." } }) }
+		end
+		return jsonReply(f)
+	end
+	local _, why = complete(f, record, { messages = { { role = "user", content = "hi" } }, stream = true })
+	check("the terminal error names the protocol", why and has(why, "does not support this protocol"))
+	check("the lane was attempted once", #responsesBodies == 1)
+	check("and was not remembered", not f.env.require("provider/responses").remembered(record))
+	check("so the next turn tries chat again", complete(f, record, { messages = { { role = "user", content = "again" } }, stream = true }) ~= nil and #chatBodies == 2 and #responsesBodies == 1)
+	f.healthy(); f.close()
+end)
+
 case("Responses function calls surface as normal tool calls", function()
 	local f = F.new(); local adapter = f.env.require("provider/responses")
 	local body = table.concat({
