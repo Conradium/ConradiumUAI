@@ -75,6 +75,8 @@ case("only explicit client refusals qualify", function()
 	for _, value in ipairs({ "Unauthorized client", "unauthorized_client", "UnauthorizedClientError", "Unauthorised client", "Client is not authorized" }) do
 		check(value, proxy.isClientRefusal({ status = 403, body = f.h.json.encode({ error = { message = value } }) }))
 	end
+	check("FreeTierError type", proxy.isClientRefusal({ status = 403, body = '{"error":{"type":"FreeTierError","message":"OpenCode\'s free tier can only be used from within OpenCode."}}' }))
+	check("FreeTierError name", proxy.isClientRefusal({ status = 403, body = '{"error":{"name":"FreeTierError","message":"OpenCode\'s free tier can only be used from within OpenCode."}}' }))
 	check("short plain text", proxy.isClientRefusal({ status = 401, body = "Unauthorized client" }))
 	check("structured 200 error", proxy.isClientRefusal({ status = 200, body = f.h.json.encode({ error = "Unauthorized client" }) }))
 	for _, response in ipairs({
@@ -83,7 +85,6 @@ case("only explicit client refusals qualify", function()
 		{ status = 401, body = '{"error":{"code":"invalid_api_key","message":"Unauthorized client"}}' },
 		{ status = 401, body = 'Unauthorized client: invalid API key' },
 		{ status = 403, body = '{"error":{"message":"insufficient permissions"}}' },
-		{ status = 403, body = '{"error":{"type":"FreeTierError","message":"OpenCode free tier can only be used from within OpenCode"}}' },
 		{ status = 403, body = "<html>Unauthorized client</html>" },
 		{ status = 429, body = '{"error":"Unauthorized client"}' },
 		{ status = 500, body = '{"error":"Unauthorized client"}' },
@@ -130,17 +131,38 @@ for _, preset in ipairs({ "zen", "agentrouter" }) do
 end
 
 case("invalid keys and custom endpoints never send credentials to the proxy", function()
-	for _, mode in ipairs({ "invalid-key", "custom", "free-tier" }) do
+	for _, mode in ipairs({ "invalid-key", "custom" }) do
 		local f = fixture()
 		if mode == "custom" then f.record.baseUrl = "https://custom.test/v1" end
 		local original = f.record.baseUrl
 		f.h.http.handler = function()
 			if mode == "custom" then return f.refusal() end
-			return { StatusCode = 401, Body = f.h.json.encode({ error = { message = mode == "invalid-key" and "Invalid API key" or "OpenCode free tier can only be used from within OpenCode" } }) }
+			return { StatusCode = 401, Body = f.h.json.encode({ error = { message = "Invalid API key" } }) }
 		end
 		check("request fails without redirect", not f.complete() and f.h.http.requestCount == 1 and f.record.baseUrl == original)
 		f.healthy(); f.close()
 	end
+end)
+
+case("OpenCode FreeTierError switches to the Project UAI proxy", function()
+	local f = fixture("zen", "openai")
+	local record = f.record
+	f.registry.save(record)
+	local retries = 0
+	f.h.http.handler = function(entry)
+		if not entry.url:find(PROXY .. "opencode/v1", 1, true) then
+			return { StatusCode = 403, Body = f.h.json.encode({ error = { name = "FreeTierError", message = "OpenCode's free tier can only be used from within OpenCode." } }) }
+		end
+		if entry.url:find("/responses", 1, true) then
+			return { StatusCode = 400, Body = f.h.json.encode({ error = { message = "protocol unsupported" } }) }
+		end
+		check("retried on proxy chat route", entry.url == PROXY .. "opencode/v1/chat/completions")
+		return f.reply()
+	end
+	local result, why = f.complete({ onRetry = function(info) retries = retries + 1; check("proxy retry reported", info.proxy) end })
+	check("completion recovered via proxy: " .. tostring(why), result and result.content == "recovered" and f.h.http.requestCount >= 2 and retries >= 1)
+	check("saved record changed to proxy", f.registry.get(record.id).baseUrl == PROXY .. "opencode/v1")
+	f.healthy(); f.close()
 end)
 
 case("draft discovery switches locally without creating or changing saved providers", function()

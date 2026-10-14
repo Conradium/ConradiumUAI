@@ -60,11 +60,20 @@ return function(env)
 		if type(decoded) ~= "table" then return false end
 		local failure = decoded.error
 		if type(failure) == "string" then
-			return failure:find("free tier can only be used from within OpenCode", 1, true) ~= nil
+			local text = failure:lower()
+			return text:find("freetiererror", 1, true) ~= nil
+				or text:find("can only be used from within opencode", 1, true) ~= nil
+				or text:find("free tier can only be used from within", 1, true) ~= nil
 		end
 		if type(failure) == "table" then
-			if tostring(failure.type or "") == "FreeTierError" then return true end
-			return tostring(failure.message or ""):find("free tier can only be used from within OpenCode", 1, true) ~= nil
+			local t = tostring(failure.type or ""):lower()
+			local n = tostring(failure.name or ""):lower()
+			local c = tostring(failure.code or ""):lower()
+			if t == "freetiererror" or n == "freetiererror" or c == "freetiererror" then return true end
+			local msg = tostring(failure.message or ""):lower()
+			return msg:find("can only be used from within opencode", 1, true) ~= nil
+				or msg:find("free tier can only be used from within", 1, true) ~= nil
+				or msg:find("freetiererror", 1, true) ~= nil
 		end
 		return false
 	end
@@ -460,8 +469,13 @@ return function(env)
 		local rotationsLeft = handoff.rotationsLeft or math.max(#pool - 1, 0)
 		local function headersFor()
 			return headerMap.merge(registry.authHeaders(record, currentKey or ""), {
-				["x-opencode-session"] = sessionId, ["x-opencode-client"] = "desktop",
-				["User-Agent"] = "opencode/latest/2.0.27/desktop", ["accept"] = "*/*",
+				["x-opencode-session"] = sessionId,
+				["x-opencode-session-id"] = sessionId,
+				["x-session-affinity"] = sessionId,
+				["X-Session-Id"] = sessionId,
+				["x-opencode-client"] = "desktop",
+				["User-Agent"] = "opencode/latest/2.0.27/desktop",
+				["accept"] = "*/*",
 			}, record.headers)
 		end
 		local started = clock.ms()

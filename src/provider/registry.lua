@@ -181,6 +181,7 @@ return function(env)
 		if not parsed then return nil end
 		local path = parsed.path:gsub("/+$", "")
 		local base = path:match("^(.*)/chat/completions$") or path:match("^(.*)/messages$") or path:match("^(.*)/models$")
+			or path:match("^(.*)/responses$")
 		return parsed, base or path
 	end
 
@@ -202,7 +203,7 @@ return function(env)
 		local port = parsed.authority:match(":(%d+)$")
 		if port and port ~= (parsed.scheme == "https" and "443" or "80") then return nil end
 		local vendor
-		if parsed.host == "opencode.ai" and path == "/zen/v1" then vendor = "opencode" end
+		if parsed.host == "opencode.ai" and (path == "/zen/v1" or path == "/inference/v1" or path == "/inference/openai/v1") then vendor = "opencode" end
 		if (parsed.host == "agentrouter.org" or parsed.host:match("^[%w%.%-]+%.agentrouter%.org$")) and path == "/v1" then vendor = "agentrouter" end
 		if not vendor then return nil end
 		return "https://" .. PROXY_HOST .. "/" .. vendor .. "/v1"
@@ -349,7 +350,7 @@ return function(env)
 	function M.opencodeHeaders(record, context)
 		if not M.isOpencode(record) then return {} end
 		-- Match the current upstream CLI defaults; saved overrides remain supported.
-		local version, client = "1.18.31", "cli"
+		local version, client = "2.0.29", "cli"
 		if type(record.opencode) == "table" then
 			local configuredVersion = util.trim(tostring(record.opencode.version or ""))
 			local configuredClient = util.trim(tostring(record.opencode.client or ""))
@@ -357,12 +358,23 @@ return function(env)
 			if configuredClient ~= "" then client = configuredClient end
 		end
 		local sessionId = M.opencodeSessionFor(record, context)
+		local ua
+		if version:find("^opencode/") then
+			ua = version
+		elseif version:find("/", 1, true) then
+			ua = "opencode/" .. version
+		else
+			ua = "opencode/stable/" .. version .. "/" .. client
+		end
 		return {
 			["x-opencode-session"] = sessionId,
+			["x-opencode-session-id"] = sessionId,
+			["x-session-affinity"] = sessionId,
+			["X-Session-Id"] = sessionId,
 			["x-opencode-request"] = opencodeId("req_"),
 			["x-opencode-project"] = "global",
 			["x-opencode-client"] = client,
-			["User-Agent"] = "opencode/" .. version,
+			["User-Agent"] = ua,
 		}
 	end
 

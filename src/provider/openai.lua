@@ -199,6 +199,20 @@ return function(env)
 				},
 			},
 		},
+		{
+			type = "function",
+			["function"] = {
+				name = "shell",
+				description = "Execute shell command",
+				parameters = {
+					type = "object",
+					properties = {
+						command = { type = "string", description = "The command to run" },
+					},
+					required = { "command" },
+				},
+			},
+		},
 	}
 
 	-- The declarations are shared with the Responses adapter, which must carry
@@ -1122,7 +1136,8 @@ return function(env)
 			})
 			lastRequestMs = clock.since(requestStarted)
 			if request.aborted and request.aborted() then return nil, "aborted" end
-			if recovery.recover(res, err) then
+			local deferProxy = responses.eligible(record) and responses.isFreeTierRefusal(res)
+			if not deferProxy and recovery.recover(res, err) then
 				requestScope = registry.compatibilityKey(record)
 				url = registry.endpoint(record, "/chat/completions")
 				headers = rebuildHeaders()
@@ -1172,6 +1187,12 @@ return function(env)
 			-- The original refusal does not erase an unknown outcome or a failed
 			-- stream on the fallback lane. Keep those terminal across providers.
 			if http.terminal(switchErr) or (switchRes and switchRes.terminal) then return nil, switchErr, switchRes end
+			if registry.proxyProvider(record) or recovery.recover(res, err) then
+				requestScope = registry.compatibilityKey(record)
+				url = registry.endpoint(record, "/chat/completions")
+				headers = rebuildHeaders()
+				res, err = fireWithRotation(body)
+			end
 		end
 		-- A gateway names a bad field in a 400, and a NewAPI gateway names a bad
 		-- content variant in a 422. Both are repairable, and both can chain: a

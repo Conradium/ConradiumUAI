@@ -15,6 +15,10 @@ return function(env)
 			or text:find("%f[%a]unauthori[sz]edclienterror%f[%A]") ~= nil
 			or text:find("%f[%a]client is not authorized%f[%A]") ~= nil
 			or text:find("%f[%a]client is not authorised%f[%A]") ~= nil
+			or text:find("freetiererror", 1, true) ~= nil
+			or text:find("free tier error", 1, true) ~= nil
+			or text:find("can only be used from within opencode", 1, true) ~= nil
+			or text:find("free tier can only be used from within", 1, true) ~= nil
 	end
 
 	local function credentialOrAccountRefusal(value)
@@ -23,7 +27,7 @@ return function(env)
 		return text:find("invalid api key", 1, true) ~= nil or text:find("incorrect api key", 1, true) ~= nil
 			or text:find("expired api key", 1, true) ~= nil or text:find("api key is invalid", 1, true) ~= nil
 			or text:find("api key expired", 1, true) ~= nil or text:find("invalid key", 1, true) ~= nil
-			or text:find("freetiererror", 1, true) ~= nil or text:find("insufficient permissions", 1, true) ~= nil
+			or text:find("insufficient permissions", 1, true) ~= nil
 	end
 
 	local function errorObject(value)
