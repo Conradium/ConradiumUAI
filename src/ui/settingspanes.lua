@@ -134,17 +134,6 @@ return function(env)
 		})
 
 		R.number(appearance, "Text scale", "Multiplies every type size.", "ui.fontScale", 0.85, 1.4, 0.05)
-		R.segmented(appearance, {
-			name = "ReduceMotion",
-			label = "Reduce motion",
-			hint = "Auto follows the platform's own accessibility preference.",
-			path = "ui.reduceMotion",
-			options = {
-				{ value = "auto", label = "Auto" },
-				{ value = "on", label = "On" },
-				{ value = "off", label = "Off" },
-			},
-		})
 		R.toggle(appearance, {
 			label = "Show reasoning",
 			hint = "Display the model's chain of thought when it sends one. Applies to the conversation already on screen.",
@@ -1146,11 +1135,11 @@ return function(env)
 			"Seconds before a tool is abandoned. Subagents are exempt: they run to their own budget below.",
 			"agent.toolTimeout", 5, 60, 1)
 		R.number(agent, "Request timeout",
-			"Configured wait for one model call. Native transports cap each request at 300 seconds; hosts and providers may stop sooner. Buffered HTTP displays text only after the response arrives.",
+			"Wait for a direct or companion model call. Direct native requests cap at 300 seconds; hosts and providers may stop sooner. Cowork bridge requests always wait until completion, failure or Stop.",
 			"agent.requestTimeout", REQUEST_STOPS)
 		R.toggle(agent, {
 			label = "Maximum request wait",
-			hint = "Use the transport's maximum wait instead of a shorter configured timeout. Native requests still stop after at most 300 seconds. Stop remains available.",
+			hint = "Use the direct transport's maximum wait instead of a shorter timeout, up to 300 seconds. Cowork bridge requests already have no time limit. Stop remains available.",
 			path = "agent.requestUnlimited",
 		})
 		R.number(agent, "Subagent budget",

@@ -5,10 +5,19 @@ updated Roblox script automatically. The desktop project is separate from the
 existing bridge and uses its server in `--desktop` mode on **127.0.0.1:28791**.
 Manual terminal startup keeps port 8790 and its existing token workflow.
 
-Extract `release/UAI-Bridge-1.0.0-win-x64.zip`, open **UAI Bridge.exe**, and click
-**Start Cowork**. The package includes Node, .NET, browser assets and the matching
-client in `client/uai.lua`. It needs neither an executor-workspace path nor an
-installed runtime. Roblox and the UAI script must remain running.
+Download and open **UAI-Bridge-3.1.0-win-x64.exe**, then click
+**Start Cowork**. The redesigned window separates connection, Node.js setup and
+update status. It detects Node.js 18+ on your computer. If none is available,
+choose **Download Node.js** or **Install Node manually**, then **Check again**.
+The app downloads the current Windows x64 LTS executable from nodejs.org, checks
+its official SHA-256, and installs it for your account without administrator
+access.
+
+The single executable includes .NET, the bridge, browser assets, the matching
+client and license notices. It verifies and prepares its embedded files in a
+private user cache automatically. There is no ZIP to extract or supporting
+folder to keep beside the executable. Node.js is installed separately through
+the app or detected on your computer. Roblox and the UAI script must remain running.
 
 The window reports bridge startup separately from Roblox connection. Closing a
 running window hides it in the tray; **Exit** stops the owned bridge and exits.
@@ -17,12 +26,44 @@ the app never chooses an undiscoverable random port or kills another application
 
 ## Automatic connection
 
-`bridge.autoDiscover` defaults to true. The client probes the dedicated port every
-four seconds, with a two-second request deadline. An enabled manual bridge takes
+`bridge.autoDiscover` defaults to true. Desktop clients probe the dedicated port
+every four seconds, with a two-second request deadline. Touch-only mobile clients
+skip this Windows discovery route. An enabled manual bridge takes
 priority. Turn off **Manual bridge enabled** in Cowork to use the desktop app.
 Disable **Find desktop app automatically** to opt out. `bridge.stop()` suspends
 discovery until `bridge.sync()` or a connection-setting change. Unloading releases
 the discovery worker and ignores pending results.
+
+With client 3.1.0, authenticated bridge contact selects Web runtime automatically;
+disconnecting restores Game for subsequent requests. Stopping or restarting the
+launcher does not resend an inference request. Update the packaged client and
+bridge together when building a desktop distribution.
+
+## Automatic updates
+
+Bridge releases download automatically, are verified, and activate only when
+active work and retained receipts/pictures are idle. An automatic worker restart
+keeps the same pairing token. The browser reconnects to the updated bridge.
+
+The desktop app separately checks stable releases in
+`Project-Ptolemy/ProjectUAI` on startup and every 15 minutes. It downloads and
+verifies a compatible desktop executable in the background. A ready update
+applies on restart; the **Restart to update app** action is available once the bridge is
+stopped. Updates never automatically stop an active conversation.
+
+Desktop versions are staged in a private per-install cache under LocalAppData.
+The original executable is retained. The launcher remembers a verified
+new version only after its window opens successfully, and falls back if it
+cannot start. The original shortcut continues to work. Bridge cache identity
+stays stable across desktop updates. Failed network or integrity checks leave
+the current app usable and retry later.
+
+Desktop 1.0 has no updater, so its users need one manual download of 3.1.0 first.
+For each future release, publish `desktop-release.json`,
+`UAI-Bridge-<version>-win-x64.exe`, and its adjacent `.sha256` on the same official
+`v<version>` or `desktop-v<version>` GitHub release. The manifest includes the
+exact version, platform, executable name, byte size and SHA-256. Bridge updates independently need `bridge-release.json`
+and `uai-bridge-package.json`; see the [bridge guide](../bridge/README.md).
 
 Desktop credentials live only in memory and rotate at each app start. The app
 and native executor discover through a desktop-only POST endpoint requiring the
@@ -39,12 +80,10 @@ than resending it to a new process.
 
 ## Build and verification
 
-Install the .NET 10 SDK for Windows; Node is downloaded from nodejs.org at a pinned
-version and checked against its pinned SHA-256. No NuGet library dependencies.
-The launcher icon is generated from `bridge/web/favicon.ico` (a PNG asset) by
-`desktop/make-icon.ps1` during the build, because the compiler only embeds
-Win32-format `.ico` files. Manually audit all changed source, documentation and
-tests first, then build:
+Install the .NET 10 SDK for Windows and Node.js 18+ for verification. The package
+build does not download Node. There are no NuGet library dependencies.
+`desktop/make-icon.ps1` draws the native connection glyph; the app has no UAI logo
+image. Manually audit all changed source, documentation and tests first, then build:
 
 ```powershell
 luajit tools/bundle.lua --native
@@ -55,22 +94,23 @@ powershell -ExecutionPolicy Bypass -File desktop/build.ps1
 Inspect generated client and desktop outputs, then verify:
 
 ```powershell
-node bridge/tests/run.js
+node --test bridge/tests/desktop.test.js bridge/tests/updater.test.js
 luajit test/desktop_bridge.lua
 luajit test/web_runtime.lua
 luajit test/bridge_install.lua
 luajit test/check.lua --native
-luajit test/run.lua --native
 luajit tools/bundle.lua --native --check
 powershell -ExecutionPolicy Bypass -File desktop/verify.ps1
 ```
 
-The desktop verification checks every packaged file hash and exercises the actual
-bundled runtime: repeated startup, discovery, simulated game status, graceful stop
+The desktop verification checks the release executable and embedded file hashes,
+single-file startup, and the absence of a bundled Node runtime. It exercises
+detected Node, repeated startup, discovery, simulated game status, graceful stop
 and restart with a new token. It also renders a native WinForms window preview in
 `.build/verification/launcher.png`; inspect it. These checks do not claim a live
 executor/Roblox connection. The source compiles with the official Luau compiler.
 
 Build outputs, dependency caches and intermediate files are ignored by Git.
-Publish the ZIP and adjacent SHA-256 file as release assets. This local build is
-unsigned; signing and public release publication are separate distribution steps.
+Publish the executable, release manifest and adjacent SHA-256 as release assets.
+This local build is unsigned; signing and public release publication are separate
+distribution steps.

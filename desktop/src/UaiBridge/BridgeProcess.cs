@@ -18,6 +18,10 @@ internal sealed class BridgeProcess : IAsyncDisposable
     private string? token;
     public string State { get; private set; } = "Stopped";
     public string Detail { get; private set; } = "Ready when you are.";
+    public string UpdateState { get; private set; } = "current";
+    public string BridgeVersion { get; private set; } = "3.1.0";
+    public string? AvailableVersion { get; private set; }
+    public string? UpdateError { get; private set; }
     public string? BrowserUrl => token is { } secret ? Origin + "/#t=" + secret : null;
     public event Action? Changed;
 
@@ -38,11 +42,13 @@ internal sealed class BridgeProcess : IAsyncDisposable
             job?.Dispose(); job = null;
             token = null;
             SetState("Starting", "Starting your local Cowork bridge...");
-            string root = AppContext.BaseDirectory;
-            string node = Path.Combine(root, "runtime", "node.exe");
+            string root = await Task.Run(EmbeddedPayload.Prepare);
+            var runtime = await NodeRuntime.FindAsync();
+            if (runtime is null) throw new IOException("Node.js is needed to run the bridge. Choose Download Node.js below, or install it from nodejs.org and check again.");
+            string node = runtime.Path;
             string server = Path.Combine(root, "bridge", "server.js");
-            if (!File.Exists(node) || !File.Exists(server))
-                throw new IOException("The app package is incomplete. Extract the entire ZIP, then open UAI Bridge.exe inside that folder.");
+            if (!File.Exists(server))
+                throw new IOException("The embedded bridge files are incomplete. Download a fresh copy of the desktop app.");
 
             var ready = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var process = new Process { StartInfo = new ProcessStartInfo(node)
@@ -53,6 +59,7 @@ internal sealed class BridgeProcess : IAsyncDisposable
             }, EnableRaisingEvents = true };
             process.StartInfo.ArgumentList.Add(server);
             process.StartInfo.ArgumentList.Add("--desktop");
+            process.StartInfo.Environment["UAI_BRIDGE_INSTALLATION_ID"] = Path.Combine(DesktopUpdater.InstallationRoot, "bridge", "server.js");
             process.Exited += (_, _) =>
             {
                 if (ReferenceEquals(child, process) && !stopping)
@@ -68,7 +75,10 @@ internal sealed class BridgeProcess : IAsyncDisposable
             _ = ReadOutputAsync(process, ready);
             // Drain stderr without recording potentially sensitive process output.
             _ = DrainErrorsAsync(process);
-            string secret = await ready.Task.WaitAsync(TimeSpan.FromSeconds(12));
+            // A cached worker gets one bounded startup attempt before the
+            // supervisor restores the packaged worker. This is startup only;
+            // inference itself has no overall bridge request deadline.
+            string secret = await ready.Task.WaitAsync(TimeSpan.FromSeconds(40));
             if (process.HasExited) throw new IOException("The bridge exited during startup. Try again.");
             token = secret;
             SetState("Waiting for Roblox", "Load the updated UAI script in Roblox. It will connect automatically.");
@@ -77,7 +87,7 @@ internal sealed class BridgeProcess : IAsyncDisposable
         {
             await StopCoreAsync();
             string detail = error is TimeoutException
-                ? "The bridge took too long to start. Try again or extract a fresh copy of the app."
+                ? "The bridge took too long to start. Try again or download a fresh copy of the app."
                 : error.Message;
             SetState("Could not start", detail);
             throw new IOException(detail);
@@ -112,7 +122,7 @@ internal sealed class BridgeProcess : IAsyncDisposable
                         value.GetProperty("protocol").GetInt32() != 1 || value.GetProperty("port").GetInt32() != Port ||
                         !Regex.IsMatch(secret, "\\A[a-f0-9]{64}\\z") ||
                         value.GetProperty("url").GetString() != Origin + "/#t=" + secret)
-                        throw new IOException("The bridge package is incompatible. Extract a fresh copy of the app.");
+                        throw new IOException("The bridge package is incompatible. Download a fresh copy of the app.");
                     ready.TrySetResult(secret);
                 }
             }
@@ -135,6 +145,13 @@ internal sealed class BridgeProcess : IAsyncDisposable
             using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             bool connected = doc.RootElement.GetProperty("connected").GetBoolean();
             if (secret != token || stopping) return;
+            if (doc.RootElement.TryGetProperty("update", out var update))
+            {
+                UpdateState = update.TryGetProperty("state", out var s) ? s.GetString() ?? "current" : "current";
+                BridgeVersion = update.TryGetProperty("currentVersion", out var v) ? v.GetString() ?? BridgeVersion : BridgeVersion;
+                AvailableVersion = update.TryGetProperty("availableVersion", out var a) ? a.GetString() : null;
+                UpdateError = update.TryGetProperty("error", out var e) ? e.GetString() : null;
+            }
             SetState(connected ? "Connected to Roblox" : "Waiting for Roblox", connected
                 ? "Your conversation is ready in Cowork. Keep Roblox and this app running."
                 : "Load the updated UAI script in Roblox. It will connect automatically.");

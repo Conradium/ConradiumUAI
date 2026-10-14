@@ -9,14 +9,41 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        DesktopUpdater.Configure(args);
+        // Offline verification uses this executable as a controlled Node probe.
+        if (args is ["--version"] && Environment.GetEnvironmentVariable("UAI_TEST_NODE_VERSION") is { } fixture)
+        { Console.WriteLine(fixture); return 0; }
+        int helper = Array.IndexOf(args, "--apply-update");
+        if (helper >= 0 && helper + 1 < args.Length)
+            return DesktopUpdater.RunHelperAsync(args[helper + 1]).GetAwaiter().GetResult();
+        bool offline = args.Any(argument => argument is "--smoke-test" or "--render-preview" or "--self-test");
+        if (offline) Environment.SetEnvironmentVariable("UAI_BRIDGE_TEST_NO_UPDATES", "1");
+        if (args.Length == 2 && args[0] == "--self-test")
+            return DesktopSelfTest.RunAsync(args[1]).GetAwaiter().GetResult();
         if (args.Length == 2 && args[0] == "--smoke-test")
             return SmokeAsync(args[1]).GetAwaiter().GetResult();
         ApplicationConfiguration.Initialize();
         using var mutex = new Mutex(true, @"Local\ProjectUAI.Bridge.28791", out bool first);
         using var show = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\ProjectUAI.Bridge.Show.28791");
         if (!first) { show.Set(); return 0; }
+        if (!offline && DesktopUpdater.TryDispatch(args)) return 0;
         var bridge = new BridgeProcess();
         using var form = new MainForm(bridge);
+        form.Shown += async (_, _) =>
+        {
+            if (!args.Contains("--update-receipt")) return;
+            try
+            {
+                await Task.Run(EmbeddedPayload.Prepare);
+                if (!form.IsDisposed) DesktopUpdater.MarkReady(args);
+            }
+            catch (Exception)
+            {
+                // The helper owns fallback. A failed candidate must close without
+                // a receipt or a modal dialog that could outlive the old app.
+                form.Close();
+            }
+        };
         var waiter = ThreadPool.RegisterWaitForSingleObject(show, (_, _) =>
         {
             if (form.IsHandleCreated && !form.IsDisposed)
@@ -43,7 +70,7 @@ internal static class Program
             using var http = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
                 { Timeout = TimeSpan.FromSeconds(4) };
             await bridge.StartAsync();
-            checks.Add("Packaged Node starts without PATH or terminal");
+            checks.Add("Detected Node starts without a visible terminal");
             string firstUrl = bridge.BrowserUrl ?? throw new Exception("No browser address");
             await bridge.StartAsync();
             if (bridge.BrowserUrl != firstUrl) throw new Exception("Duplicate start replaced the bridge");

@@ -9,7 +9,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 (async()=>{
   const reserve=http.createServer();reserve.listen(0,'127.0.0.1');await once(reserve,'listening');const port=reserve.address().port;await new Promise(r=>reserve.close(r));
-  const server=spawn(process.execPath,['bridge/server.js','--port',String(port)],{cwd:require('./helpers/bridge').root,stdio:['ignore','pipe','pipe']});
+  const server=spawn(process.execPath,['bridge/server.js','--port',String(port)],{cwd:require('./helpers/bridge').root,stdio:['ignore','pipe','pipe'],env:{...process.env,UAI_BRIDGE_TEST_NO_UPDATES:'1'}});
   let browser,upstream;
   try{
     let output='';const token=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Bridge did not start')),5000);server.stdout.on('data',c=>{output+=c;const m=output.match(/Token\s+([a-f0-9]{64})/);if(m){clearTimeout(timer);resolve(m[1]);}});});

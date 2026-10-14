@@ -6,9 +6,8 @@
 -- This adapter speaks that lane and returns the same normalised result the
 -- chat adapter does, so everything above it is unchanged.
 --
--- Only ever entered two ways: the chat adapter delegates after a protocol
--- refusal, or it delegates immediately when the record already learned this
--- lane. It is never selected by provider/chat directly.
+-- The chat adapter delegates for known Responses models, remembered routes,
+-- or an explicit protocol/free-tier refusal. Provider/chat does not select it.
 return function(env)
 	local util = env.require("runtime/util")
 	local config = env.require("runtime/config")
@@ -19,6 +18,7 @@ return function(env)
 	local urls = env.require("net/url")
 	local headerMap = env.require("net/headers")
 	local registry = env.require("provider/registry")
+	local proxy = env.require("provider/proxy")
 
 	local M = {}
 
@@ -86,7 +86,10 @@ return function(env)
 		if registry.proxyProvider(record) then
 			return registry.endpoint(record, "/responses")
 		end
-		return "https://opencode.ai/inference/v1/responses"
+		local parsed = urls.parse(record.baseUrl or "")
+		local query = parsed and parsed.query
+		local base = "https://opencode.ai/inference/v1" .. (query and query ~= "" and ("?" .. query) or "")
+		return urls.endpoint(base, "/responses", record.query)
 	end
 
 	local function textOf(content)
@@ -132,6 +135,7 @@ return function(env)
 				end
 			elseif role == "user" or role == "assistant" then
 				local content = message.content
+				if role == "user" then content = env.require("runtime/images").openai(content, message.images) end
 				if type(content) == "table" then
 					local parts = {}
 					for _, block in ipairs(content) do
@@ -141,7 +145,7 @@ return function(env)
 							elseif block.type == "image_url" and type(block.image_url) == "table" then
 								parts[#parts + 1] = { type = "input_image", image_url = tostring(block.image_url.url or "") }
 							elseif type(block.text) == "string" and block.text ~= "" then
-								parts[#parts + 1] = { type = "input_text", text = block.text }
+								parts[#parts + 1] = { type = role == "assistant" and "output_text" or "input_text", text = block.text }
 							end
 						end
 					end
@@ -316,7 +320,15 @@ return function(env)
 				streamError = streamError or "malformed_stream: invalid JSON frame"
 				return true
 			end
-			local kind = tostring(decoded.type or "")
+			local kind = tostring(decoded.type or frame.event or "")
+			local response = type(decoded.response) == "table" and decoded.response or nil
+			local status = response and response.status
+			if kind == "response.failed" or kind == "response.incomplete" or kind == "response.cancelled"
+				or status == "failed" or status == "incomplete" or status == "cancelled" then
+				local detail = response and (response.error or response.incomplete_details)
+				streamError = streamError or sse.providerError({ error = detail or { message = "Responses request " .. tostring(status or kind) } }, "error")
+				return true
+			end
 			if kind == "response.output_text.delta" and type(decoded.delta) == "string" then
 				content[#content + 1] = decoded.delta
 			elseif kind == "response.function_call_arguments.delta" then
@@ -402,6 +414,11 @@ return function(env)
 		if type(decoded) == "table" and decoded.object == "response" and output == nil then output = {} end
 		local content, reasoning, calls, outputError = assembleOutput(output)
 		local usage = type(decoded.usage) == "table" and decoded.usage or nil
+		local responseError
+		if decoded.status and decoded.status ~= "completed" then
+			responseError = sse.providerError({ error = decoded.error or decoded.incomplete_details
+				or { message = "Responses request " .. tostring(decoded.status) } }, "error")
+		end
 		return {
 			role = "assistant",
 			content = content,
@@ -412,7 +429,7 @@ return function(env)
 			id = decoded.id,
 			usage = usage,
 			frames = 0,
-			streamError = outputError and ("malformed_stream: " .. outputError) or nil,
+			streamError = responseError or (outputError and ("malformed_stream: " .. outputError) or nil),
 		}
 	end
 
@@ -422,41 +439,61 @@ return function(env)
 		return config.get("agent.requestTimeout", 86400)
 	end
 
-	function M.complete(record, request)
+	function M.complete(record, request, handoff)
 		local problem = registry.protocolProblem(record)
 		if problem then return nil, problem end
 		request = util.copy(request or {})
+		handoff = handoff or {}
+		if request.onRetry then
+			local callback = request.onRetry
+			request.onRetry = function(info) if not pcall(callback, info) then log.warn("provider", "retry callback failed safely") end end
+		end
 		local body = M.buildBody(record, request)
 		local url = M.endpointFor(record)
 		-- The lane's proven identity: the desktop client's user agent and
-		-- client marker with no project or request headers, and the session id
-		-- generated per request. This is the exact set the live 200 was verified
+		-- client marker with no project or request headers, and the stable valid
+		-- conversation session id. This is the exact set the live 200 was verified
 		-- with; the chat lane's cli fingerprint is not interchangeable here.
 		local sessionId = registry.opencodeSessionFor(record, request)
-		local headers = headerMap.merge(
-			registry.authHeaders(record),
-			{
-				["x-opencode-session"] = sessionId,
-				["x-opencode-client"] = "desktop",
-				["User-Agent"] = "opencode/latest/2.0.27/desktop",
-				["accept"] = "*/*",
-			},
-			record.headers)
+		local pool = registry.keysOf(record)
+		local currentKey = handoff.key or registry.nextKey(record)
+		local rotationsLeft = handoff.rotationsLeft or math.max(#pool - 1, 0)
+		local function headersFor()
+			return headerMap.merge(registry.authHeaders(record, currentKey or ""), {
+				["x-opencode-session"] = sessionId, ["x-opencode-client"] = "desktop",
+				["User-Agent"] = "opencode/latest/2.0.27/desktop", ["accept"] = "*/*",
+			}, record.headers)
+		end
 		local started = clock.ms()
+		local deadline = env.require("net/transport").coworkWeb() and math.huge
+			or handoff.deadlineMs or (started + math.max(1, math.min(300, tonumber(requestTimeout(request)) or 120)) * 1000)
+		local scope = registry.compatibilityKey(record)
+		local recovery = proxy.new(record, { aborted = request.aborted, onRetry = request.onRetry, deadlineMs = deadline })
 		local attemptsAllowed = request.attempts or config.get("agent.retries", 3)
-		local res, err = http.send({
-			url = url,
-			method = "POST",
-			headers = headers,
-			body = util.encode(body),
-			identity = registry.identityFor(record),
-			identityRequired = registry.requiresClaude(record),
-			attempts = attemptsAllowed,
-			aborted = request.aborted,
-			onRetry = request.onRetry,
-			tag = "responses:" .. record.id,
-			timeout = requestTimeout(request),
-		})
+		local function fire()
+			if registry.compatibilityKey(record) ~= scope then return nil, "aborted" end
+			local imageRequest = env.require("runtime/images").hasReferences(request.messages)
+			return http.send({
+				relay = env.require("net/transport").shouldRelay(imageRequest), sessionId = request.sessionId,
+				url = url, method = "POST", headers = headersFor(), body = util.encode(body),
+				identity = registry.identityFor(record), identityRequired = registry.requiresClaude(record),
+				attempts = attemptsAllowed, skipStatus = #pool > 1 and { [429] = true } or nil,
+				aborted = request.aborted, onRetry = request.onRetry, tag = "responses:" .. record.id,
+				timeout = requestTimeout(request), deadlineMs = deadline,
+			})
+		end
+		local res, err = fire()
+		while res and not res.terminal and not http.terminal(err) do
+			if recovery.recover(res, err) then
+				scope, url = registry.compatibilityKey(record), M.endpointFor(record)
+			elseif not res.ok and res.status == 429 and rotationsLeft > 0 then
+				rotationsLeft = rotationsLeft - 1
+				registry.cooldownKey(record, currentKey)
+				currentKey = registry.nextKey(record)
+				if request.onRetry then request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = "rate limited, rotating API key", status = res.status }) end
+			else break end
+			res, err = fire()
+		end
 		if request.aborted and request.aborted() then return nil, "aborted" end
 		if not res or not res.ok then
 			local message = env.require("provider/openai").errorText(res, err)

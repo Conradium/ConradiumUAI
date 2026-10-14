@@ -17,6 +17,7 @@ return function(env)
 
 	local M = { changed = signal.new("relay") }
 	local alive, started, nextProbe, epoch = true, false, 0, 0
+	local activeProbe, failures = nil, 0
 	local state, lastError, lastProbeAt = "off", nil, 0
 	local PROBE_MS = 30000
 
@@ -48,10 +49,10 @@ return function(env)
 
 	local function setState(next, note)
 		if state == next and lastError == note then return end
+		local previous = state
 		state, lastError = next, note
 		if next == "ready" then log.info("relay", "companion connected on port " .. tostring(port()))
-		elseif next == "error" then log.debug("relay", "companion unavailable", note)
-		elseif next == "searching" then log.debug("relay", "looking for the companion") end
+		elseif next == "error" and previous == "ready" then log.warn("relay", "companion disconnected", note) end
 		M.changed:fire()
 	end
 
@@ -65,54 +66,80 @@ return function(env)
 			error = lastError, lastProbeAt = lastProbeAt }
 	end
 
-	-- A single hello, then pair when a relay answers without a marker the client
-	-- trusts. The marker is what stops a PC Cowork bridge -- which shares port 8790
-	-- and also speaks protocol 2 -- from being mistaken for the companion.
-	function M.probe()
-		if not alive then return false, "unloaded" end
-		if mode() == "off" then setState("off"); return false, "off" end
-		if not caps.has("http") then setState("error", "no HTTP transport"); return false, "no HTTP transport" end
-		setState("searching")
-		local hello = http.request({ url = base() .. "/api/hello", method = "GET",
-			identity = "none", silent = true, timeout = 1 })
-		lastProbeAt = clock.ms()
-		local info = hello and hello.ok and util.decode(hello.body)
-		if type(info) ~= "table" or info.protocol ~= 2 or type(info.instance) ~= "string" or info.instance == "" then
-			setState("error", "No companion answered on port " .. tostring(port()))
-			return false, "no companion"
+	-- A periodic health check must not make a ready relay temporarily unusable or
+	-- fill the log with an absent optional app. Settings and unload invalidate each
+	-- request; a late hello/pair cannot restore credentials for an old endpoint.
+	local function probe(mine, probeBase, probePort)
+		local function stale() return not alive or epoch ~= mine or mode() == "off" end
+		local hello = http.request({ url = probeBase .. "/api/hello", method = "GET",
+			identity = "none", silent = true, timeout = 1, aborted = stale })
+		if stale() then return false, "cancelled" end
+		local info = hello and hello.ok and #hello.body <= 4096 and util.decode(hello.body)
+		if type(info) ~= "table" or info.protocol ~= 2 or type(info.instance) ~= "string"
+			or #info.instance == 0 or #info.instance > 128 then
+			return false, "No companion answered on port " .. tostring(probePort)
 		end
+		-- Check the marker even when a token was saved from an earlier companion.
+		if info.server ~= "uai-relay" then return false, "Port " .. tostring(probePort) .. " is used by another program" end
 		if token() == "" then
-			if info.server ~= "uai-relay" then
-				setState("error", "Port " .. tostring(port()) .. " is used by another program")
-				return false, "not a companion"
-			end
 			local place = env.require("runtime/place")
 			local body = util.encode({ client = "ProjectUAI-Mobile",
 				version = (env.info and env.info.version) or "0.0.0", protocol = 2,
 				placeId = place.id, gameId = place.gameId })
-			local pair = http.request({ url = base() .. "/api/pair", method = "POST", body = body,
-				headers = { ["Content-Type"] = "application/json" }, identity = "none", silent = true, timeout = 2 })
-			local issued = pair and pair.ok and util.decode(pair.body)
+			local pair = http.request({ url = probeBase .. "/api/pair", method = "POST", body = body,
+				headers = { ["Content-Type"] = "application/json" }, identity = "none", silent = true, timeout = 2, aborted = stale })
+			if stale() then return false, "cancelled" end
+			local issued = pair and pair.ok and #pair.body <= 4096 and util.decode(pair.body)
 			if type(issued) ~= "table" or issued.ok ~= true or type(issued.token) ~= "string"
 				or #issued.token ~= 64 or not issued.token:match("^[a-f0-9]+$") then
-				setState("error", "The companion refused pairing")
-				return false, "pair failed"
+				return false, "The companion refused pairing"
 			end
 			remember("relay.token", issued.token)
 			remember("relay.server", "uai-relay")
 			remember("relay.placeId", place.id)
 		end
 		remember("relay.instance", tostring(info.instance))
-		setState("ready")
 		return true
+	end
+
+	function M.probe()
+		if not alive then return false, "unloaded" end
+		if mode() == "off" then setState("off"); return false, "off" end
+		if not caps.has("http") then
+			nextProbe = clock.ms() + PROBE_MS
+			setState("error", "no HTTP transport"); return false, "no HTTP transport"
+		end
+		if activeProbe then
+			local pending = activeProbe
+			while alive and pending == activeProbe and not pending.done do clock.wait(0.05) end
+			if pending.done then return pending.ok == true, pending.reason end
+			return false, not alive and "unloaded" or "cancelled"
+		end
+		local mine = epoch
+		local pending = {}
+		activeProbe = pending
+		if state == "off" then setState("searching") end
+		local ok, result, reason = pcall(probe, mine, base(), port())
+		pending.ok, pending.reason, pending.done = ok and result == true, reason, true
+		if not ok then pending.reason = "Companion probe failed" end
+		if activeProbe == pending then activeProbe = nil end
+		if alive and mine == epoch and mode() ~= "off" then
+			lastProbeAt = clock.ms()
+			failures = pending.ok and 0 or math.min(failures + 1, 3)
+			nextProbe = lastProbeAt + PROBE_MS * 2 ^ math.max(0, failures - 1)
+			setState(pending.ok and "ready" or "error", pending.reason)
+		end
+		return pending.ok, pending.reason
 	end
 
 	function M.usable()
 		return alive and mode() ~= "off" and state == "ready" and token() ~= "" and caps.has("http")
 	end
 
-	function M.endpoint()
-		if not M.usable() then return nil end
+	function M.endpoint(retain)
+		if retain then
+			if not alive or mode() == "off" or token() == "" then return nil end
+		elseif not M.usable() then return nil end
 		return { target = "companion", base = base(), token = token(),
 			instance = tostring(config.get("relay.instance", "")), enabled = true }
 	end
@@ -123,9 +150,7 @@ return function(env)
 		clock.spawn(function()
 			while alive do
 				if mode() ~= "off" and clock.ms() >= nextProbe then
-					local mine = epoch
 					M.probe()
-					if alive and mine == epoch then nextProbe = clock.ms() + PROBE_MS end
 				end
 				clock.wait(0.25)
 			end
@@ -141,12 +166,12 @@ return function(env)
 	-- On-demand probe for a "Scan now" action.
 	function M.scan()
 		if mode() == "off" then return false, "off" end
-		nextProbe = 0
 		M.ensure()
 		return M.probe()
 	end
 
 	function M.forget()
+		epoch, failures = epoch + 1, 0
 		remember("relay.token", "")
 		remember("relay.server", "")
 		remember("relay.instance", "")
@@ -156,17 +181,18 @@ return function(env)
 
 	dispose.add(config.changed:connect(function(path)
 		if path ~= nil and path ~= "relay" and not util.startsWith(tostring(path), "relay.") then return end
-		epoch = epoch + 1
+		epoch, failures = epoch + 1, 0
 		nextProbe = 0
 		if path == "relay.port" then
 			remember("relay.token", "")
 			remember("relay.server", "")
 			remember("relay.instance", "")
 		end
+		setState(mode() == "off" and "off" or "searching")
 		M.ensure()
 		M.changed:fire()
 	end), "relay settings")
-	dispose.add(function() alive = false end, "relay prober")
+	dispose.add(function() alive, epoch = false, epoch + 1 end, "relay prober")
 
 	return M
 end

@@ -524,13 +524,14 @@ return function(env)
 	end
 	function M.toolCeiling(record)
 		if not record then return nil end
+		local documented = traits.maxTools(record.model)
 		local cap = record.toolsCap
 		local scope = registry.compatibilityKey(record)
 		if type(cap) == "table" and cap.model == record.model and (cap.scope == nil or cap.scope == scope) then
 			local limit = tonumber(cap.limit)
-			if limit and limit > 0 then return limit end
+			if limit and limit >= 1 and limit < math.huge then return math.min(math.floor(limit), documented or math.huge) end
 		end
-		return traits.maxTools(record.model)
+		return documented
 	end
 
 	function M.rememberToolCeiling(record, limit)
@@ -569,6 +570,8 @@ return function(env)
 
 	function M.capTools(tools, limit, isOpencode)
 		limit = tonumber(limit) or 128
+		if limit ~= limit or limit == math.huge then limit = 128 end
+		limit = math.max(1, math.floor(limit))
 		if not tools or #tools <= limit then return tools end
 		if not isOpencode then
 			local capped = {}
@@ -576,33 +579,32 @@ return function(env)
 			return capped
 		end
 
-		local stdNames = {}
+		local stdNames, reserved, reservedCount = {}, {}, 0
 		for _, stdTool in ipairs(OPENCODE_TOOLS) do
-			stdNames[stdTool["function"].name] = stdTool
+			stdNames[stdTool["function"].name] = true
 		end
-
-		local capped = {}
-		local included = {}
-		local maxRegular = limit - #OPENCODE_TOOLS
-
+		-- OpenCode body construction adds its declarations before capping. A
+		-- generic tool-limit repair must never invent new callable functions or
+		-- insert Chat-shaped definitions into a flat Responses tools array.
+		for _, tool in ipairs(tools) do
+			local name = tool["function"] and tool["function"].name or tool.name
+			if stdNames[name] and not reserved[name] and reservedCount < limit then
+				reserved[name] = true
+				reservedCount = reservedCount + 1
+			end
+		end
+		local capped, included, regularCount = {}, {}, 0
+		local maxRegular = limit - reservedCount
 		for _, t in ipairs(tools) do
 			local name = t["function"] and t["function"].name or t.name
-			if stdNames[name] then
+			if reserved[name] then
 				if not included[name] then
 					capped[#capped + 1] = t
 					included[name] = true
 				end
-			elseif #capped < maxRegular then
+			elseif not stdNames[name] and regularCount < maxRegular then
 				capped[#capped + 1] = t
-				if name then included[name] = true end
-			end
-		end
-
-		for _, stdTool in ipairs(OPENCODE_TOOLS) do
-			local name = stdTool["function"].name
-			if not included[name] and #capped < limit then
-				capped[#capped + 1] = stdTool
-				included[name] = true
+				regularCount = regularCount + 1
 			end
 		end
 		return capped
@@ -1092,9 +1094,11 @@ return function(env)
 			end
 			local requestStarted = clock.ms()
 			-- A socket setup failure before Send retains its existing HTTP fallback.
-			-- Once HTTP starts, proxy/key/parameter retries share its one deadline.
+			-- Native/companion retries share one deadline. Cowork jobs have no
+			-- elapsed-time limit, including their explicit-refusal recovery path.
 			if not deadline then
-				deadline = requestStarted + math.max(1, math.min(300, tonumber(requestTimeout(request)) or 120)) * 1000
+				deadline = env.require("net/transport").coworkWeb() and math.huge
+					or (requestStarted + math.max(1, math.min(300, tonumber(requestTimeout(request)) or 120)) * 1000)
 				recovery = proxy.new(record, { aborted = request.aborted, onRetry = request.onRetry, deadlineMs = deadline })
 			end
 			local res, err = http.send({
@@ -1159,11 +1163,15 @@ return function(env)
 			if request.onRetry then
 				request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = "model may need the Responses protocol", status = res.status })
 			end
-			local switched, switchErr, switchRes = responses.complete(record, request)
+			local switched, switchErr, switchRes = responses.complete(record, request,
+				{ deadlineMs = deadline, key = currentKey, rotationsLeft = rotationsLeft })
 			if switched then
 				remember(record, responses.key())
 				return switched, nil, switchRes
 			end
+			-- The original refusal does not erase an unknown outcome or a failed
+			-- stream on the fallback lane. Keep those terminal across providers.
+			if http.terminal(switchErr) or (switchRes and switchRes.terminal) then return nil, switchErr, switchRes end
 		end
 		-- A gateway names a bad field in a 400, and a NewAPI gateway names a bad
 		-- content variant in a 422. Both are repairable, and both can chain: a

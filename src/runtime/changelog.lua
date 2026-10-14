@@ -19,6 +19,29 @@ return function(env)
 	local CATEGORY_ORDER = { "added", "improved", "fixed" }
 	local ENTRIES = {
 		{
+			version = "3.1.0",
+			revision = "2026-10-14-bridge-improvements",
+			date = "October 14, 2026",
+			title = "Bridge improvements",
+			highlights = "A redesigned Cowork workspace and desktop app, automatic updates, unlimited bridge request time, smaller mobile sidebar text and complete OpenCode Responses relay support.",
+			sections = {
+				{ category = "improved", label = "Cowork workspace", items = {
+					"Use the redesigned Cowork workspace with text-only branding, clearer navigation and rebuilt connection, provider, tool, agent, activity and settings views.",
+					"Use scrollable dialogs with stable headers and actions, clearer provider/model forms, reliable focus restoration and smoother transitions on desktop and mobile.",
+					"Keep navigation compact when conversation text is enlarged. Show Web runtime automatically after the bridge connects and Game runtime after it disconnects.",
+					"Use smaller sidebar text in the Roblox mobile client while retaining touch targets and text scaling. Cowork requests wait without a configurable time limit until completion, failure or Stop.",
+					"Client animations are always enabled. Older saved or imported motion preferences no longer disable them; the motion setting has been removed.",
+					"Deadline errors highlight the official Discord tutorial help. Automatic bridge updates preserve pairing, wait for idle work and restore the previous version if startup fails.",
+					"The redesigned Windows app is one executable with no ZIP to extract. It detects installed Node.js or downloads it for your account. Desktop app updates download from GitHub and apply on restart.",
+				} },
+				{ category = "fixed", label = "Connections and inference", items = {
+					"Keep routine mobile relay probes quiet, back off failed discovery and ignore stale pairing completions. Mobile command polls use short waits.",
+					"Relay OpenCode Responses text, reasoning, tools and pictures through Cowork. Preserve the existing OpenCode session and protocol workarounds and the selected key. Direct requests keep their original deadline.",
+					"Keep failed or incomplete provider streams terminal and protect dialog actions from duplicate submission and stale completions.",
+				} },
+			},
+		},
+		{
 			version = "3.0.0",
 			revision = "2026-10-13-agent-and-script-efficiency-key-rotation",
 			date = "October 13, 2026",

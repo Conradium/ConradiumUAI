@@ -2,7 +2,8 @@
 
 Use UAI in your browser while Roblox runs your tools and keeps the conversation.
 Run both on the same computer. The [Windows desktop app](../desktop/README.md)
-bundles everything: extract its ZIP, open **UAI Bridge.exe**, click **Start
+detects installed Node.js and offers a verified download if needed. Open the
+single **UAI-Bridge-3.1.0-win-x64.exe** download, complete Node setup, click **Start
 Cowork**, and load the updated UAI script. The browser opens and Roblox connects
 automatically on dedicated port **28791**. No terminal or token copying is needed.
 
@@ -34,17 +35,40 @@ sizes and Git blob hashes, restores their original names inside the downloaded
 package, and starts the bridge. Downloads use one pinned revision and a new
 package folder; the launcher changes only after all downloaded files are saved.
 
-After a restart, open the **new** browser link and paste the **new** token into
+After a manual restart, open the **new** browser link and paste the **new** token into
 Roblox. To use a different port, append `--port 8791` to the start command and
 enter that port in Roblox too.
+
+## Automatic updates
+
+The bridge checks official stable GitHub releases after startup and every 15
+minutes, downloads compatible releases and verifies the package and file SHA-256
+hashes. It activates updates only when inference, commands, agents and retained
+receipts/pictures are idle. Pairing tokens survive automatic worker restarts.
+Failed downloads or startup keep a working version. Git checkouts and executor
+download packages are never overwritten; updates live in a per-install user cache.
+
+Publish `dist/bridge-release.json` and `dist/uai-bridge-package.json` on the same
+official `v3.1.0` or `bridge-v3.1.0` GitHub release. Generate them with
+`node tools/build_bridge.js` after reviewing final bridge/web inputs, inspect
+the outputs, then run `node tools/build_bridge.js --check` and focused tests.
+Later releases must bump `bridge/release.js` and use the matching release tag.
+
+The [desktop app](../desktop/README.md) independently downloads its own release
+and applies it on restart. An old 1.0 desktop ZIP needs one manual upgrade first.
 
 ## Working in the browser
 
 - **Chat** follows the active Roblox conversation. Use the sidebar to find or
   start conversations; draft text and code files stay with their conversation.
-- **Web runtime** shows responses as they arrive when the provider supports
-  streaming. **Game runtime** uses Roblox's provider connection and shows the
-  saved reply when it arrives. Switch in **Cowork** while work is idle.
+- **Runtime follows the connection.** Successful authenticated bridge contact
+  selects Web automatically, with live responses when the provider supports
+  streaming. Disconnecting restores Game for subsequent requests. Roblox owns
+  conversations and tools in both modes; reconnecting never resends a message.
+- **Bridged requests have no overall time limit.** Cowork waits for completion,
+  Stop, or a real provider/connection failure. This is permanent, with no timeout
+  setting. Individual status polls stay short and reuse the original request ID;
+  a stalled poll does not submit the provider request again.
 - **Attach text or code** with the paperclip, drag a file onto the composer, or
   paste long text. Large inputs become verified files that the agent can read.
   Limits: 10 MiB per file/input, 16 text files and 16 MiB per draft.
@@ -56,11 +80,16 @@ enter that port in Roblox too.
 - **Stop** cancels the current turn. Closing or refreshing the browser does not.
   If delivery is unclear, use **Check delivery** before sending again.
 - **Settings → Browser appearance** offers system, light, dark, and Match Roblox.
+  Conversation text scaling keeps sidebar labels compact. Dialogs keep their
+  headings and actions available while long forms scroll, and restore focus
+  when dismissed. Client animations are permanently enabled; browser system
+  reduced-motion preferences still apply to browser transitions.
   Exported conversations include picture metadata, not image bytes. A full
   configuration export includes API keys.
 
-Commands can arrive immediately while Roblox's long poll is waiting. The
-18-second timeout only renews an idle connection. Game updates are batched about
+Commands can arrive immediately while Roblox's long poll is waiting. Desktop
+polls can wait 18 seconds; touch-only mobile clients request one-second polls
+with short request deadlines. Game updates are batched about
 every 150 ms, live browser text paints about every 60 ms, and command receipts
 are checked every 250 ms. These are batching intervals, not an end-to-end latency
 guarantee; executor scheduling and the provider's response time also matter.
@@ -75,15 +104,18 @@ guarantee; executor scheduling and the provider's response time also matter.
 | Package verification failed | Download again. Do not edit or rename the downloaded `.txt` files. |
 | Roblox is waiting to connect | Keep the terminal open. Check the port, paste its latest token, then enable Cowork. Both must run on this computer. |
 | The token no longer works | The bridge may have restarted. Use its latest token and browser link. |
-| Live responses are unavailable | Choose Web runtime while idle and check that your provider supports SSE. Non-streaming providers still return a complete reply. |
+| Live responses are unavailable | Check that Cowork says connected and Web runtime, then check provider SSE support. Non-streaming providers still return a complete reply. |
 | A picture is expired or unavailable | Attach it again. Pictures expire after 15 minutes of inactivity and disappear when the bridge stops. |
 | The bridge is reconnecting | Keep your draft in the tab and restart/reconnect the bridge. Review the conversation if a delivery receipt was lost. |
+| A deadline error appears | Use the highlighted Discord tutorial link. Cowork imposes no overall deadline, but an upstream provider or transport can still fail. |
 
 ## Development and tests
 
 `server.js` owns authenticated loopback routes, command receipts and browser SSE.
 `inference.js` owns provider requests and bounded preview replay. `picture-store.js`
 keeps validated image bytes in memory. `launcher.js` restores executor downloads.
+`supervisor.js` owns the worker process, token and idle replacement;
+`updater.js` validates releases and maintains the isolated cache.
 `web/` contains the dependency-free UI, Markdown, previews, pictures, themes and
 asynchronous draft storage. Roblox remains authoritative in both runtimes.
 
@@ -94,7 +126,7 @@ encoded images; tests generate valid PNG chunks without additional dependencies.
 Finish implementation, documentation and test edits before running verification:
 
 ```powershell
-luajit tools/bundle.lua
+luajit tools/bundle.lua --native
 node tools/build_site.js
 node bridge/tests/run.js
 luajit test/web_runtime.lua
@@ -117,6 +149,8 @@ short screens with full drafts, long task lists and model names, live question a
 selection updates, dialog errors, keyboard focus, contrast, and forced colors.
 Inspect the saved screenshots as well as checking geometry. These fixtures do not
 replace a live executor check. See the [UI audit](UI_AUDIT.md) for the findings.
+The [3.1.0 verification record](../docs/TESTING_3.1.0.md) records the current
+bridge release checks; the entire native suite is not part of this pass.
 
 Protocol remains version 2. `/api/hello` advertises optional picture and normalized
 stream capabilities. `--legacy` disables pictures and uses compatibility delta
@@ -126,8 +160,9 @@ oversized or truncated responses fail explicitly. Picture capability v2 uses
 rejects image sends to older clients instead of substituting text markers.
 
 Image sends carry compact, conversation-scoped references into model context.
-At inference dispatch, the bridge expands them to OpenAI `image_url` data URLs or
-Anthropic base64 `image` blocks. Image-bearing requests use the relay in either
+At inference dispatch, the bridge expands them to Chat Completions `image_url`
+data URLs, Anthropic base64 `image` blocks or Responses `input_image` blocks.
+Image-bearing requests use the relay in either
 runtime. Tokens, image bytes, and provider keys are never added to browser event
 frames. A missing current image fails explicitly; expired earlier images become
 a clear unavailable-image text block so a later text-only turn can continue.

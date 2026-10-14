@@ -277,19 +277,22 @@ function createPictureStore(options = {}) {
     if (!body.includes('uai-image://')) return body;
     let payload;
     try { payload = JSON.parse(body); } catch { throw fail('invalid', 'Invalid image request JSON'); }
-    if (!Array.isArray(payload?.messages)) throw fail('invalid', 'Image requests require messages');
+    const responses = Array.isArray(payload?.input);
+    const messages = responses ? payload.input : payload?.messages;
+    if (!Array.isArray(messages)) throw fail('invalid', 'Image requests require messages or Responses input');
     let latestUser = -1;
-    for (let index = 0; index < payload.messages.length; index++) {
-      const message = payload.messages[index];
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index];
       if (message?.role === 'user' && (!Array.isArray(message.content) || message.content.some(block => block?.type !== 'tool_result'))) latestUser = index;
     }
     let count = 0, bytes = 0;
-    for (let index = 0; index < payload.messages.length; index++) {
-      const message = payload.messages[index];
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index];
       if (!Array.isArray(message?.content)) continue;
       message.content = message.content.map(block => {
         const openai = block?.type === 'image_url';
-        const url = openai ? block.image_url?.url : block?.type === 'image' && block.source?.type === 'url' ? block.source.url : null;
+        const responseImage = responses && block?.type === 'input_image';
+        const url = responseImage ? block.image_url : openai ? block.image_url?.url : block?.type === 'image' && block.source?.type === 'url' ? block.source.url : null;
         if (typeof url !== 'string' || !url.startsWith('uai-image://')) return block;
         const match = /^uai-image:\/\/(pic_[\w-]{8,64})\/([a-f0-9]{64})$/.exec(url);
         if (message.role !== 'user' || !match || typeof sessionId !== 'string') throw fail('invalid', 'Invalid image reference');
@@ -297,13 +300,14 @@ function createPictureStore(options = {}) {
         if (record && (record.sessionId !== sessionId || record.providerKey !== match[2])) throw fail('owner', 'Image does not belong to this conversation', 403);
         if (!record || expired(record) || !record.data) {
           if (index >= latestUser) throw fail('expired', 'An attached image has expired or the bridge restarted. Attach it again to send its content.', 410);
-          return { type: 'text', text: '[An earlier image is no longer available. Ask for it to be attached again if needed.]' };
+          return { type: responses ? 'input_text' : 'text', text: '[An earlier image is no longer available. Ask for it to be attached again if needed.]' };
         }
         if (!['queued', 'acked'].includes(record.status)) throw fail('invalid', 'Image was not attached to a delivered message');
         count++; bytes += record.bytes;
         if (count > 64 || bytes > pictureTotalBytes) throw fail('too_large', 'Image context exceeds the 20 MiB limit; start a new conversation', 413);
         record.lastAccess = Date.now(); record.expiresAt = record.lastAccess + pictureTtlMs;
         const data = record.data.toString('base64');
+        if (responseImage) return { type: 'input_image', image_url: 'data:' + record.mediaType + ';base64,' + data, detail: block.detail || 'auto' };
         return openai ? { type: 'image_url', image_url: { url: 'data:' + record.mediaType + ';base64,' + data, detail: block.image_url.detail || 'auto' } }
           : { type: 'image', source: { type: 'base64', media_type: record.mediaType, data } };
       });
@@ -358,7 +362,10 @@ function createPictureStore(options = {}) {
     for (const [id, record] of records) if (record.sessionId === sessionId) records.delete(id);
   }
 
-  return { policy, stage, get, reference, providerBody, remove, markQueued, markStatus, catalog, sweep, cleanup: sweep, clearSession, close };
+  function hasLivePictures() {
+    return [...records.values()].some(record => !expired(record) && !!record.data);
+  }
+  return { policy, stage, get, reference, providerBody, remove, markQueued, markStatus, catalog, sweep, cleanup: sweep, clearSession, close, hasLivePictures };
 }
 
 module.exports = { createPictureStore, DEFAULT_LIMITS, MEDIA_TYPES, MAX_WIDTH, MAX_HEIGHT, MAX_PIXELS };

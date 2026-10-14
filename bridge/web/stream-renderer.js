@@ -153,6 +153,7 @@
         entry.failed = true;
         entry.status.className = 'stream-error'; entry.status.setAttribute('role', 'alert');
         entry.status.replaceChildren(node('span', '', e.error || e.providerError || (e.state === 'cancelled' ? 'Request stopped.' : 'Request failed.')));
+        deps.onError?.(entry.status, e);
         if (deps.onRetry && e.state !== 'cancelled') {
           const retry = node('button', 'retry', 'Review & retry'); retry.type = 'button';
           retry.onclick = () => deps.onRetry(entry.sessionId); entry.status.append(retry);

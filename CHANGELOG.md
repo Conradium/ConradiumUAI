@@ -1,5 +1,47 @@
 # Changelog
 
+## 3.1.0 — October 14, 2026 — Bridge improvements
+
+- Replace the bridge's UAI logo with a text-only Cowork identity and redesign the
+  full workspace: navigation, conversations, connection, providers, tools, agents,
+  loops, activity and settings. Rebuild dialogs with stable headers and actions, scrollable content,
+  mobile layouts, focus restoration, and protected asynchronous actions. Improve
+  provider, model, tool, conversation, import and composer-option workflows.
+- Keep mobile navigation compact when conversation text is enlarged. Refine
+  dialog, drawer and page transitions while respecting browser system motion
+  preferences.
+- Reduce sidebar navigation and profile text in the Roblox mobile client, keeping
+  touch targets and the text-scale preference intact.
+- Select Web runtime on authenticated bridge connection and restore Game runtime
+  on disconnect. Show the connection-driven runtime in both Cowork interfaces.
+- Quiet routine companion discovery, back off unavailable probes, reject stale
+  pairing results, and bound mobile command polls to short waits.
+- Remove the overall Cowork request deadline and its setting. Bridge jobs wait
+  for completion, Stop or a real failure; short polling calls recover a stalled
+  executor request without resubmitting inference.
+- Carry OpenCode Responses inference through the bridge, including streamed text,
+  reasoning, tool events and image input. Preserve the four October 13 OpenCode
+  fixes and selected keys across protocol recovery. Direct requests retain their
+  original deadline; Cowork requests have no overall duration limit.
+- Keep provider stream errors terminal even when a later completion marker arrives.
+- Permanently enable client animations and remove the motion configuration from
+  settings, browser controls, commands and saved/imported preferences.
+- Highlight deadline errors with a link to the official Discord tutorial help.
+- Automatically verify and stage new GitHub bridge releases, activate them only
+  after work is idle, retain the pairing token and restore a working version if
+  the update cannot start.
+- Redesign the Windows desktop app with connection, runtime and update status.
+  Detect installed Node.js or download a verified LTS runtime inside the app;
+  keep Node.js separate from the app and retain a manual installation link.
+- Ship one independent Windows executable with embedded bridge, browser, client
+  and license files. Prepare verified files in a private cache automatically;
+  no ZIP extraction or adjacent support folder is needed.
+- Fetch desktop app updates from GitHub releases automatically, apply on restart,
+  and retain the previous installation for rollback.
+
+See [focused verification and limitations](docs/TESTING_3.1.0.md).
+UI LIB remains 1.3.0; the embedding SDK remains 1.0.0.
+
 ## 3.0.0 — October 13, 2026
 
 Less repeated work when agents inspect, edit and verify scripts, with more

@@ -13,7 +13,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   await once(reserve, 'listening');
   const port = reserve.address().port;
   await new Promise(resolve => reserve.close(resolve));
-  const server = spawn(process.execPath, ['bridge/server.js', '--port', String(port)], { cwd: require('./helpers/bridge').root, stdio: ['ignore', 'pipe', 'pipe'] });
+  const server = spawn(process.execPath, ['bridge/server.js', '--port', String(port)], { cwd: require('./helpers/bridge').root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, UAI_BRIDGE_TEST_NO_UPDATES: '1' } });
   let browser;
   try {
     const token = await new Promise((resolve, reject) => {
@@ -96,7 +96,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const parameter = name => page.locator(`#modal [data-parameter="${name}"]`);
     const resultClose = async () => {
       await page.waitForFunction(() => document.querySelector('#modalTitle').textContent.endsWith(' result'));
-      await page.locator('#modalClose').click();
+      await page.locator('#modalFooter').getByRole('button', { name: 'Done', exact: true }).click();
     };
     await page.goto(base + '/#t=' + token);
     await page.locator('#app').waitFor({ state: 'visible' });

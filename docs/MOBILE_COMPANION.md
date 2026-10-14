@@ -1,8 +1,34 @@
 # Mobile Relay and Android Companion — Detailed Plan
 
 Status: client and companion implemented; device verification pending.
-Scope decision: Android only. The existing `bridge/` directory is not modified.
-PC Cowork behaviour must be observationally unchanged.
+Scope decision for the original companion project: Android only, with PC bridge
+behavior unchanged. The 3.1.0 bridge release extends the client behavior below;
+the original app design and historical implementation plan follow afterward.
+
+## Client updates in 3.1.0
+
+Routine companion health checks keep the current state while waiting and do not
+log repeated searches or absent-companion failures. A real connection or loss is
+logged once. Successful checks run every 30 seconds; consecutive failures back
+off to 60 and then 120 seconds. **Scan now** checks immediately and coalesces with
+an existing probe. Settings changes, reset pairing and unload invalidate pending
+results. Every hello must carry the `uai-relay` marker, even with a saved token.
+
+Touch-only devices skip Windows desktop-app discovery. Cowork command polls
+negotiate short one-second waits with current bridges. A connected Cowork bridge
+selects Web runtime automatically; disconnect restores Game and allows a ready
+companion or direct executor transport to serve subsequent requests. Existing
+relay jobs retain their endpoint and request ID; a health probe cannot resubmit
+them elsewhere. The OpenCode Responses adapter uses this transport decision too.
+
+Cowork bridge jobs now have no overall request time limit, and the former
+`bridge.requestTimeout` setting is retired. Companion jobs retain their finite
+request budget and the Android server's existing limits. Individual executor
+polls are bounded to five seconds. The original plan's shared-timeout references
+below describe the pre-3.1.0 implementation.
+
+See [3.1.0 verification](TESTING_3.1.0.md) for the focused client checks. This
+release does not change or claim new device verification for the Android app.
 
 Implemented: the client decoupling (`relay.*` config, `net/relay_link`,
 `net/transport`, target-aware `net/relay.lua`, provider gating) verified by

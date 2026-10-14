@@ -4856,9 +4856,9 @@ end)
 -- The one piece of decoration in this interface, and the only place something is
 -- alive. It was a static sprite; a static sprite perched on the composer is a
 -- sticker. What it does is tied to the turn rather than invented, which is the only
--- honest thing a mascot can do here -- and reduced motion gets the sprite and
--- nothing else, like every other animation in the client.
-scenario("the mascot is alive and answers reduced motion", function()
+-- honest thing a mascot can do here. Client motion remains enabled even when
+-- an older host tries to restore its retired preference.
+scenario("the mascot stays animated with legacy motion preferences", function()
 	local harness, handle = bootWith({
 		handler = function(entry)
 			if not tostring(entry.url):find("/chat/completions") then return { StatusCode = 404, Body = "{}" } end
@@ -4884,18 +4884,17 @@ scenario("the mascot is alive and answers reduced motion", function()
 	harness.settle(12)
 	check("and resting again afterwards", mascot.busy, false)
 
-	-- Reduced motion: the sprite stays, the motion goes -- and it goes back to the
-	-- frame it was drawn in rather than wherever a cancelled tween left it.
+	-- The retired preference cannot disable the application's animations.
 	handle.config.set("ui.reduceMotion", "on")
 	harness.setViewport(1280, 820)
 	harness.settle(2)
 	handle.app.rebuild("test")
 	harness.settle(2)
-	check("reduced motion is in force", handle.env.require("ui/responsive").reduceMotion, true)
+	check("animations stay enabled", handle.env.require("ui/responsive").reduceMotion, false)
 	local still = harness.byName("IconMascot")
 	truthy("the mascot is still drawn", still ~= nil)
-	check("and does not move", still.Position.Y.Offset, 0)
-	check("or rock", still.Rotation, 0)
+	truthy("and keeps moving", still.Position.Y.Offset < 0)
+	truthy("and rocking", still.Rotation ~= 0)
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)

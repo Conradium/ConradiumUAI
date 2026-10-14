@@ -77,6 +77,7 @@ const { makePng } = require('./helpers/images');
     await page.getByLabel('Theme', { exact: true }).selectOption('light');
     assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue('--canvas')), '');
     await navigate('cowork');
+    await page.locator('#connectionGuide summary').click();
     assert.equal(await page.locator('.setup-step').count(), 3);
     assert.match(await page.locator('.setup-step').first().textContent(), /node UAI\/bridge\/start.txt/);
     await page.getByLabel('Your installation').selectOption('repo');

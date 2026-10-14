@@ -5,7 +5,6 @@
 return function(env)
 	local util = env.require("runtime/util")
 	local clock = env.require("runtime/clock")
-	local config = env.require("runtime/config")
 	local dispose = env.require("runtime/dispose")
 	local transport = env.require("net/transport")
 	local alive, pending = true, {}
@@ -18,23 +17,37 @@ return function(env)
 	end
 
 	function M.request(spec, headers, call)
-		local endpoint = transport.endpoint()
+		local endpoint = spec.relayEndpoint or transport.endpoint()
 		if not endpoint then return noRelay() end
 		local base, token, target = endpoint.base, endpoint.token, endpoint.target
 		local via = target == "companion" and "relay" or "web"
-		local timeout = util.clamp(tonumber(config.get("bridge.requestTimeout", 180)) or 180, 10, 86400)
+		local timeout = math.max(1, math.min(300, tonumber(spec.timeout) or 180))
 		local id = "inference_" .. env.services.HttpService:GenerateGUID(false)
-		local deadline = clock.ms() + (timeout + 30) * 1000
+		local deadline = math.min(tonumber(spec.deadlineMs) or math.huge,
+			clock.ms() + math.max(1, math.min(300, tonumber(spec.timeout) or 120)) * 1000)
+		if target == "cowork" then deadline = math.huge end
+		local ended
 		local function short(method, path, body)
+			if clock.ms() >= deadline then return nil, "deadline: relay request budget expired" end
 			return call({ url = base .. path, method = method, body = body,
-				headers = { Authorization = "Bearer " .. token }, identity = "none", silent = true, timeout = 15 })
+				headers = { Authorization = "Bearer " .. token }, identity = "none", silent = true,
+				timeout = math.min(5, (deadline - clock.ms()) / 1000), deadlineMs = deadline, aborted = ended })
 		end
+		local cancelled = false
 		local function cancel()
-			clock.spawn(function() pcall(short, "DELETE", "/api/inference/" .. id) end)
+			if cancelled then return end
+			cancelled = true
+			clock.spawn(function()
+				pcall(call, { url = base .. "/api/inference/" .. id, method = "DELETE",
+					headers = { Authorization = "Bearer " .. token }, identity = "none", silent = true, timeout = 2 })
+			end)
 		end
 		pending[id] = cancel
-		local function ended()
-			local current = transport.endpoint()
+		ended = function()
+			-- Health determines the next request's route. An accepted request keeps
+			-- its original endpoint while recovering the same job; only changed
+			-- credentials/settings, unload or caller cancellation invalidate it.
+			local current = transport.endpoint(target)
 			return not alive or not current or current.target ~= target or current.token ~= token
 				or current.base ~= base or (current.instance or "") ~= (endpoint.instance or "")
 				or (spec.aborted and spec.aborted())
@@ -51,6 +64,7 @@ return function(env)
 			return failure("Web runtime needs the bridge token in Cowork settings.")
 		end
 		local hello = short("GET", "/api/hello")
+		if ended() then pending[id] = nil; return nil, "aborted" end
 		local info = hello and hello.ok and util.decode(hello.body)
 		if type(info) ~= "table" or info.protocol ~= 2 or not info.instance then
 			if target == "companion" then
@@ -58,8 +72,11 @@ return function(env)
 			end
 			return failure("Web runtime cannot connect. Start the updated bridge/server.js and check its token.")
 		end
-		local payload = util.encode({ id = id, instance = info.instance, url = spec.url, headers = headers,
-			body = spec.body, timeout = timeout, sessionId = spec.sessionId })
+		if clock.ms() >= deadline then return failure("Relay request deadline reached before submission.") end
+		local input = { id = id, instance = info.instance, url = spec.url, headers = headers,
+			body = spec.body, sessionId = spec.sessionId }
+		if target == "companion" then input.timeout = math.min(timeout, (deadline - clock.ms()) / 1000) end
+		local payload = util.encode(input)
 		local submitted, attempts = false, 0
 		while clock.ms() < deadline do
 			if ended() then cancel(); pending[id] = nil; return nil, "aborted" end
@@ -88,7 +105,7 @@ return function(env)
 				cancel(); return failure("Could not confirm relay submission; stopped without resubmitting inference.")
 			end
 			local slept = 0
-			while slept < 1 do
+			while slept < 1 and clock.ms() < deadline do
 				if ended() then cancel(); pending[id] = nil; return nil, "aborted" end
 				slept = slept + (clock.wait(0.1) or 0.1)
 			end

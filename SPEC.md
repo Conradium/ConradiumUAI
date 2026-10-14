@@ -1,6 +1,14 @@
 # Project UAI — contract
 
-Current client release: **3.0.0 — October 13, 2026**.
+Current client release: **3.1.0 — October 14, 2026**.
+
+Bridge and Windows desktop release 3.1.0 use verified automatic GitHub updates.
+Bridge worker replacement waits for idle work and retains its session token;
+desktop app updates stage for restart with a retained fallback. Desktop detects
+Node.js 18+ or downloads a verified LTS runtime per user instead of bundling Node.
+The Windows distribution is one independent executable. Bridge, browser, client
+and license files are embedded and verified into a private cache automatically;
+users do not extract a ZIP or maintain an adjacent support folder.
 
 A universal Roblox AI agent client. Universal means: no game, no gateway and no
 host script is assumed. It runs standalone under an executor, embedded in a host
@@ -1005,8 +1013,11 @@ Modal cards, the settings dialog and Quick Chat use bounded, unscaled CanvasGrou
 that fade as a unit at their final geometry. Modals reveal after the caller fills
 their content and the first layout pass settles. Their entrances and exits never
 tween size, position or text metrics. Replacements release the outgoing surface;
-Quick Chat reverses its current fade without flashing or losing its draft. Reduced
-motion suppresses the transition. The main window and transcript remain plain frames.
+Quick Chat reverses its current fade without flashing or losing its draft. Client
+animations are permanently enabled. The retired `ui.reduceMotion` setting is
+removed from settings, bridge commands and configuration transfer; legacy values
+are discarded. The main window and transcript remain plain frames. The standalone
+UI LIB and browser system accessibility preferences remain independently owned.
 
 The transcript canvas uses `UIListLayout.AbsoluteContentSize` plus vertical padding.
 Lightweight spacers preserve the measured size of unmounted dialogue. Drawing
@@ -1023,7 +1034,8 @@ when `GuiService:IsTenFootInterface()`. These modes control placement and bounds
 phones use the same application components and navigation as desktop. Handheld
 layout metrics use 55% of desktop dimensions, spacing and radii before user
 density settings. Handheld text has a 10px baseline minimum before the user's
-text scale; standard icons have a 12px minimum to retain their strokes.
+text scale; the mobile sidebar uses dedicated 9px navigation roles while keeping
+its control sizes. Standard icons have a 12px minimum to retain their strokes.
 Controls have a 15px minimum on handhelds, 28px
 with a pointer and 48px on a console. Native dimensions are reduced directly;
 the application is not resampled through a UIScale.
@@ -1270,8 +1282,8 @@ checks justified by the change. Review each fix before rebuilding affected
 outputs and rerunning affected checks. Use native static checks, deterministic
 freshness checks and the official Luau compiler where applicable.
 
-The 3.0.0 plan and actual outcomes belong in
-[docs/TESTING_3.0.0.md](docs/TESTING_3.0.0.md). The entire native suite is not part
+The 3.1.0 plan and actual outcomes belong in
+[docs/TESTING_3.1.0.md](docs/TESTING_3.1.0.md). The entire native suite is not part
 of that release pass. `tools/test_native.js --verify-only` is a separate full-suite
 workflow, not a substitute for selected checks. The broader command reference
 below includes independent product/site workflows; it does not require running
@@ -1297,12 +1309,25 @@ node tools/build_site.js --check
 python test/site_static.py    # structural checks; no browser or image loading
 ```
 
+Authenticated bridge contact automatically selects Web runtime; disconnect
+restores Game for subsequent requests. Active Cowork inference has no overall
+request time limit in the client or bridge. The retired `bridge.requestTimeout`
+setting is stripped from saved/imported configurations and cannot be edited.
+Individual executor polling calls remain bounded to five seconds; lost receipts
+reuse the original job ID. Stop, unload, changed credentials and actual provider
+failures remain terminal. Providers may impose their own upstream limits.
+
 The bridge's protocol, installation, browser workflow and verification are
 documented in [bridge/README.md](bridge/README.md). Executor downloads start with
 `node UAI/bridge/start.txt`; Git checkouts use `node bridge/server.js`. Bridge test
 fixtures and helpers live under `bridge/tests/` and are excluded from downloads.
 
-The separate Windows launcher in `desktop/` owns a bundled bridge process in
+The separate Windows launcher in `desktop/` embeds its bridge/client/license
+payload in one executable and verifies it into a private user cache. It detects
+Node.js 18+ or offers an official, checksum-verified LTS installation per user.
+Desktop release updates verify executable bytes and stage them for the next
+app restart, preserving the original executable and a working fallback.
+The launcher owns a bridge supervisor and its attached worker in
 `--desktop` mode on `127.0.0.1:28791`. Start opens Cowork after a structured ready
 message; Stop/Exit use owned stdin control, and a Windows Job Object prevents
 orphan processes. Manual CLI behavior remains on its configured port (8790 by
@@ -1312,7 +1337,8 @@ local programs share this trust boundary; ordinary API routes retain bearer auth
 
 `net/bridge_connection` holds the effective connection and temporary desktop
 credentials. `bridge.autoDiscover` defaults to true, probes every four seconds
-with a two-second deadline, and yields to an explicitly enabled manual bridge.
+with a two-second deadline, skips touch-only mobile clients, and yields to an
+explicitly enabled manual bridge.
 The token is never persisted or copied into manual settings. Discovery validates
 product, protocol, port, token and instance; stale completions after settings
 changes or unload cannot connect. `bridge.stop()` suspends discovery until sync
@@ -1329,7 +1355,7 @@ web UI, no static files. `relay.mode` defaults to `auto`; `net/relay_link` probe
 `127.0.0.1:8790`, requires protocol 2 and the `uai-relay` marker (so a PC bridge on
 the same port is never mistaken for it), and pairs once for a token that survives
 companion restarts. `net/transport` is the single transport decision point: an
-enabled Cowork connection wins, then the companion, then the executor directly.
+connected Cowork connection wins, then the companion, then the executor directly.
 Images always relay because they need a resolver. `relay.*` is independent of
 `bridge.*` and is preserved across settings import. The companion never persists or
 logs provider keys, binds loopback only, and compares its token in constant time.

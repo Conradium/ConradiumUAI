@@ -155,6 +155,9 @@ return function(env)
 			if type(snapshot[section]) ~= "table" then return nil, "config." .. section .. " is required" end
 		end
 		local merged = withDefaults(config.defaults, snapshot)
+		-- Accept older exports without resurrecting the retired motion setting.
+		merged.ui.reduceMotion = nil
+		merged.bridge.requestTimeout = nil
 		local p = merged.providers
 		ok, err = array(p.list, "config.providers.list", provider)
 		if not ok then return nil, err end
@@ -187,7 +190,6 @@ return function(env)
 			["relay.mode"] = { auto = true, always = true, off = true },
 			["permissions.mode"] = { readonly = true, ask = true, auto = true, full = true },
 			["ui.density"] = { comfortable = true, compact = true },
-			["ui.reduceMotion"] = { auto = true, on = true, off = true },
 			["ui.layout"] = { auto = true, sheet = true, panel = true, window = true, tv = true },
 			["ui.codeTheme"] = { dark = true, light = true },
 			["ui.transcriptWidth"] = { narrow = true, medium = true, wide = true },
@@ -195,9 +197,6 @@ return function(env)
 		}
 		for path, choices in pairs(enums) do
 			if not choices[util.get(merged, path)] then return nil, "config." .. path .. " is not a supported choice" end
-		end
-		if merged.bridge.requestTimeout < 10 or merged.bridge.requestTimeout > 86400 then
-			return nil, "config.bridge.requestTimeout must be between 10 and 86400 seconds"
 		end
 		if merged.relay.port < 1 or merged.relay.port > 65535 then
 			return nil, "config.relay.port must be between 1 and 65535"

@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 'use strict';
 
+// Keep one owned parent process while verified releases replace only its idle
+// worker. Downloaded start.txt and the desktop use this same entry point.
+if (process.env.UAI_BRIDGE_WORKER !== '1' || typeof process.send !== 'function') {
+  require('./supervisor').start({ entry: __filename });
+  return;
+}
+
 // The web bridge.
 //
 // A Roblox client cannot accept an inbound connection -- executors expose an
@@ -25,6 +32,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createInference } = require('./inference');
 const { createPictureStore } = require('./picture-store');
+const RELEASE = require('./release');
 
 const args = process.argv.slice(2);
 function flag(name, fallback) {
@@ -42,10 +50,13 @@ const WEB_DIR = path.join(__dirname, 'web');
 // projection, leaving the plain text send/stream path exactly as it was.
 const LEGACY = hasFlag('legacy');
 
-// Regenerated every start. A token that outlived the process would end up pasted
-// into a config somewhere and become a permanent key to an agent that can run
-// code on this machine.
-const TOKEN = crypto.randomBytes(32).toString('hex');
+// The supervisor keeps the token only for this terminal/desktop lifetime. An
+// automatic worker update retains it; a manual app start generates a new token.
+const TOKEN = /^[a-f0-9]{64}$/.test(process.env.UAI_BRIDGE_SESSION_TOKEN || '')
+  ? process.env.UAI_BRIDGE_SESSION_TOKEN : crypto.randomBytes(32).toString('hex');
+delete process.env.UAI_BRIDGE_SESSION_TOKEN;
+let updateState = { state: 'current', currentVersion: RELEASE.version };
+let draining = false, activeRequests = 0;
 
 // How long an inbox poll is held before answering empty. Comfortably under the
 // point where an executor's own HTTP timeout would kill the request first, which
@@ -357,6 +368,9 @@ function retainResult(entry, result) {
 }
 
 function serveInbox(req, res) {
+  const requestedWait = req.headers['x-uai-poll-wait-ms'];
+  if (requestedWait !== undefined && !/^\d+$/.test(requestedWait)) throw badRequest('Invalid inbox poll wait');
+  const holdMs = requestedWait === undefined ? HOLD_MS : Math.min(HOLD_MS, Number(requestedWait));
   const client = req.headers['x-uai-client'];
   if (client && gameInstance && client !== gameInstance) {
     for (const entry of commands.values()) {
@@ -374,11 +388,21 @@ function serveInbox(req, res) {
   if (client) gameInstance = client;
   for (const command of state.inbox.slice(0, 32)) commands.get(command.commandId).delivered = true;
   touch();
-  if (state.inbox.length) {
+  if (state.inbox.length || holdMs === 0) {
     sendJson(res, 200, { commands: state.inbox.slice(0, 32) });
     return;
   }
-  const waiter = { res, timer: null };
+  // A recovered client can open a replacement poll before the old socket has
+  // closed. Release its old wait instead of retaining overlapping long polls.
+  for (const previous of state.waiters.slice()) {
+    if (client && previous.client === client) {
+      clearTimeout(previous.timer);
+      state.waiters.splice(state.waiters.indexOf(previous), 1);
+      sendJson(previous.res, 200, { commands: [] });
+    }
+  }
+  if (state.waiters.length >= 8) { sendJson(res, 429, { error: 'Too many pending inbox polls' }); return; }
+  const waiter = { res, timer: null, client };
   const release = () => {
     const at = state.waiters.indexOf(waiter);
     if (at >= 0) state.waiters.splice(at, 1);
@@ -386,7 +410,7 @@ function serveInbox(req, res) {
   waiter.timer = setTimeout(() => {
     release();
     sendJson(res, 200, { commands: [] });
-  }, HOLD_MS);
+  }, holdMs);
   req.on('close', () => {
     clearTimeout(waiter.timer);
     release();
@@ -449,7 +473,6 @@ function touch() {
 }
 
 async function serveEvents(req, res) {
-  touch();
   const payload = await readJson(req);
   if (!payload) {
     sendJson(res, 400, { error: 'invalid json' });
@@ -459,6 +482,7 @@ async function serveEvents(req, res) {
   for (const event of [...(Array.isArray(payload.snapshot) ? payload.snapshot : []), ...(Array.isArray(payload.events) ? payload.events : [])]) {
     if (!event || typeof event.kind !== 'string' || Buffer.byteLength(JSON.stringify(event)) > BACKLOG_BYTES) throw badRequest('invalid or oversized game event');
   }
+  touch();
   if (payload.batchId && seenBatches.has(payload.batchId)) { res.writeHead(204, SECURITY_HEADERS).end(); return; }
   if (payload.batchId) {
     seenBatches.add(payload.batchId);
@@ -623,6 +647,11 @@ async function serveStatic(pathname, res) {
 // Router ---------------------------------------------------------------------
 
 const server = http.createServer(async (req, res) => {
+  if (draining) {
+    res.setHeader('Retry-After', '1');
+    sendJson(res, 503, { error: 'Bridge is applying an update; reconnect shortly', code: 'bridge_updating' });
+    return;
+  }
   // Desktop discovery trusts native programs on this computer, never web pages.
   // An exact Host check also prevents a rebound public hostname reaching it.
   if (DESKTOP && req.headers.host !== `${HOST}:${PORT}`) {
@@ -647,6 +676,15 @@ const server = http.createServer(async (req, res) => {
   } catch {
     sendText(res, 400, 'bad request');
     return;
+  }
+
+  // Held inbox/SSE connections are reconnectable, but any body in flight and
+  // any finite response must finish before the idle handshake can succeed.
+  if (route.startsWith('/api/') && !['/api/stream', '/api/agent/inbox', '/api/hello'].includes(route)) {
+    activeRequests++;
+    let finished = false;
+    const release = () => { if (!finished) { finished = true; activeRequests--; } };
+    res.once('finish', release); res.once('close', release);
   }
 
   if (!route.startsWith('/api/')) {
@@ -691,11 +729,11 @@ const server = http.createServer(async (req, res) => {
   const post = req.method === 'POST';
   try {
     if (route === '/api/hello' && req.method === 'GET') {
-      const capabilities = { browserStream: { schema: 1, replay: true } };
+      const capabilities = { browserStream: { schema: 1, replay: true }, agentInbox: { waitHeader: 'X-UAI-Poll-Wait-Ms', maxWaitMs: HOLD_MS } };
       if (!LEGACY) capabilities.pictures = { mode: 'provider-image-content', version: 2 };
       sendJson(res, 200, {
         ok: true, connected: state.connected, protocol: 2, instance: inference.instance,
-        capabilities,
+        capabilities, update: updateState,
         limits: {
           pictureBytes: PICTURE_LIMITS.pictureBytes, picturesPerSend: PICTURE_LIMITS.picturesPerSend,
           pictureTotalBytes: PICTURE_LIMITS.pictureTotalBytes, pictureTtlMs: PICTURE_LIMITS.pictureTtlMs,
@@ -713,11 +751,13 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, job ? 200 : 404, job || { error: 'Unknown inference ID; do not resubmit' });
       } else sendJson(res, 405, { error: 'method not allowed' });
     } else if (route === '/api/agent/ack' && post) {
-      touch();
       const body = await readJson(req);
       if (!body || !Array.isArray(body.results) || body.results.length > 1000) throw badRequest('invalid acknowledgement');
+      // Validate the entire batch before changing receipts. Retrying a malformed
+      // batch must not find a half-applied command result.
+      if (body.results.some(result => !result || typeof result.id !== 'string')) throw badRequest('invalid command receipt');
+      touch();
       for (const result of body.results) {
-        if (!result || typeof result.id !== 'string') throw badRequest('invalid command receipt');
         const entry = commands.get(result.id);
         if (entry && ['queued', 'running'].includes(entry.state)) {
           entry.state = result.pending ? 'running' : (result.ok === false ? 'failed' : 'completed');
@@ -785,6 +825,7 @@ const server = http.createServer(async (req, res) => {
       handleSend(req, res, await readJson(req, 2 << 20));
     } else if ((route === '/api/abort' || route === '/api/clear') && post) {
       const body = await readJson(req, 2 << 20);
+      if (!body) throw badRequest('invalid command');
       const { id } = enqueue({ type: route.slice(5), sessionId: body?.sessionId, commandId: body?.commandId });
       sendJson(res, 202, { queued: true, id });
     } else if (route === '/api/permission' && post) {
@@ -798,6 +839,7 @@ const server = http.createServer(async (req, res) => {
         id: body.id,
         allow: body.allow === true,
         remember: body.remember === true,
+        commandId: body.commandId,
       });
       sendJson(res, 202, { queued: true, id });
     } else if (route === '/api/command' && post) {
@@ -861,6 +903,7 @@ setInterval(() => {
 
 server.listen(PORT, HOST, () => {
   const origin = `http://${HOST}:${PORT}`;
+  process.send({ type: 'ready', version: RELEASE.version, updateProtocol: RELEASE.updateProtocol, token: TOKEN, port: PORT }, () => {});
   if (DESKTOP) {
     process.stdout.write(JSON.stringify({ type: 'ready', product: 'project-uai-desktop', protocol: 1,
       port: PORT, token: TOKEN, url: `${origin}/#t=${TOKEN}` }) + '\n');
@@ -875,9 +918,10 @@ server.listen(PORT, HOST, () => {
     `  Token   ${TOKEN}\n` +
     `\n  1. Open the link above in your browser.\n` +
     `  2. In Roblox, open UAI -> Cowork. Paste the Token and set Port to ${PORT}.\n` +
-    `  3. Turn Enabled on. Choose Web for live browser responses.\n\n` +
+    `  3. Turn Enabled on. Cowork switches to Web when connected and Game when disconnected.\n\n` +
     `  Keep this terminal and Roblox open. Ctrl+C stops the bridge.\n` +
-    `  Runs on this computer only. Keep the token private; it changes on restart.\n\n`
+    `  Runs on this computer only. Keep the token private; it changes when you reopen the app.\n` +
+    `  New bridge releases apply automatically when idle.\n\n`
   );
 });
 
@@ -892,6 +936,35 @@ function shutdown() {
   setTimeout(() => process.exit(0), 3000).unref();
 }
 for (const event of ['SIGINT', 'SIGTERM']) process.on(event, shutdown);
+function updateBusy() {
+  if (activeRequests || activeUploads || inference.pending() || pictures?.hasLivePictures()) return true;
+  // Keep terminal receipts for their normal retention period, so an update
+  // cannot race a browser's command reconciliation or the game's result poll.
+  for (const entry of commands.values()) {
+    if (['queued', 'running'].includes(entry.state) || !entry.finishedAt || Date.now() - entry.finishedAt < 300000) return true;
+  }
+  const agent = state.agentState;
+  const any = (items, predicate) => Array.isArray(items) && items.some(predicate);
+  return !!(agent?.agent?.busy || any(agent?.threads, item => item?.busy) ||
+    any(agent?.subagents, item => ['running', 'queued', 'starting'].includes(item?.status)) ||
+    any(agent?.loops, item => ['running', 'queued', 'starting', 'waiting'].includes(item?.state)) ||
+    agent?.pendingPermissions?.length || agent?.questions?.length);
+}
+process.on('message', message => {
+  if (message?.type === 'stop') shutdown();
+  else if (message?.type === 'update-state') {
+    updateState = message.update;
+    broadcast({ kind: 'bridge:update', update: updateState });
+  } else if (message?.type === 'prepare-update') {
+    const idle = !stopping && !updateBusy();
+    if (idle) draining = true;
+    if (process.connected) process.send({ type: 'update-idle', requestId: message.requestId, idle }, () => {});
+  } else if (message?.type === 'cancel-update' && !stopping) draining = false;
+});
+// A killed supervisor cannot leave an inference-capable orphan behind.
+process.on('disconnect', shutdown);
+process.stdin.on('end', shutdown);
+process.stdin.resume();
 if (DESKTOP) {
   const control = require('node:readline').createInterface({ input: process.stdin });
   control.on('line', line => {

@@ -48,6 +48,10 @@ return function(env)
 		-- `size` by 0.86, so the gaps drifted rather than holding.
 		local ROW_INSET = theme.space.sm
 		local ROW_ICON = theme.size.icon
+		local ROW_ROLE = theme.handheld and "sidebar" or "caption"
+		local STRONG_ROLE = theme.handheld and "sidebarStrong" or "label"
+		local GROUP_ROLE = theme.handheld and "sidebarStrong" or "overline"
+		local PROFILE_ROLE = theme.handheld and "sidebarStrong" or "heading"
 
 		local sidebar = P.column(parent, {
 			name = "Sidebar",
@@ -107,7 +111,7 @@ return function(env)
 		local modeRow = P.row(sidebar, {
 			name = "ModeSwitcher",
 			size = UDim2.new(1, 0, 0, math.max(theme.size.controlSmall, responsive.minTarget(),
-				theme.text.caption.height) + theme.space.hair * 2),
+				theme.text[ROW_ROLE].height) + theme.space.hair * 2),
 			bg = theme.color.surface,
 			radius = theme.radius.lg,
 			padding = theme.space.hair,
@@ -139,9 +143,9 @@ return function(env)
 				theme.size.icon - theme.space.xxs)
 			local label2 = P.text(button.row, {
 				text = label,
-				role = "caption",
+				role = ROW_ROLE,
 				color = selected and theme.color.text or theme.color.textTertiary,
-				size = UDim2.new(0, 0, 0, theme.text.caption.height),
+				size = UDim2.new(0, 0, 0, theme.text[ROW_ROLE].height),
 				auto = "X",
 				flex = "Shrink",
 				truncate = true,
@@ -160,6 +164,7 @@ return function(env)
 		local newButton = P.button(sidebar, {
 			name = "NewChat",
 			text = "New conversation",
+			role = theme.handheld and STRONG_ROLE or nil,
 			icon = "plus",
 			variant = "secondary",
 			size = "md",
@@ -189,7 +194,7 @@ return function(env)
 			end,
 		})
 		customize.icon("sliders", 1, theme.color.textSecondary, ROW_ICON)
-		customize.label("Customize", 2, theme.color.textSecondary)
+		customize.label("Customize", 2, theme.color.textSecondary, ROW_ROLE)
 
 		local expanded = config.get("ui.sidebarExpanded", false) == true
 		local more = P.rowButton(actions, {
@@ -203,7 +208,7 @@ return function(env)
 			end,
 		})
 		local moreIcon = more.icon("chevron", 1, theme.color.textSecondary, ROW_ICON)
-		more.label("More", 2, theme.color.textSecondary)
+		more.label("More", 2, theme.color.textSecondary, ROW_ROLE)
 
 		local moreList = P.column(actions, {
 			name = "MorePanels",
@@ -215,7 +220,7 @@ return function(env)
 		local foldersButton = P.rowButton(actions, { name = "ConversationFolders", padding = { x = ROW_INSET },
 			layoutOrder = 4, onClick = function() host.manageFolders() end })
 		foldersButton.icon("folder", 1, theme.color.textSecondary, ROW_ICON)
-		foldersButton.label("Conversation folders", 2, theme.color.textSecondary)
+		foldersButton.label("Conversation folders", 2, theme.color.textSecondary, ROW_ROLE)
 
 		function handle.renderMore()
 			moreList.Visible = expanded
@@ -247,7 +252,7 @@ return function(env)
 					local running = #subagent.running()
 					if running > 0 then label = label .. "  " .. tostring(running) end
 				end
-				row.label(label, 2, selected and theme.color.text or theme.color.textSecondary)
+				row.label(label, 2, selected and theme.color.text or theme.color.textSecondary, ROW_ROLE)
 			end
 		end
 
@@ -409,9 +414,9 @@ return function(env)
 				P.text(head.row, {
 					name = "PlaceName",
 					text = group.label,
-					role = "overline",
+					role = GROUP_ROLE,
 					color = theme.color.textTertiary,
-					size = UDim2.new(0, 0, 0, theme.text.overline.height),
+					size = UDim2.new(0, 0, 0, theme.text[GROUP_ROLE].height),
 					flex = "Fill",
 					truncate = true,
 					layoutOrder = 2,
@@ -438,13 +443,13 @@ return function(env)
 				local countLabel = P.text(head.row, {
 					name = "PlaceCount",
 					text = tostring(#group.sessions),
-					role = "caption",
+					role = ROW_ROLE,
 					color = theme.color.textTertiary,
 					align = "Right",
 					auto = "X",
 					layoutOrder = 4,
 				})
-				countLabel.Size = UDim2.fromOffset(0, theme.text.caption.height)
+				countLabel.Size = UDim2.fromOffset(0, theme.text[ROW_ROLE].height)
 				-- Custom folders and Universal are available in every game.
 				if group.current or group.kind ~= "game" then
 					local plus = P.iconButton(head.row, {
@@ -514,7 +519,7 @@ return function(env)
 					if session.ephemeral then titleText = titleText .. "  (not saved)" end
 					row.label(titleText, 2,
 						selected and theme.color.text or theme.color.textSecondary,
-						selected and "label" or nil)
+						selected and STRONG_ROLE or ROW_ROLE)
 					local menuButton = P.iconButton(row.row, {
 						name = "SessionMenu",
 						icon = "ellipsis",
@@ -532,7 +537,7 @@ return function(env)
 				local empty = P.text(historyList, {
 					name = "NoHistory",
 					text = "Your conversations will appear here, organized by folder.",
-					role = "caption",
+					role = ROW_ROLE,
 					color = theme.color.textTertiary,
 					wrap = true,
 					auto = "Y",
@@ -549,7 +554,7 @@ return function(env)
 
 		-- A distinct identity control, with room for a headshot and two readable lines.
 		local identity = profileUI.identity()
-		local identityHeight = theme.text.heading.height + theme.text.caption.height
+		local identityHeight = theme.text[PROFILE_ROLE].height + theme.text[ROW_ROLE].height
 		local profile, profileMenu, chevron
 		profile = P.rowButton(sidebar, {
 			name = "ProfileBar",
@@ -591,8 +596,8 @@ return function(env)
 		P.text(profileText, {
 			name = "ProfileName",
 			text = identity.name,
-			role = "heading",
-			size = UDim2.new(1, 0, 0, theme.text.heading.height),
+			role = PROFILE_ROLE,
+			size = UDim2.new(1, 0, 0, theme.text[PROFILE_ROLE].height),
 			alignY = "Bottom",
 			color = theme.color.text,
 			truncate = true,
@@ -601,8 +606,8 @@ return function(env)
 		local profileDetail = P.text(profileText, {
 			name = "ProfileProvider",
 			text = profileUI.providerLabel(),
-			role = "caption",
-			size = UDim2.new(1, 0, 0, theme.text.caption.height),
+			role = ROW_ROLE,
+			size = UDim2.new(1, 0, 0, theme.text[ROW_ROLE].height),
 			alignY = "Top",
 			color = theme.color.textTertiary,
 			truncate = true,

@@ -91,6 +91,131 @@ test('a truncated stream (no [DONE]) fails instead of completing', async t => {
   assert.match(view.error, /ended before completion/i);
 });
 
+test('OpenCode Responses streams text, reasoning and tools and completes on response.completed', async t => {
+  const frames = [
+    { type: 'response.created', response: { model: 'muse-spark-fixture' } },
+    { type: 'response.reasoning_summary_text.delta', delta: 'Thinking' },
+    { type: 'response.output_text.delta', delta: 'Ready' },
+    { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', name: 'read_file' } },
+    { type: 'response.function_call_arguments.delta', delta: '{"path":"a.lua"}' },
+    { type: 'response.completed', response: { status: 'completed', output: [
+      { type: 'message', content: [{ type: 'output_text', text: 'Ready' }] },
+      { type: 'reasoning', summary: [{ text: 'Thinking' }] },
+    ] } },
+  ];
+  const raw = frames.map(frame => 'event: ' + frame.type + '\ndata: ' + JSON.stringify(frame) + '\n\n').join('');
+  const { events, view, relay } = await run(t, (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(raw);
+  });
+  assert.equal(view.state, 'completed'); assert.equal(view.body, raw);
+  assert.deepEqual(deltas(events).map(e => e.channel), ['reasoning', 'text', 'tool', 'tool']);
+  assert.equal(deltas(events).filter(e => e.channel === 'text').map(e => e.text).join(''), 'Ready');
+  assert.equal(deltas(events)[0].model, 'muse-spark-fixture');
+  assert.deepEqual(deltas(relay.previews('s1')), deltas(events));
+});
+
+test('Responses final-only output is projected when a gateway sends no text deltas', async t => {
+  const { events, view } = await run(t, (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end('event: response.completed\ndata: {"response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Final answer"}]}]}}\n\n');
+  });
+  assert.equal(view.state, 'completed'); assert.equal(deltas(events)[0].text, 'Final answer');
+});
+
+test('provider stream errors remain terminal after partial output and later completion markers', async t => {
+  for (const frame of [
+    'event: error\ndata: overloaded',
+    'data: {"error":{"message":"overloaded"}}',
+    'data: {"type":"response.failed","response":{"status":"failed","error":{"message":"overloaded"}}}',
+    'data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}',
+    'data: {"type":"response.completed","response":{"status":"failed","error":{"message":"overloaded"}}}',
+  ]) {
+    const { events, view } = await run(t, (req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n' + frame + '\n\ndata: [DONE]\n\n');
+    });
+    assert.equal(view.state, 'failed', frame);
+    assert.match(view.error, /Provider stream failed/); assert.equal(view.body, undefined);
+    assert.equal(done(events).state, 'failed'); assert.equal(done(events).sawText, true);
+  }
+});
+
+test('provider errors redact echoed credentials from live and retained previews', async t => {
+  const url = await upstream(t, (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end('data: ' + JSON.stringify({ error: { message: req.headers.authorization + ' rejected' } }) + '\n\n');
+  });
+  const events = [], relay = createInference({ publish: event => events.push(event) });
+  t.after(() => relay.close());
+  relay.start({ id: 'redacted-response', instance: relay.instance, url, sessionId: 's1', body: '{}', headers: { Authorization: 'Bearer credential-fixture-1234' } });
+  for (let i = 0; i < 500 && relay.get('redacted-response').state === 'running'; i++) await sleep(5);
+  assert.equal(relay.get('redacted-response').state, 'failed');
+  assert.doesNotMatch(JSON.stringify([events, relay.get('redacted-response'), relay.previews('s1')]), /credential-fixture-1234/);
+  assert.match(done(events).error, /redacted/);
+});
+
+test('Cowork ignores caller timeouts and completes the original provider request', async t => {
+  let calls = 0;
+  const url = await upstream(t, (req, res) => {
+    calls++; res.writeHead(200, { 'content-type': 'text/event-stream' }); res.flushHeaders();
+    setTimeout(() => res.end('data: {"choices":[{"delta":{"content":"Finished thinking"}}]}\n\ndata: [DONE]\n\n'), 120);
+  });
+  const relay = createInference(); t.after(() => relay.close());
+  const input = { id: 'unlimited-completion', instance: relay.instance, url, body: '{}', timeout: 0.01 };
+  relay.start(input);
+  await sleep(60);
+  assert.equal(relay.get(input.id).state, 'running');
+  assert.equal(relay.start({ ...input, timeout: 0.001 }).state, 'running', 'changing a retired setting cannot restart or shorten the job');
+  for (let i = 0; i < 200 && relay.get(input.id).state === 'running'; i++) await sleep(5);
+  assert.equal(relay.get(input.id).state, 'completed');
+  assert.match(relay.get(input.id).body, /Finished thinking/);
+  assert.equal(calls, 1);
+});
+
+test('an unlimited quiet provider job remains stoppable and cannot be resubmitted', async t => {
+  let calls = 0, responseClosed;
+  const closed = new Promise(resolve => { responseClosed = resolve; });
+  const url = await upstream(t, (req, res) => {
+    calls++; res.on('close', responseClosed);
+    res.writeHead(200, { 'content-type': 'text/event-stream' }); res.flushHeaders();
+  });
+  const relay = createInference(); t.after(() => relay.close());
+  const input = { id: 'unlimited-stop', instance: relay.instance, url, body: '{}', timeout: 0.01 };
+  relay.start(input); await sleep(80);
+  assert.equal(relay.get(input.id).state, 'running');
+  assert.equal(relay.cancel(input.id), true);
+  await closed;
+  assert.equal(relay.get(input.id).state, 'cancelled');
+  assert.equal(relay.start(input).state, 'cancelled'); assert.equal(calls, 1);
+});
+
+test('advancing past the former three-minute and one-day limits does not end Cowork inference', async t => {
+  let answer, accept;
+  const accepted = new Promise(resolve => { accept = resolve; });
+  const url = await upstream(t, (req, res) => { answer = res; accept(); });
+  const relay = createInference(); t.after(() => relay.close());
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  relay.start({ id: 'unlimited-clock', instance: relay.instance, url, body: '{}' });
+  await accepted;
+  t.mock.timers.tick(2 * 86400 * 1000);
+  assert.equal(relay.get('unlimited-clock').state, 'running');
+  answer.end('{"choices":[{"message":{"content":"After a long think"}}]}');
+  for (let i = 0; i < 100 && relay.get('unlimited-clock').state === 'running'; i++) await new Promise(setImmediate);
+  assert.equal(relay.get('unlimited-clock').state, 'completed');
+  t.mock.timers.reset();
+});
+
+test('stream framing accepts a split UTF-8 BOM, CRLF and bare CR without altering the receipt', async t => {
+  const raw = '\uFEFFdata: {"choices":[{"delta":{"content":"one"}}]}\r\rdata: {"choices":[{"delta":{"content":"two"}}]}\r\n\r\ndata: [DONE]\r\n\r\n';
+  const { events, view } = await run(t, (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const bytes = Buffer.from(raw); res.write(bytes.subarray(0, 1));
+    setTimeout(() => res.end(bytes.subarray(1)), 5);
+  });
+  assert.equal(view.state, 'completed'); assert.equal(view.body, raw);
+  assert.equal(deltas(events).map(e => e.text).join(''), 'onetwo');
+});
+
 test('a non-SSE 200 response completes with streamed:false and keeps its body', async t => {
   const { events, view } = await run(t, (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });

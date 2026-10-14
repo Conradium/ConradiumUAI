@@ -44,7 +44,6 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
     job.state = state;
     job.error = error;
     job.finishedAt = Date.now();
-    clearTimeout(job.timer);
     releaseRequest(job);
     if (state !== 'completed') {
       retainedBytes -= job.bodyBytes || 0;
@@ -88,9 +87,43 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
 
   // Turn a parsed provider frame into zero or more {channel, text} deltas. text
   // is a string for text/reasoning; tool carries a small bounded object.
-  function normalize(frame) {
+  function normalize(frame, job) {
     const out = [];
     if (!frame || typeof frame !== 'object') return out;
+    // OpenCode's Responses lane uses typed events and its own completion
+    // marker. These previews never replace the raw body consumed by Roblox.
+    if (frame.type === 'response.output_text.delta' && typeof frame.delta === 'string') {
+      if (frame.delta) out.push({ channel: 'text', text: frame.delta });
+      return out;
+    }
+    if (['response.reasoning_summary_text.delta', 'response.reasoning_text.delta'].includes(frame.type) && typeof frame.delta === 'string') {
+      if (frame.delta) out.push({ channel: 'reasoning', text: frame.delta });
+      return out;
+    }
+    if (frame.type === 'response.output_item.added' && frame.item?.type === 'function_call') {
+      out.push({ channel: 'tool', text: { name: String(frame.item.name || '').slice(0, 200) } });
+      return out;
+    }
+    if (frame.type === 'response.function_call_arguments.delta' && typeof frame.delta === 'string') {
+      if (frame.delta) out.push({ channel: 'tool', text: { argsDelta: frame.delta.slice(0, 4096) } });
+      return out;
+    }
+    if (frame.type === 'response.completed' && frame.response && typeof frame.response === 'object') {
+      // Some gateways emit only the final output. Fill missing channels, but
+      // never append the final copy to text already delivered as deltas.
+      for (const item of Array.isArray(frame.response.output) ? frame.response.output : []) {
+        if (item?.type === 'message' && !job.sawText) {
+          for (const part of Array.isArray(item.content) ? item.content : []) {
+            if (part?.type === 'output_text' && typeof part.text === 'string' && part.text) out.push({ channel: 'text', text: part.text });
+          }
+        } else if (item?.type === 'reasoning' && !job.sawReasoning) {
+          for (const part of Array.isArray(item.summary) ? item.summary : []) {
+            if (typeof part?.text === 'string' && part.text) out.push({ channel: 'reasoning', text: part.text });
+          }
+        }
+      }
+      return out;
+    }
     // Anthropic streaming: typed events over a single content block.
     if (frame.type === 'content_block_delta' && frame.delta && typeof frame.delta === 'object') {
       const d = frame.delta;
@@ -126,9 +159,12 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
     if (job.model == null && typeof parsed.model === 'string') job.model = parsed.model;
     if (parsed.type === 'message_start' && parsed.message && typeof parsed.message.model === 'string') job.model = parsed.message.model;
+    if (parsed.response && typeof parsed.response.model === 'string') job.model = parsed.response.model;
     if (parsed.type === 'message_stop') job.sseDone = true;
-    for (const delta of normalize(parsed)) {
+    if (parsed.type === 'response.completed' && parsed.response && typeof parsed.response === 'object') job.sseDone = true;
+    for (const delta of normalize(parsed, job)) {
       if (delta.channel === 'text') job.sawText = true;
+      if (delta.channel === 'reasoning') job.sawReasoning = true;
       // The compatibility frame contains only this delta. Re-emitting a whole
       // provider frame for each channel would duplicate mixed text/reasoning in
       // older browsers and retain arbitrary provider payloads in replay memory.
@@ -148,7 +184,9 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Use an HTTP(S) provider URL');
     const headers = {};
     for (const [name, value] of Object.entries(input.headers || {})) {
-      if (/^(host|connection|content-length|transfer-encoding|accept-encoding)$/i.test(name)) continue;
+      // Older clients attached the executor's deadline as SDK metadata. It
+      // must not impose a provider-side deadline on unlimited Cowork work.
+      if (/^(host|connection|content-length|transfer-encoding|accept-encoding|x-stainless-timeout)$/i.test(name)) continue;
       http.validateHeaderName(name);
       http.validateHeaderValue(name, String(value));
       headers[name] = String(value);
@@ -175,7 +213,8 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
       const e = new Error('Image request memory limit reached; wait for other requests or send fewer images'); e.status = 413; throw e;
     }
     headers['content-length'] = requestBytes;
-    const timeout = Math.min(86400, Math.max(10, Number(input.timeout) || 180));
+    // Cowork inference has no elapsed-time limit. Legacy timeout fields are
+    // deliberately ignored; only Stop, shutdown or a real failure ends a job.
     let model;
     try { const b = JSON.parse(input.body); if (b && typeof b.model === 'string') model = b.model; } catch { /* body need not be JSON */ }
     const job = { id: input.id, fingerprint, sessionId: input.sessionId, state: 'running', body: '', bytes: 0, bodyBytes: 0, wireBytes: 0,
@@ -183,14 +222,38 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
       firstFrameAt: null, sawText: false, model, requestBytes };
     jobs.set(job.id, job);
     const decoder = new StringDecoder('utf8');
-    let buffer = '', eventName = '', dataLines = [];
+    let buffer = '', eventName = '', dataLines = [], firstText = true;
+    const secrets = Object.entries(headers).filter(([name]) => /authorization|api[-_]?key|token|secret/i.test(name))
+      .flatMap(([, value]) => [value, value.replace(/^Bearer\s+/i, '')]);
+    for (const [name, value] of url.searchParams) if (/key|token|secret|auth/i.test(name)) secrets.push(value);
+    const streamFailure = (parsed, name) => {
+      const type = typeof parsed?.type === 'string' ? parsed.type : name;
+      const failed = ['error', 'response.failed', 'response.incomplete', 'response.cancelled'].includes(type)
+        || ['error', 'response.failed', 'response.incomplete', 'response.cancelled'].includes(name)
+        || !!parsed?.error || ['failed', 'incomplete', 'cancelled'].includes(parsed?.response?.status);
+      if (!failed) return null;
+      const detail = parsed?.error || parsed?.response?.error || parsed?.response?.incomplete_details || parsed;
+      let message = typeof detail === 'string' ? detail : String(detail?.message || detail?.reason || detail?.code || type || 'provider error');
+      for (const secret of secrets) if (secret.length >= 4) message = message.split(secret).join('[redacted]');
+      message = message.replace(/Bearer\s+[^\s,;"'<>]+/gi, 'Bearer [redacted]').replace(/[\r\n\t]+/g, ' ').slice(0, 400);
+      return 'Provider stream failed: ' + message;
+    };
     const dispatchEvent = () => {
       if (!dataLines.length) { eventName = ''; return; }
-      const payload = dataLines.join('\n'); dataLines = []; eventName = '';
+      const payload = dataLines.join('\n'), name = eventName; dataLines = []; eventName = '';
       if (payload === '[DONE]') { job.sseDone = true; return; }
       let parsed;
       try { parsed = JSON.parse(payload); }
-      catch { job.malformed = (job.malformed || 0) + 1; request.destroy(); finish(job, 'failed', 'Provider returned malformed streaming data'); return; }
+      catch {
+        const failure = streamFailure(payload, name);
+        request.destroy(); finish(job, 'failed', failure || 'Provider returned malformed streaming data'); return;
+      }
+      const failure = streamFailure(parsed, name);
+      if (failure) { request.destroy(); finish(job, 'failed', failure); return; }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        request.destroy(); finish(job, 'failed', 'Provider returned malformed streaming data'); return;
+      }
+      if (!parsed.type && name) parsed.type = name;
       onFrame(job, parsed);
     };
     const handleLine = raw => {
@@ -203,6 +266,16 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
       if (value.startsWith(' ')) value = value.slice(1);
       if (field === 'data') dataLines.push(value);
       else if (field === 'event') eventName = value;
+    };
+    const drainLines = (final = false) => {
+      for (;;) {
+        const idx = buffer.search(/[\r\n]/);
+        if (idx < 0 || (!final && buffer[idx] === '\r' && idx === buffer.length - 1)) return;
+        const width = buffer[idx] === '\r' && buffer[idx + 1] === '\n' ? 2 : 1;
+        const line = buffer.slice(0, idx); buffer = buffer.slice(idx + width);
+        handleLine(line);
+        if (job.state !== 'running') return;
+      }
     };
     const consume = text => {
       if (job.state !== 'running') return;
@@ -217,13 +290,9 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
       job.body += text;
       job.bodyBytes += bytes; retainedBytes += bytes;
       if (job.state !== 'running' || !job.streaming) return;
+      if (firstText && text) { firstText = false; text = text.replace(/^\uFEFF/, ''); }
       buffer += text;
-      let idx;
-      while ((idx = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, idx); buffer = buffer.slice(idx + 1);
-        handleLine(line);
-        if (job.state !== 'running') return;
-      }
+      drainLines();
     };
     const transport = url.protocol === 'https:' ? https : http;
     const request = transport.request(url, { method: 'POST', headers }, response => {
@@ -250,6 +319,8 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
         consume(decoder.end());
         if (job.state !== 'running') return;
         if (job.streaming) {
+          drainLines(true);
+          if (job.state !== 'running') return;
           if (buffer.length) { handleLine(buffer); buffer = ''; }
           if (job.state !== 'running') return;
           if (dataLines.length) dispatchEvent();
@@ -263,11 +334,12 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
       response.on('error', () => finish(job, 'failed', 'Provider response connection closed'));
     });
     job.request = request;
+    // Node's shared agent may configure an idle socket timeout. Active provider
+    // work belongs to this job until it answers or the user stops it.
+    request.setTimeout(0);
     activeRequestBytes += requestBytes;
     request.on('finish', () => releaseRequest(job));
     request.on('error', () => finish(job, 'failed', 'Could not complete provider connection'));
-    job.timer = setTimeout(() => { finish(job, 'failed', `Provider request exceeded ${timeout}s`); request.destroy(); }, timeout * 1000);
-    job.timer.unref();
     if (job.sessionId) publish({ kind: 'inference:start', id: job.id, sessionId: job.sessionId, model: job.model, startedAt: job.startedAt });
     request.end(providerBody);
     return view(job);
@@ -299,6 +371,8 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
   }, Math.min(retentionMs, 10000));
   cleanup.unref();
   return { instance, start, get: id => jobs.has(id) ? view(jobs.get(id)) : (horizon.has(id) ? { id, state: 'expired', error: 'Request expired and was evicted; do not resubmit' } : null), cancel,
+    pending: () => [...jobs.values()].some(job => job.state === 'running' ||
+      (!job.committed && job.finishedAt && Date.now() - job.finishedAt < retentionMs)),
     limits: { maxBytes, deliverableMax: effectiveMax },
     commit(id, sessionId) { const job = jobs.get(id); if (!job) return false; if (sessionId !== undefined && job.sessionId !== sessionId) return false; job.committed = true; return true; },
     previews(sessionId) {

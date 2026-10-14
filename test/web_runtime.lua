@@ -6,8 +6,10 @@ local function setup()
 	local h = envMock.new()
 	local app = assert(h.boot()); h.settle(1)
 	app.config.set("bridge.token", "test-bridge-token")
-	app.config.set("bridge.runtime", "web")
 	app.config.set("bridge.enabled", true, { quiet = true })
+	-- This transport-only fixture supplies the effective route directly. Live
+	-- connection-driven runtime transitions are exercised in bridge_lifecycle.lua.
+	app.config.set("bridge.runtime", "web", { quiet = true })
 	return h, app
 end
 local function completion(text)
@@ -110,9 +112,9 @@ do
 	local h = envMock.new(); local app = assert(h.boot()); h.settle(1)
 	local commands = app.env.require("net/bridge_commands")
 	local session = app.sessions.current()
-	check("runtime can switch while idle", commands.run({ type = "runtime", value = "web" }))
+	check("runtime cannot select Web without a connection", not pcall(commands.run, { type = "runtime", value = "web" }))
 	session.busy = true
-	check("runtime switch is rejected during work", not pcall(commands.run, { type = "runtime", value = "game" }))
+	check("current automatic runtime is idempotent during work", commands.run({ type = "runtime", value = "game" }))
 	session.busy = false
 	check("invalid settings are rejected", not pcall(commands.run, { type = "setting", path = "agent.toolConcurrency", value = 0 }))
 	app.config.set("permissions.mode", "ask")

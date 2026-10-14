@@ -277,6 +277,9 @@ return function(env)
 		small = { size = 13, weight = "regular", line = M.line.normal },
 		label = { size = 12, weight = "medium", line = M.line.tight },
 		caption = { size = 12, weight = "regular", line = M.line.snug },
+		-- Navigation has less room than conversation text on the handheld sidebar.
+		sidebar = { size = 12, mobileSize = 9, weight = "regular", line = M.line.snug },
+		sidebarStrong = { size = 12, mobileSize = 9, weight = "medium", line = M.line.tight },
 		overline = { size = 11, weight = "medium", line = M.line.tight },
 		mono = { size = 13, weight = "mono", line = M.line.normal },
 		monoSmall = { size = 12, weight = "mono", line = M.line.normal },
@@ -611,7 +614,7 @@ return function(env)
 			-- Keep the compact layout, but give text a native reading floor before
 			-- applying the user's text setting so that setting remains effective.
 			local baseSize = spec.size * M.metricScale
-			if M.handheld then baseSize = math.max(10, baseSize) end
+			if M.handheld then baseSize = spec.mobileSize or math.max(10, baseSize) end
 			local size = math.max(math.floor(baseSize * textScale + 0.5), M.handheld and 9 or 8)
 			M.text[role] = {
 				size = size,

@@ -472,7 +472,7 @@ return function(env)
 			-- Shrink still lets bounded buttons truncate when the pair cannot fit.
 			label = P.text(content, {
 				text = props.text,
-				role = props.size == "sm" and "small" or variant.font,
+				role = props.role or (props.size == "sm" and "small" or variant.font),
 				color = variant.text,
 				align = props.align or "Center",
 				auto = autoWidth and "XY" or "X",
@@ -597,7 +597,7 @@ return function(env)
 
 		function handle.setVariant(name)
 			variant = (VARIANTS[name] or VARIANTS.secondary)()
-			if label then applyFont(label, theme.textRole(props.size == "sm" and "small" or variant.font), {}) end
+			if label then applyFont(label, theme.textRole(props.role or (props.size == "sm" and "small" or variant.font)), {}) end
 			paint()
 		end
 

@@ -276,7 +276,8 @@ return function(env)
 	M.opencodeId = opencodeId
 
 	local function validOpencodeSession(id)
-		if type(id) ~= "string" or #id ~= 30 or not id:match("^ses_%x%x%x%x%x%x%x%x%x%x%x%x") then
+		if type(id) ~= "string" or #id ~= 30 or not id:match("^ses_%x%x%x%x%x%x%x%x%x%x%x%x")
+			or not id:sub(17):match("^[A-Za-z0-9]+$") then
 			return false
 		end
 		local hex = id:sub(5, 16)

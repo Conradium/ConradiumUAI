@@ -3,7 +3,11 @@
 package.path = "test/?.lua;test/mock/?.lua;" .. package.path
 local envMock, json = require("env"), require("json")
 local passed = 0
-local function check(label, value) assert(value, label); passed = passed + 1; print("ok " .. label) end
+local function check(label, value, expected)
+	if expected ~= nil then assert(value == expected, label .. ": " .. tostring(value) .. " ~= " .. tostring(expected))
+	else assert(value, label) end
+	passed = passed + 1; print("ok " .. label)
+end
 local function completion(text)
 	return json.encode({ id = "cmpl_relay", model = "harness-model",
 		choices = { { index = 0, message = { role = "assistant", content = text }, finish_reason = "stop" } },
@@ -187,6 +191,8 @@ do
 	local function handler(req)
 		local url = tostring(req.url)
 		if not url:find(":8795/", 1, true) then return { StatusCode = 404, Body = "{}" } end
+		if url:find("/api/agent/inbox", 1, true) then return { StatusCode = 200, Body = '{"commands":[]}', delay = 1 } end
+		if url:find("/api/agent/", 1, true) then return { StatusCode = 204, Body = "" } end
 		if url:find("/api/hello", 1, true) then return { StatusCode = 200, Body = '{"protocol":2,"instance":"bridge-one"}' } end
 		if req.method == "POST" then
 			local body = json.decode(req.body)
@@ -201,7 +207,6 @@ do
 	app.config.set("bridge.port", 8795)
 	app.config.set("bridge.token", "bridge-token")
 	app.config.set("bridge.enabled", true)
-	app.config.set("bridge.runtime", "web")
 	h.settle(2)
 	check("the companion is still paired", app.env.require("net/relay_link").usable())
 	check("Cowork wins while it is enabled", app.env.require("net/transport").target() == "cowork")

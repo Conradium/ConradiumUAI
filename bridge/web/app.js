@@ -8,7 +8,7 @@ function stored(storage,key){try{return window[storage].getItem(key);}catch{retu
 const fromHash=location.hash.match(/(?:#|&)t=([a-f0-9]{64})(?:$|&)/i);
 let token=fromHash?.[1]?.toLowerCase()||stored('sessionStorage','uai.token')||stored('localStorage','uai.token')||'';
 if(fromHash)history.replaceState(null,'',location.pathname);
-let state={},page='chat',stream,busy=false,connected=false,sending=false,sessionId=null,events=[],uploads=[],instance=stored('sessionStorage','uai.instance');
+let state={},bridgeUpdate={},page='chat',stream,busy=false,connected=false,sending=false,sessionId=null,events=[],uploads=[],instance=stored('sessionStorage','uai.instance');
 let drafts={};try{const value=JSON.parse(stored('sessionStorage','uai.drafts')||'{}');if(value&&typeof value==='object'&&!Array.isArray(value))drafts=value;}catch{}
 const tools=new Map(),dirtyDrafts=new Set();
 let toastTimer,draftTimer,storageWarning=false,renderingSnapshot=false,eventBytes=0,sendOperation=null,connectionRetry,readingFiles=0,modalRefresh=null,panelRefreshPending=false,panelPointerActive=false,panelPointerTimer;
@@ -44,26 +44,87 @@ async function api(path,body,method){
   }
   return data;
 }
+const uncertainActions=new Map();
 async function command(type,fields={}){
   if(!connected)throw Error('Connect Roblox in Cowork before using this action.');
+  const actionKey=JSON.stringify([type,sessionId,fields]),previous=uncertainActions.get(actionKey);
+  if(previous){try{const result=await commandResult(previous);uncertainActions.delete(actionKey);return result;}catch(error){if(!error.uncertain)uncertainActions.delete(actionKey);throw error;}}
   const commandId=fields.commandId||uuid(), payload={type,sessionId,...fields,commandId};
   let receipt;
-  for(let i=0;i<2;i++){try{receipt=await api('/command',payload);break;}catch(err){if(err.status||i){if(!err.status)err.uncertain=true;throw err;}}}
-  if(!receipt?.id){const error=Error('The bridge did not confirm this action. Check delivery before trying again.');error.uncertain=true;throw error;}
+  try{
+    for(let i=0;i<2;i++){try{receipt=await api('/command',payload);break;}catch(err){if(err.status||i){if(!err.status)err.uncertain=true;throw err;}}}
+    if(!receipt?.id){const error=Error('The bridge did not confirm this action. Check its status before trying again.');error.uncertain=true;throw error;}
+    return await commandResult(receipt.id);
+  }catch(error){error.commandId=receipt?.id||commandId;if(error.uncertain)uncertainActions.set(actionKey,error.commandId);throw error;}
+}
+async function commandResult(commandId){
   const deadline=Date.now()+190000;
-  while(Date.now()<deadline){let result;try{result=await api('/commands/'+receipt.id);}catch(err){if(err.name!=='TypeError'&&err.name!=='TimeoutError'){err.uncertain=true;throw err;}await new Promise(r=>setTimeout(r,1000));continue;}if(!['queued','running'].includes(result.state)){if(result.result?.ok===false){const error=Error(result.result.error||'The game could not complete this action.');error.uncertain=!!result.result.uncertain;throw error;}return result.result?.data;}await new Promise(r=>setTimeout(r,250));}
-  const error=Error('This action is still pending. Check delivery before sending it again.');error.uncertain=true;throw error;
+  try{
+    while(Date.now()<deadline){let result;try{result=await api('/commands/'+commandId);}catch(err){if(err.name!=='TypeError'&&err.name!=='TimeoutError'){err.uncertain=true;if(err.status===404)err.message='This action’s receipt is unavailable. Review Roblox before repeating the action.';throw err;}await new Promise(r=>setTimeout(r,1000));continue;}
+      if(!['queued','running'].includes(result.state)){if(result.result?.ok===false){const error=Error(result.result.error||'The game could not complete this action.');error.uncertain=!!result.result.uncertain;throw error;}if(result.state!=='completed'){const error=Error('The bridge returned an unknown action status. Check its status before trying again.');error.uncertain=true;throw error;}forgetCommand(commandId);return result.result?.data;}await new Promise(r=>setTimeout(r,250));}
+    const error=Error('This action is still pending. Check its status before trying again.');error.uncertain=true;throw error;
+  }catch(error){if(!error.uncertain)forgetCommand(commandId);error.commandId=commandId;throw error;}
 }
+function forgetCommand(commandId){for(const [key,id]of uncertainActions)if(id===commandId)uncertainActions.delete(key);}
 function action(type,fields){return command(type,fields).catch(err=>toast(err.message));}
-function modal(title,build){
-  modalRefresh=null;$('modalTitle').textContent=title;$('modalNotice').textContent='';$('modalBody').replaceChildren();$('modalBody').className='';
-  build($('modalBody'));if(!$('modal').open)$('modal').showModal();$('modal').scrollTop=0;$('modal').scrollLeft=0;
-  const first=$('modalBody').querySelector('input:not([type="hidden"]):not(:disabled),select:not(:disabled),textarea:not(:disabled),button:not(:disabled),[tabindex="0"]');
-  (first||$('modalClose')).focus({preventScroll:true});
+let modalContext=null,modalCloseTimer,modalBackdropStart=false;
+function modal(title,build,options={}){
+  const dialog=$('modal'),previous=modalContext;
+  clearTimeout(modalCloseTimer);dialog.classList.remove('closing');
+  // Replacing a dialog retains the original invoker, never a removed child.
+  modalContext={opener:previous?.opener||document.activeElement,pending:false,closing:false};
+  modalRefresh=null;dialog.dataset.size=options.size||'standard';dialog.removeAttribute('aria-busy');
+  $('modalTitle').textContent=title;$('modalDescription').textContent=options.description||'';$('modalDescription').hidden=!options.description;
+  $('modalNotice').textContent='';delete $('modalNotice').dataset.state;$('modalFooter').replaceChildren();
+  $('modalBody').replaceChildren();$('modalBody').className='';
+  build($('modalBody'));if(!$('modalFooter').childElementCount)modalActions(modalCancel('Done'));if(!dialog.open)dialog.showModal();$('modalBody').scrollTop=0;dialog.scrollTop=0;
+  const first=$('modalBody').querySelector('[autofocus],input:not([type="hidden"]):not(:disabled),select:not(:disabled),textarea:not(:disabled),button:not(:disabled),[tabindex="0"]');
+  (options.focusHeading?$('modalTitle'):first||$('modalClose')).focus({preventScroll:true});
 }
-async function modalCommand(type,fields){try{await command(type,fields);$('modal').close();}catch(error){toast(error.message);}}
-$('modalClose').onclick=()=>$('modal').close();
-$('modal').addEventListener('close',()=>{if(!$('modal').open){modalRefresh=null;$('modalNotice').textContent='';queueMicrotask(flushPanelRefresh);}});
+function closeModal(immediate=false,restore=true){
+  const dialog=$('modal'),context=modalContext;if(!dialog.open)return;
+  if(context){context.closing=true;context.restore=restore;}modalRefresh=null;clearTimeout(modalCloseTimer);
+  const finish=()=>{if(modalContext===context){dialog.classList.remove('closing');dialog.close();}};
+  if(immediate||matchMedia('(prefers-reduced-motion: reduce)').matches)finish();
+  else{dialog.classList.add('closing');modalCloseTimer=setTimeout(finish,140);}
+}
+function modalActions(...controls){$('modalFooter').append(...controls);}
+function modalCancel(label='Cancel'){return button(label,()=>closeModal(),'outline');}
+async function modalTask(work,{close=false,success='',check=false}={}){
+  const context=modalContext;if(!context||context.pending||context.closing||(context.uncertain&&!check))return;
+  const focused=document.activeElement;context.pending=true;context.uncertain=false;
+  const controls=context.lockedControls||[...$('modal').querySelectorAll('#modalBody button,#modalBody input,#modalBody select,#modalBody textarea,#modalFooter button')].filter(n=>!n.disabled);
+  controls.forEach(n=>n.disabled=true);$('modal').setAttribute('aria-busy','true');
+  if(context.checkButton)context.checkButton.disabled=true;
+  $('modalNotice').textContent='Working…';$('modalNotice').dataset.state='pending';
+  try{const result=await work();if(context!==modalContext||context.closing||!$('modal').open)return;
+    if(close)closeModal();else{$('modalNotice').textContent=success;$('modalNotice').dataset.state='success';}
+    return result;
+  }catch(error){if(context===modalContext&&!context.closing&&$('modal').open){$('modalNotice').textContent=error.message;$('modalNotice').dataset.state='error';
+    if(error.uncertain){context.uncertain=true;context.lockedControls=controls;if(!context.checkButton){context.checkButton=button('Check status',()=>modalTask(()=>commandResult(error.commandId),{close,success,check:true}),'outline');modalActions(context.checkButton);}context.checkButton.disabled=false;}
+  }}
+  finally{if(context===modalContext){context.pending=false;$('modal').removeAttribute('aria-busy');
+    if(!context.uncertain){controls.forEach(n=>{if(n.isConnected)n.disabled=false;});context.checkButton?.remove();context.checkButton=null;context.lockedControls=null;modalRefresh?.();
+      if(!context.closing&&focused?.isConnected&&!focused.disabled&&[document.body,$('modal')].includes(document.activeElement))focused.focus({preventScroll:true});}
+    else context.checkButton?.focus({preventScroll:true});
+  }}
+}
+function modalCommand(type,fields){return modalTask(()=>command(type,fields),{close:true});}
+$('modalClose').onclick=()=>closeModal();
+$('modal').addEventListener('cancel',event=>{event.preventDefault();closeModal();});
+$('modal').addEventListener('pointerdown',event=>{modalBackdropStart=event.target===$('modal')&&outsideModal(event);});
+$('modal').addEventListener('click',event=>{if(modalBackdropStart&&event.target===$('modal')&&outsideModal(event))closeModal();modalBackdropStart=false;});
+function outsideModal(event){const r=$('modal').getBoundingClientRect();return event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom;}
+$('modal').addEventListener('close',()=>{
+  if($('modal').open)return;
+  const context=modalContext;modalContext=null;modalRefresh=null;$('modalNotice').textContent='';
+  queueMicrotask(()=>{if($('modal').open||modalContext)return;flushPanelRefresh();if(context?.restore===false)return;
+    const opener=context?.opener,key=opener?.dataset?.focusKey,replacement=key&&[...document.querySelectorAll('[data-focus-key]')].find(n=>n.dataset.focusKey===key);
+    const target=$('app').hidden?$('gate-token'):(opener?.isConnected?opener:replacement);
+    if(target&&!target.closest('[inert]')&&target.getClientRects().length&&!target.disabled)target.focus({preventScroll:true});
+    else (document.body.classList.contains('sidebar-open')?$('closeSidebar'):page==='chat'?$('input'):$('panel')).focus({preventScroll:true});
+  });
+});
 function field(parent,label,value,type='text'){const holder=el('label',null,label),input=el(type==='textarea'?'textarea':'input');if(type!=='textarea')input.type=type;input.value=value??'';holder.append(input);parent.append(holder);return input;}
 function select(parent,label,values,value){const holder=el('label',null,label),input=el('select');input.setAttribute('aria-label',label);for(const item of values){const pair=typeof item==='string'?[item,item]:item;const option=el('option',null,pair[1]);option.value=pair[0];input.append(option);}input.value=value;holder.append(input);parent.append(holder);return input;}
 function persistDrafts(){
@@ -176,7 +237,7 @@ function armButton(btn,confirmLabel,fn){
 }
 function stick(){const t=$('transcript');return t.scrollHeight-t.scrollTop-t.clientHeight<120;}
 function append(node){const pinned=!renderingSnapshot&&stick();const root=$('transcript');root.querySelector('.welcome')?.remove();root.append(node);while(root.children.length>450){const old=root.firstElementChild;if(old.contains(document.activeElement))break;old.remove();}if(pinned)scrollToEnd();}
-function message(who,text,model){const node=el('article','message '+who),byline=el('div','byline');if(who==='agent'){const mark=el('img');mark.src='icon.svg';mark.alt='';byline.append(mark);}byline.append(el('span',null,who==='user'?(state.player||'You'):'UAI'),el('small','message-model',model||''));const body=el('div','body');if(who==='user')body.textContent=text;else body.innerHTML=md(text);node.append(byline,body);const result={node,body};if(who==='user')decorateMessage(result,text);append(node);return result;}
+function message(who,text,model){const node=el('article','message '+who),byline=el('div','byline');byline.append(el('span',null,who==='user'?(state.player||'You'):'Assistant'),el('small','message-model',model||''));const body=el('div','body');if(who==='user')body.textContent=text;else body.innerHTML=md(text);node.append(byline,body);const result={node,body};if(who==='user')decorateMessage(result,text);append(node);return result;}
 function decorateMessage(message,text,model){
   message.node._uaiText=text;
   if(model)message.node.querySelector('.message-model').textContent=model;
@@ -187,21 +248,25 @@ function welcome(){
   if(events.some(e=>e.kind==='user'||e.kind==='assistant:text')||[...$('transcript').children].some(node=>!node.classList.contains('welcome')))return;
   const signature=JSON.stringify([state.player,state.place?.name,state.providers?.length,connected]);
   const previous=$('transcript').querySelector('.welcome');if(previous?.dataset.signature===signature||previous?.contains(document.activeElement))return;
-  const node=el('section','welcome'),mark=el('div','welcome-mark'),logo=el('img');logo.src='icon.svg';logo.alt='';
+  const node=el('section','welcome');
   node.dataset.signature=signature;
-  mark.append(logo,el('span','eyebrow',state.player?'YOUR WORKSPACE, '+state.player.toUpperCase():'YOUR ROBLOX WORKSPACE'));
-  node.append(mark,el('h1',null,'What will we create?'),el('p','welcome-lead','Explore your game, build something useful, or work through an idea. A little context is all you need to get started.'));
+  node.append(el('p','welcome-greeting',state.player?'Hello, '+state.player+'.':'Your workspace is ready.'),el('h1',null,'What are we working on?'),el('p','welcome-lead','Start with an idea. Work through the details together.'));
   if(state.place?.name){const context=el('div','welcome-context');context.append(el('span','status-dot'),el('span',null,state.place.name));node.append(context);}
-  const grid=el('div','starters');starters.forEach(([title,detail,prompt],index)=>{const item=button('',()=>insert(prompt),'starter'),copy=el('span');copy.append(el('strong',null,title),el('small',null,detail));item.append(icon(['explore','spark','activity','player'][index]),copy);grid.append(item);});node.append(grid);
-  if(!connected)node.append(button('Connect your Roblox game →',()=>show('cowork'),'welcome-action'));
-  else if(!state.providers?.length)node.append(button('Add your first AI provider →',()=>providerEditor(),'welcome-action'));
-  else node.append(el('p','welcome-context','Tools and permissions stay connected to your game.'));
+  const grid=el('div','starters');starters.forEach(([title,detail,prompt])=>{const item=button('',()=>insert(prompt),'starter'),copy=el('span');copy.append(el('strong',null,title),el('small',null,detail));item.append(copy);grid.append(item);});node.append(grid);
+  if(!connected)node.append(button('Connect Roblox to get started',()=>show('cowork'),'welcome-action'));
+  else if(!state.providers?.length)node.append(button('Add a provider to get started',()=>providerEditor(),'welcome-action'));
   $('transcript').replaceChildren(node);
 }
 const starters=[['Explore this game','Find your bearings in the world.','Explore this game. Inspect the workspace and tell me what is here, how it is organised, and what we could do next.'],['Create something','Turn an idea into a working script.','Help me build a Luau script for this game. First inspect the relevant game context, then ask what I would like to create.'],['Check performance','Understand FPS, memory, and latency.','Check client performance, memory usage, and network latency. Explain the results and suggest practical improvements.'],['Inspect my character',"See your character’s current state.",'Inspect my character and explain its position, humanoid state, and any useful attributes or attached scripts.']];
 function insert(text){show('chat');$('input').value+=($('input').value?'\n\n':'')+text;grow();$('input').focus();}
 function metric(value,label){const n=el('div');n.append(el('strong',null,typeof value==='number'?value.toLocaleString():value),el('small',null,label));return n;}
-function thinking(text){const node=el('details','thinking');node.append(el('summary',null,'✳ Thinking'));const body=el('div','body');body.innerHTML=md(text);node.append(body);append(node);return body;}
+function thinking(text){const node=el('details','thinking');node.append(el('summary',null,'Thinking'));const body=el('div','body');body.innerHTML=md(text);node.append(body);append(node);return body;}
+function deadlineHelp(root,message,status){
+  const text=String(message||'');
+  if([400,401,403,404,409,422,429].includes(Number(status))||/\bHTTP\s*(?:400|401|403|404|409|422|429)\b/i.test(text))return;
+  if(!/(?:deadline\s*[:_-]|deadline (?:exceeded|reached|expired)|\btimed out\b|\bE(?:SOCKET)?TIMEDOUT\b|(?:transport|request|connection|socket|gateway)[ _-]+timeout|^timeout$)/i.test(text))return;
+  const link=el('a','deadline-help','Join our Discord for a tutorial on fixing this');link.href='https://discord.gg/9xYyyYuKap';link.target='_blank';link.rel='noopener noreferrer';root.append(link);
+}
 function toolKey(e){return (e.kind?.startsWith('subagent:')?'child:'+e.id+':':'main:')+(e.callId||e.id||'')+':'+(e.name||'');}
 function codeListing(text,label){
   const listing=el('div','code-block tool-listing'),head=el('div','code-head');
@@ -247,7 +312,7 @@ function renderEvent(e){
     case 'tool:call':case 'subagent:tool':openTool(e);break;
     case 'tool:result':case 'tool:error':case 'subagent:tool:done':finishTool(e);break;
     case 'tool:progress':{const row=tools.get(toolKey(e))||(!e.id&&tools.size===1?[...tools.values()][0]:null);if(row)row.preview.textContent=e.text||'';break;}
-    case 'error':append(el('div','error',e.message||'Unknown error'));break;
+    case 'error':{const error=el('div','error');error.append(el('p','error-message',e.message||'Unknown error'));deadlineHelp(error,e.message,e.status);append(error);break;}
     case 'status':announce(e.text||'Ready');break;
     case 'turn:start':if(sendOperation&&sendOperation.sessionId===sessionId)sendOperation.sawTurn=true;clearTimeout(awaitTurnTimer);if(sendPhase!=='uncertain')sendPhase='idle';setBusy(true);break;
     case 'turn:end':case 'abort':if(sendOperation&&sendOperation.sessionId===sessionId)sendOperation.sawTurn=true;clearTimeout(awaitTurnTimer);if(sendPhase!=='uncertain')sendPhase='idle';renderer.endTurn(sessionId,e.kind==='abort');setBusy(false);break;
@@ -281,11 +346,13 @@ const renderer=window.UAIStreamRenderer.create({
   scrollToEnd,
   onActivity:active=>{document.body.dataset.streaming=active?'on':'off';},
   onRetry:resendLast,
+  onError:(root,event)=>deadlineHelp(root,event.error||event.providerError,event.status),
   onFinal:decorateMessage,
 });
 UAI.pictures=UAI.createPictures({token,browserId,getSession:()=>sessionId,api,toast,tray:$('pictureTray'),input:$('pictureInput'),pickerButton:$('attachPictures'),dropZone:$('composer'),onTextFiles:attachFiles,onChange:refresh});
 function apply(e){
   if(typeof e.kind!=='string')return;
+  if(e.kind==='bridge:update'){bridgeUpdate=e.update||{};if(page==='cowork')requestPanelRefresh();return;}
   if(e.kind==='bridge:reset'){events=[];eventBytes=0;renderer.reset();tools.clear();UAI.pictures.resetMessages();$('transcript').replaceChildren();welcome();if(e.resync)toast('Connection restored. Reloaded the latest saved conversation.');return;}
   if(e.kind==='bridge:snapshot'){
     const readingSession=sessionId,readingY=$('transcript').scrollTop,wasPinned=stick();
@@ -344,8 +411,7 @@ function renderState(){
   applyTheme(state.theme||{});
   const ui=state.settings?.ui||{};
   document.documentElement.style.setProperty('--reading',({narrow:'640px',medium:'780px',wide:'920px'})[ui.transcriptWidth]||'860px');
-  document.body.style.fontSize=(14*Math.max(.85,Math.min(1.4,ui.fontScale||1)))+'px';
-  document.body.dataset.motion=ui.reduceMotion==='on'?'off':'auto';
+  document.documentElement.style.setProperty('--chat-font-size',(14*Math.max(.85,Math.min(1.4,ui.fontScale||1)))+'px');
   document.body.dataset.reasoning=ui.showReasoning===false?'hidden':'visible';document.body.dataset.density=ui.density||'comfortable';document.body.dataset.codeTheme=ui.codeTheme||UAI.theme.resolved();
   $('playerName').textContent=state.player||'you';$('providerName').textContent=state.agent?.provider||'No provider connected';$('modelLabel').textContent=state.agent?.model||'Select model';$('runtimeBadge').textContent=state.runtime==='web'?'Web · streaming':'Game runtime';
   $('modelButton').setAttribute('aria-label',state.agent?.model?'Select model, current model '+state.agent.model:'Select model');
@@ -368,7 +434,15 @@ function renderThreads(){
   }}
   if(!groups.size)root.append(el('p','history-empty',search?'No matching conversations.':'Your conversations will appear here.'));
 }
-function threadMenu(thread){modal(thread.title||'Conversation',root=>{const name=field(root,'Title',thread.title);const del=button('Delete',()=>{},'danger');armButton(del,'Confirm delete?',()=>modalCommand('thread:delete',{id:thread.id}));root.append(button('Rename',()=>modalCommand('thread:rename',{id:thread.id,title:name.value})),button(thread.ephemeral?'Save conversation':'Make isolated',()=>modalCommand('thread:isolate',{sessionId:thread.id,value:!(state.threads?.find(t=>t.id===thread.id)||thread).ephemeral})),del);});}
+function threadMenu(thread){modal('Conversation details',root=>{
+  const form=el('form','dialog-form');form.id='modalForm';root.append(form);
+  const name=field(form,'Title',thread.title);name.maxLength=60;name.required=true;
+  form.onsubmit=event=>{event.preventDefault();modalCommand('thread:rename',{id:thread.id,title:name.value.trim()});};
+  const privacy=el('section','dialog-section');privacy.append(el('h3',null,thread.ephemeral?'Isolated conversation':'Saved conversation'),el('p','muted',thread.ephemeral?'This conversation is temporary. Save it to keep it in your history.':'Isolate this conversation to keep it out of saved history.'),button(thread.ephemeral?'Save conversation':'Make isolated',()=>modalCommand('thread:isolate',{sessionId:thread.id,value:!(state.threads?.find(t=>t.id===thread.id)||thread).ephemeral}),'outline'));root.append(privacy);
+  const del=button('Delete',()=>{},'danger outline');armButton(del,'Confirm delete?',()=>modalCommand('thread:delete',{id:thread.id}));
+  const rename=el('button','primary','Rename');rename.type='submit';rename.setAttribute('form',form.id);
+  modalActions(del,el('span','spacer'),modalCancel(),rename);
+},{description:'Rename, save, or manage this conversation.',size:'compact'});}
 function renderStrips(){
   const todos=state.todos||[],root=$('taskStrip'),signature=JSON.stringify([sessionId,todos]);root.hidden=!todos.length;
   if(root.dataset.signature!==signature){
@@ -415,27 +489,38 @@ function renderQuestions(){
   });
   if(focused){const target=focused.isConnected?focused:root.querySelector('button,input,[tabindex="0"]')||$('input');if(document.activeElement!==target)target.focus({preventScroll:true});if(selection&&target===focused)focused.setSelectionRange(...selection);}
 }
-function show(next){page=next;document.body.dataset.page=page;closeSidebar();$('chatPage').hidden=page!=='chat';$('panel').hidden=page==='chat';$('pageTitle').textContent=({chat:'Chat',cowork:'Cowork',agents:'Subagents',providers:'Providers',tools:'Tools',loops:'Chat loops',logs:'Logs & traces',memory:'Memory & skills',settings:'Settings'})[page]||page;document.querySelectorAll('button[data-page]').forEach(b=>{b.classList.toggle('selected',b.dataset.page===page);if(b.dataset.page===page)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});if(page==='chat'){welcome();resizeComposer();}else{renderPanel();$('panel').classList.remove('panel-enter');requestAnimationFrame(()=>$('panel').classList.add('panel-enter'));}refresh();(page==='chat'?$('input'):$('panel')).focus({preventScroll:true});}
+function show(next){page=next;document.body.dataset.page=page;closeSidebar();$('chatPage').hidden=page!=='chat';$('panel').hidden=page==='chat';$('pageTitle').textContent=({chat:'Chat',cowork:'Connection',agents:'Subagents',providers:'Providers',tools:'Tools',loops:'Chat loops',logs:'Activity',memory:'Memory & skills',settings:'Settings'})[page]||page;document.querySelectorAll('button[data-page]').forEach(b=>{b.classList.toggle('selected',b.dataset.page===page);if(b.dataset.page===page)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});if(page==='chat'){welcome();resizeComposer();}else{renderPanel();$('panel').classList.remove('panel-enter');requestAnimationFrame(()=>$('panel').classList.add('panel-enter'));}refresh();(page==='chat'?$('input'):$('panel')).focus({preventScroll:true});}
 async function openConversation(id){
   try{await command(id?'thread':'thread:new',id?{id}:{});show('chat');}catch(error){toast(error.message);}
 }
 function heading(root,title,control){const h=el('div','panel-heading');h.append(el('h1',null,title));if(control)h.append(control);root.append(h);}
 function card(root,title){const n=el('section','card');if(title)n.append(el('h3',null,title));root.append(n);return n;}
-let toolFilter='';
+let toolFilter='',logFilter='';
 function buildPanel(root){root.replaceChildren();
-  if(page==='memory'){heading(root,'Memory & skills');const list=el('div','tool-grid');root.append(list);for(const tool of state.tools||[]){if(tool.name.startsWith('memory_')||tool.name.startsWith('skills_')){const c=card(list,tool.name);c.append(el('p','muted',tool.description),button('Open',()=>runTool(tool.name),'outline'));}}return;}
+  if(page==='memory'){heading(root,'Memory & skills');root.append(el('p','panel-description','Keep useful context and reusable workflows close to your conversation.'));const list=el('div','tool-grid knowledge-list');root.append(list);for(const tool of state.tools||[]){if(tool.name.startsWith('memory_')||tool.name.startsWith('skills_')){const c=card(list),copy=el('div','catalog-copy');copy.append(el('span','pill',tool.name.startsWith('memory_')?'Memory':'Skill'),el('h3',null,tool.name),el('p',null,tool.description));c.append(copy,button('Open',()=>runTool(tool.name),'outline'));}}return;}
   if(page==='cowork'){renderCowork(root);}
   else if(page==='providers'){
-    heading(root,'Providers',button('＋ Add provider',()=>providerEditor(),'outline','provider:add'));
-    for(const p of state.providers||[]){const c=card(root,p.label),row=el('div','row'),use=button(state.activeProvider===p.id?'Active':'Use',()=>action('provider',{id:p.id}),null,'provider:'+p.id+':use');use.setAttribute('aria-pressed',String(state.activeProvider===p.id));row.append(el('span','muted',p.baseUrl||''),el('span','spacer'),use,button('Edit',()=>providerEditor(p),null,'provider:'+p.id+':edit'));c.append(row,el('p',null,p.model||'No model selected'),el('small',null,`${p.health?.ok||0} successful · ${p.health?.fail||0} failed`));if(p.health?.lastError)c.append(el('p','danger',p.health.lastError));}
+    heading(root,'Providers',button('Add provider',()=>providerEditor(),'primary','provider:add'));
+    root.append(el('p','panel-description','Manage your connections, check their health, and choose which provider powers your conversation.'));
+    for(const p of state.providers||[]){const c=card(root),active=state.activeProvider===p.id;c.classList.add('provider-card');c.dataset.active=String(active);
+      const header=el('div','provider-heading');header.append(el('h2',null,p.label),el('span','pill',active?'Active provider':p.enabled===false?'Disabled':'Available'));c.append(header,el('p','provider-url',p.baseUrl||'No endpoint configured'));
+      const model=el('div','provider-model');model.append(el('span','eyebrow','CURRENT MODEL'),el('strong',null,p.model||'No model selected'));c.append(model);
+      const row=el('div','provider-actions'),health=el('span','provider-health',`${p.health?.ok||0} successful · ${p.health?.fail||0} failed`),use=button(active?'Active':'Use',()=>action('provider',{id:p.id}),active?'selected':'outline','provider:'+p.id+':use');use.setAttribute('aria-pressed',String(active));use.disabled=!connected;
+      row.append(health,el('span','spacer'),button('Test connection',async()=>{try{const result=await command('provider:test',{id:p.id});toast(result.text+' · '+result.ms+' ms');}catch(error){toast(error.message);}},null,'provider:'+p.id+':test'),use,button('Edit',()=>providerEditor(p),'outline','provider:'+p.id+':edit'));c.append(row);if(p.health?.lastError)c.append(el('p','provider-error',p.health.lastError));}
   }
-  else if(page==='tools'){const filter=el('input');filter.placeholder='Search tools…';filter.setAttribute('aria-label','Search tools');filter.value=toolFilter;filter.oninput=()=>{toolFilter=filter.value;renderToolCards(list);};heading(root,'Tools',filter);const list=el('div','tool-grid');root.append(list);renderToolCards(list);}
-  else if(page==='agents'){heading(root,'Subagents');for(const a of state.subagents||[]){const c=card(root,a.label||a.id);c.append(el('p',null,a.task),el('small',null,a.status));if(a.report)c.append(el('pre','json-output',a.report));if(['running','queued'].includes(a.status))c.append(button('Stop',()=>action('subagent:stop',{id:a.id}),'danger'));}if(!state.subagents?.length)root.append(el('p','muted','Dispatch a subagent from chat to see its progress here.'));}
-  else if(page==='loops'){heading(root,'Chat loops',button('Start chatbot',()=>runTool('chat_bot',{instructions:'Be friendly, casual, and helpful.'}),'outline'));for(const l of state.loops||[]){const c=card(root,`${l.kind==='bot'?'Chatbot':l.kind} · ${l.channel}`);c.append(el('p',null,`${l.state} · ${l.sent}/${l.count} sent`));if(l.reason)c.append(el('small',null,l.reason));for(const score of Object.values(l.scores||{}))c.append(el('div',null,`${score.name}: ${score.points}`));if(l.state==='running')c.append(button('Stop',()=>action('loops:stop',{id:l.id}),'danger'));}const row=el('div','row');for(const name of ['quiz_bot','auto_chat','auto_reply'])row.append(button(name,()=>runTool(name)));root.append(row);}
-  else if(page==='logs'){heading(root,'Logs & traces',button('Clear logs',()=>action('logs:clear')));for(const r of [...(state.requests||[])].reverse()){const c=card(root,`${r.status||'Error'} · ${r.tag||r.method} · ${r.ms||0} ms`);c.append(el('small',null,`${r.via||''} · ${r.url||''}`));if(r.error)c.append(el('p','danger',r.error));}for(const entry of [...(state.logs||[])].reverse())root.append(el('pre','json-output',typeof entry==='string'?entry:JSON.stringify(entry)));}
+  else if(page==='tools'){const filter=el('input');filter.type='search';filter.placeholder='Search tools';filter.setAttribute('aria-label','Search tools');filter.value=toolFilter;filter.oninput=()=>{toolFilter=filter.value;renderToolCards(list);};heading(root,'Tools',filter);root.append(el('p','panel-description','Explore the actions available in your game. Review permissions or run a tool directly.'));const list=el('div','tool-grid');root.append(list);renderToolCards(list);}
+  else if(page==='agents'){heading(root,'Subagents');root.append(el('p','panel-description','Follow delegated work, review results, and stop a task when you need to.'));for(const a of state.subagents||[]){const c=card(root);c.classList.add('agent-card');const head=el('div','item-heading');head.append(el('h3',null,a.label||a.id),el('span','pill',a.status));c.append(head,el('p',null,a.task));if(a.report){const report=el('details','report');report.append(el('summary',null,'View report'),el('pre','json-output',a.report));c.append(report);}if(['running','queued'].includes(a.status))c.append(button('Stop',()=>action('subagent:stop',{id:a.id}),'danger outline'));}}
+  else if(page==='loops'){heading(root,'Chat loops',button('Start chatbot',()=>runTool('chat_bot',{instructions:'Be friendly, casual, and helpful.'}),'primary'));root.append(el('p','panel-description','Set up a repeating conversation and keep track of what is running.'));const row=el('div','loop-launchers');for(const [name,title,detail]of [['quiz_bot','Run a quiz','Host questions and keep score.'],['auto_chat','Auto chat','Send messages on a schedule.'],['auto_reply','Auto reply','Respond to incoming messages.']]){const launch=button('',()=>runTool(name),'loop-launcher');launch.append(el('strong',null,title),el('small',null,detail));row.append(launch);}root.append(row);for(const l of state.loops||[]){const c=card(root);c.classList.add('loop-card');const head=el('div','item-heading');head.append(el('h3',null,l.kind==='bot'?'Chatbot':l.kind),el('span','pill',l.state));c.append(head,el('p','muted',`${l.channel} · ${l.sent}/${l.count} messages sent`));if(l.reason)c.append(el('small',null,l.reason));for(const score of Object.values(l.scores||{}))c.append(el('div','score-row',`${score.name}: ${score.points}`));if(l.state==='running')c.append(button('Stop',()=>action('loops:stop',{id:l.id}),'danger outline'));}}
+  else if(page==='logs'){heading(root,'Activity',button('Clear logs',()=>action('logs:clear'),'outline'));root.append(el('p','panel-description','Requests, connection events, and diagnostic messages from your workspace.'));const filter=field(root,'Filter activity',logFilter);filter.type='search';filter.placeholder='Search by message, provider, or endpoint';const list=el('div','activity-list');root.append(list);filter.oninput=()=>{logFilter=filter.value;renderLogs(list);};renderLogs(list);}
   else if(page==='settings'){renderSettings(root);}
 }
-function renderToolCards(root){root.replaceChildren();for(const t of state.tools||[]){if(!`${t.name} ${t.description}`.toLowerCase().includes(toolFilter.toLowerCase()))continue;const c=card(root,t.name);c.append(el('p',null,t.description),el('span','pill',t.risk),el('small',null,t.available?'':' Unavailable on this executor'));const row=el('div','row');const rule=select(row,'Permission',['default','ask','allow','deny'],t.rule||'default');rule.onchange=()=>action('tool:rule',{name:t.name,rule:rule.value});row.append(button('Run…',()=>runTool(t.name)),button(t.enabled?'Disable group':'Enable group',()=>action('tool:group',{group:t.group,enabled:!t.enabled})));c.append(row);}}
+function renderToolCards(root){root.replaceChildren();for(const t of state.tools||[]){if(!`${t.name} ${t.description}`.toLowerCase().includes(toolFilter.toLowerCase()))continue;const c=card(root),copy=el('div','catalog-copy'),head=el('div','item-heading');head.append(el('h3',null,t.name),el('span','pill',t.risk||'Tool'));copy.append(head,el('p',null,t.description));if(!t.available)copy.append(el('small','unavailable','Unavailable on this executor'));const row=el('div','tool-actions');const rule=select(row,'Permission',['default','ask','allow','deny'],t.rule||'default');rule.onchange=()=>action('tool:rule',{name:t.name,rule:rule.value});row.append(button('Run…',()=>runTool(t.name),'outline'),button(t.enabled?'Disable group':'Enable group',()=>action('tool:group',{group:t.group,enabled:!t.enabled})));c.append(copy,row);}if(toolFilter&&!root.childElementCount)root.append(el('p','model-empty','No tools match your search.'));}
+function renderLogs(root){root.replaceChildren();const query=logFilter.trim().toLowerCase();
+  for(const request of [...(state.requests||[])].reverse()){if(query&&!JSON.stringify(request).toLowerCase().includes(query))continue;
+    const c=card(root),heading=el('div','activity-heading');heading.append(el('strong',null,request.tag||request.method||'Request'),el('span','pill',String(request.status||'Error')),el('small',null,(request.ms||0)+' ms'));c.append(heading,el('p','provider-url',request.url||'Local request'));if(request.via)c.append(el('small','muted','Via '+request.via));if(request.error){c.append(el('p','provider-error',request.error));deadlineHelp(c,request.error,request.status);}}
+  for(const entry of [...(state.logs||[])].reverse()){const text=typeof entry==='string'?entry:JSON.stringify(entry);if(query&&!text.toLowerCase().includes(query))continue;const row=el('div','log-entry'),level=typeof entry==='object'?entry.level||entry.kind||'Log':'Log';row.append(el('span','pill',level),el('p',null,typeof entry==='string'?entry:entry.message||entry.text||text));root.append(row);}
+  if(query&&!root.childElementCount)root.append(el('p','model-empty','No activity matches this filter.'));
+}
 function runTool(name,initial){
   const tool=state.tools?.find(t=>t.name===name);
   modal(name,root=>{
@@ -453,7 +538,7 @@ function runTool(name,initial){
       }else{
         const multiline=['array','object'].includes(type)||/^(code|source|script|content|body|text|instructions|old_text|new_text|patch|diff)$/.test(key)||String(value||'').includes('\n');
         input=field(fields,label,value===undefined?'':typeof value==='object'?JSON.stringify(value,null,2):value,multiline?'textarea':['number','integer'].includes(type)?'number':'text');
-        if(multiline){input.rows=key==='code'?9:4;input.spellcheck=false;input.classList.add('code-input');}
+        if(multiline){input.rows=key==='code'?9:4;input.spellcheck=false;input.classList.add('code-input');input.parentElement.classList.add('field-wide');}
         if(type==='integer')input.step='1';else if(type==='number')input.step='any';
         if(schema.minimum!==undefined)input.min=schema.minimum;
         if(schema.maximum!==undefined)input.max=schema.maximum;
@@ -466,9 +551,9 @@ function runTool(name,initial){
       if(schema.description){const help=el('small','field-help',schema.description);help.id='tool-help-'+key;input.parentElement.append(help);input.setAttribute('aria-describedby',help.id);}
     }
     const output=el('p','form-error');output.setAttribute('role','alert');output.hidden=true;
-    const run=el('button','primary','Run tool');run.type='submit';
+    const run=el('button','primary','Run tool');run.type='submit';form.id='modalForm';run.setAttribute('form',form.id);
     run.disabled=tool?.available===false||tool?.enabled===false||!connected;
-    form.append(el('small','field-help','* Required parameter. Your current permissions apply.'),output,run);
+    form.append(el('small','field-help','* Required parameter. Your current permissions apply.'),output);modalActions(modalCancel(),run);
     let running=false;
     form.onsubmit=async event=>{
       event.preventDefault();if(running)return;
@@ -494,7 +579,7 @@ function runTool(name,initial){
       running=true;run.disabled=true;
       const originSession=sessionId;
       // Approvals live in the transcript, so release the dialog before waiting.
-      $('modal').close();show('chat');toast('Running '+name+'…');
+      closeModal(true,false);show('chat');toast('Running '+name+'…');
       try{
         const result=await command('tool:run',{name,arguments:args});
         if(!$('modal').open&&sessionId===originSession&&page==='chat')modal(name+' result',body=>body.append(codeListing(result?.text||JSON.stringify(result,null,2),result?.ok===false?'Execution details':'Result')));
@@ -502,26 +587,50 @@ function runTool(name,initial){
       }catch(err){output.textContent=err.message;output.hidden=false;toast(err.message);}
       finally{running=false;run.disabled=false;}
     };
-  });
+  },{description:'Review the parameters before running this tool. Your workspace permissions apply.',size:'wide'});
 }
-function providerEditor(provider){modal(provider?'Edit provider':'Add provider',root=>{const form=el('div','form-grid');root.append(form);const preset=select(form,'Preset',(state.presets||[]).map(p=>[p.id,p.label]),provider?.preset||'custom');const label=field(form,'Name',provider?.label||''),url=field(form,'Base URL',provider?.baseUrl||''),apiStyle=select(form,'API',['openai','anthropic'],provider?.api||'openai'),auth=select(form,'Authentication',['bearer','api-key','none'],provider?.authStyle||'bearer'),key=field(form,provider?.hasKey?'API key (blank keeps current key)':'API key','','password'),model=field(form,'Model',provider?.model||'');preset.onchange=()=>{const p=state.presets?.find(p=>p.id===preset.value);if(p){label.value=p.label||'';url.value=p.baseUrl||'';apiStyle.value=p.api||'openai';auth.value=p.authStyle||'bearer';}};root.append(button('Save',async()=>{const fields={id:provider?.id,preset:preset.value,label:label.value,baseUrl:url.value,api:apiStyle.value,authStyle:auth.value,model:model.value};if(key.value)fields.apiKey=key.value;try{await command('provider:save',{provider:fields});$('modal').close();}catch(e){toast(e.message);}},'primary'));if(provider){const del=button('Delete',()=>{},'danger');armButton(del,'Confirm delete?',()=>modalCommand('provider:remove',{id:provider.id}));root.append(del);}});}
+function providerEditor(provider){modal(provider?'Edit provider':'Add provider',root=>{
+  const form=el('form','dialog-form');form.id='modalForm';root.append(form);
+  const connection=el('section','dialog-section');connection.append(el('h3',null,'Connection'));form.append(connection);
+  const fields=el('div','form-grid');connection.append(fields);
+  const presets=(state.presets||[]).map(p=>[p.id,p.label]);if(!presets.some(p=>p[0]==='custom'))presets.push(['custom','Custom']);
+  const preset=select(fields,'Preset',presets,provider?.preset||'custom'),label=field(fields,'Name',provider?.label||''),url=field(fields,'Base URL',provider?.baseUrl||'');
+  url.parentElement.classList.add('field-wide');url.autocapitalize='off';url.spellcheck=false;url.placeholder='https://your-provider.example/v1';
+  const apiStyle=select(fields,'API',[['openai','OpenAI compatible'],['anthropic','Anthropic Messages']],provider?.api||'openai');
+  const auth=select(fields,'Authentication',[['bearer','Bearer token'],['x-api-key','x-api-key header'],['api-key','api-key header'],['both','Bearer + x-api-key'],['none','No authentication']],provider?.authStyle||'bearer');
+  const credentials=el('section','dialog-section');credentials.append(el('h3',null,'Credentials and model'));form.append(credentials);
+  const key=field(credentials,provider?.hasKey?'API key (blank keeps current key)':'API key','','password');key.autocomplete='new-password';key.spellcheck=false;key.autocapitalize='off';
+  const model=field(credentials,'Model',provider?.model||'');model.spellcheck=false;model.placeholder='Exact model ID from your provider';
+  credentials.append(el('small','field-help','Use an exact model ID. Saved providers can discover their available models in the model picker.'));
+  const disclosure=el('p','provider-disclosure');form.append(disclosure);
+  function describeEndpoint(){let host='';try{host=new URL(url.value).hostname.toLowerCase();}catch{}
+    const proxy=host==='puai-proxy.davidzk.tech',vendor=['opencode.ai','zen.opencode.ai','agentrouter.org'].some(name=>host===name||host.endsWith('.'+name));
+    disclosure.hidden=!proxy&&!vendor;disclosure.textContent=proxy?'This endpoint uses the Project UAI proxy. Requests and API keys pass through it, with a shared limit of 90,000 requests per day. The Base URL remains editable.':'If this provider explicitly refuses the client identity, UAI can retry through the Project UAI proxy. Requests and API keys then pass through that proxy, which has a shared daily limit of 90,000 requests.';
+  }
+  preset.onchange=()=>{const p=state.presets?.find(p=>p.id===preset.value);if(p){label.value=p.label||'';url.value=p.baseUrl||'';apiStyle.value=p.api||'openai';auth.value=p.authStyle||'bearer';}describeEndpoint();};url.oninput=describeEndpoint;describeEndpoint();
+  form.onsubmit=event=>{event.preventDefault();const value={id:provider?.id,preset:preset.value,label:label.value.trim(),baseUrl:url.value.trim(),api:apiStyle.value,authStyle:auth.value,model:model.value.trim()};if(key.value)value.apiKey=key.value;modalCommand('provider:save',{provider:value});};
+  if(provider){const del=button('Delete',()=>{},'danger outline');armButton(del,'Confirm delete?',()=>modalCommand('provider:remove',{id:provider.id}));modalActions(del);}
+  const save=el('button','primary','Save');save.type='submit';save.setAttribute('form',form.id);modalActions(el('span','spacer'),modalCancel(),save);
+},{description:'Connect the provider you want to use in this workspace.',size:'wide'});}
 function models(){modal('Models',root=>{
-  const provider=select(root,'Provider',(state.providers||[]).map(p=>[p.id,p.label]),state.activeProvider),search=field(root,'Search models','');
-  const freeLabel=el('label','row'),free=el('input');free.type='checkbox';freeLabel.append(free,document.createTextNode('Free only'));root.append(freeLabel);
-  const list=el('div','model-list');root.append(list);
+  root.className='model-picker';const filters=el('div','model-filters');root.append(filters);
+  const provider=select(filters,'Provider',(state.providers||[]).map(p=>[p.id,p.label]),state.activeProvider),search=field(filters,'Search models','');search.type='search';search.placeholder='Filter by model name';
+  const meta=el('div','model-meta'),count=el('span','muted'),freeLabel=el('label','row'),free=el('input');free.type='checkbox';freeLabel.append(free,document.createTextNode('Free only'));meta.append(count,freeLabel);root.append(meta);
+  const list=el('div','model-list'),empty=el('div','model-empty');root.append(list,empty);
   function paint(){
     const p=state.providers?.find(p=>p.id===provider.value),ids=(p?.models||[]).filter(id=>id.toLowerCase().includes(search.value.toLowerCase())&&(!free.checked||/free|big-pickle/i.test(id)));
+    count.textContent=ids.length+' model'+(ids.length===1?'':'s');empty.hidden=!!ids.length;empty.textContent=!state.providers?.length?'Add a provider to choose a model.':search.value||free.checked?'No models match these filters.':'No models available yet. Refresh the list, or enter an exact model ID in your provider settings.';
     const focused=list.contains(document.activeElement)?document.activeElement:null,existing=new Map([...list.children].map(n=>[n.dataset.model,n])),wanted=new Set(ids);
     for(const [id,node]of existing)if(!wanted.has(id))node.remove();
-    ids.forEach((id,index)=>{const node=existing.get(id)||button(id,()=>action('model',{provider:provider.value,model:id}));node.dataset.model=id;node.classList.toggle('selected',p.model===id);node.setAttribute('aria-pressed',String(p.model===id));if(list.children[index]!==node)list.insertBefore(node,list.children[index]||null);});
+    ids.forEach((id,index)=>{let node=existing.get(id);if(!node){node=button('',()=>modalTask(()=>command('model',{provider:provider.value,model:id}),{success:'Model selection saved.'}));node.append(el('span','model-name',id),el('span','model-check','Selected'));}node.dataset.model=id;node.classList.toggle('selected',p.model===id);node.setAttribute('aria-pressed',String(p.model===id));node.setAttribute('aria-label',id);node.querySelector('.model-check').hidden=p.model!==id;node.disabled=!connected||!!modalContext?.pending||!!modalContext?.uncertain;if(list.children[index]!==node)list.insertBefore(node,list.children[index]||null);});
     if(focused&&document.activeElement!==focused)(focused.isConnected?focused:search).focus({preventScroll:true});
   }
   provider.onchange=paint;search.oninput=paint;free.onchange=paint;paint();
-  const effort=select(root,'Reasoning effort',['low','medium','high','xhigh','max'],state.settings?.agent?.effort||'high');effort.onchange=()=>action('setting',{path:'agent.effort',value:effort.value});
+  const effort=select(root,'Reasoning effort',['low','medium','high','xhigh','max'],state.settings?.agent?.effort||'high');effort.onchange=()=>modalTask(()=>command('setting',{path:'agent.effort',value:effort.value}),{success:'Reasoning effort saved.'});
   modalRefresh=()=>{paint();if(document.activeElement!==effort)effort.value=state.settings?.agent?.effort||'high';};
-  root.append(button('Refresh models',async()=>{try{await command('models:discover',{provider:provider.value});paint();toast('Model discovery requested. The list updates when ready.');}catch(error){toast(error.message);}}),button('Manage providers',()=>{$('modal').close();show('providers');}));
-});}
-function emptyState(root,symbol,title,detail,control){const n=el('section','empty-state');n.append(icon(symbol),el('h2',null,title),el('p',null,detail));if(control)n.append(control);root.append(n);}
+  modalActions(button('Refresh models',()=>modalTask(()=>command('models:discover',{provider:provider.value}),{success:'Model list refreshed.'}),'outline'),button('Manage providers',()=>{closeModal(true,false);show('providers');}),el('span','spacer'),modalCancel('Done'));
+},{description:'Choose a model and reasoning effort for your conversation.'});}
+function emptyState(root,symbol,title,detail,control){const n=el('section','empty-state');n.append(el('h2',null,title),el('p',null,detail));if(control)n.append(control);root.append(n);}
 function panelIsEditing(){
   if($('modal').open||panelPointerActive)return true;
   const root=$('panel'),active=document.activeElement;if(root.querySelector('.setting[data-state="saving"]')||(root.contains(active)&&active.matches('input,textarea,select')))return true;
@@ -536,13 +645,12 @@ function renderPanel(){
   for(const input of root.querySelectorAll('[data-setting]')){const error=errors.get(input.dataset.setting);if(error){input.value=error.value;if(input.type==='checkbox')input.checked=error.checked;const row=input.closest('.setting');row.dataset.state='error';row.querySelector('.save-status').textContent=error.message;}}
   if(page==='providers'){
     if(!state.providers?.length)emptyState(root,'providers','Choose who you think with.','Connect an AI provider and choose a model to start working in your game.',button('Add provider',()=>providerEditor(),'primary'));
-    else{const c=card(root,'Check your connection');c.append(el('p','muted','Send a small test request to check each provider.'));for(const p of state.providers)c.append(button('Test '+p.label,async()=>{try{const result=await command('provider:test',{id:p.id});toast(result.text+' · '+result.ms+' ms');}catch(e){toast(e.message);}},'outline'));}
   }
-  if(page==='agents'&&!state.subagents?.length){root.querySelector(':scope > p')?.remove();emptyState(root,'agents','Extra hands, when you need them.','Ask UAI to split a larger task into smaller parts. Your subagents and their progress will appear here.',button('Back to chat',()=>show('chat'),'outline'));}
+  if(page==='agents'&&!state.subagents?.length)emptyState(root,'agents','No delegated tasks yet','Ask the assistant to split a larger task into smaller parts. Their progress and results will appear here.',button('Open chat',()=>show('chat'),'outline'));
   if(page==='memory'&&!root.querySelector('.tool-grid .card'))emptyState(root,'memory','A place for what matters.','Connect your game to see the memory and skill tools available in this workspace.');
   if(page==='tools'&&!state.tools?.length)emptyState(root,'tools','Your game’s tools, within reach.','Connect Roblox to browse available tools, review permissions, and run an action.');
-  if(page==='logs'&&!state.logs?.length&&!state.requests?.length)emptyState(root,'logs','A clear view of your activity.','Connection checks, requests, and diagnostic messages will appear here as you work.');
-  if(page==='loops'&&!state.loops?.length)emptyState(root,'loop','Keep the conversation going.','Start a chatbot or use the chat tools above. Running loops and their Stop controls appear here.');
+  if(page==='logs'&&!state.logs?.length&&!state.requests?.length)emptyState(root,'logs','No activity yet','Requests and diagnostic messages will appear here as you work.');
+  if(page==='loops'&&!state.loops?.length)emptyState(root,'loop','No active chat loops','Start a chatbot or choose a workflow above. You can stop any running loop from this page.');
   for(const details of root.querySelectorAll('details'))if(open.has(details.querySelector('summary')?.textContent))details.open=true;
   for(const control of root.querySelectorAll('button,summary'))if(!control.dataset.focusKey){const scope=control.closest('.card,.setup-step,.setup-faq details,.panel-heading,.empty-state')||root,heading=scope.querySelector('h1,h2,summary,h3')?.textContent||scope.className,index=[...scope.querySelectorAll('button,summary')].indexOf(control);control.dataset.focusKey='panel:'+page+':'+heading+':'+index;}
   if(active){const replacement=focusKey&&[...root.querySelectorAll('[data-focus-key]')].find(n=>n.dataset.focusKey===focusKey);(replacement&&!replacement.disabled?replacement:root).focus({preventScroll:true});}
@@ -551,13 +659,19 @@ function renderPanel(){
 
 let installSource=stored('localStorage','uai.installSource')||'executor';
 function renderCowork(root){
-  const title=el('div','setup-heading');title.append(el('span','eyebrow','COWORK / YOUR LOCAL BRIDGE'),el('h1',null,connected?'Your workspace is connected.':'A clear path to your game.'),el('p',null,connected?'You’re ready. Keep Roblox and your bridge terminal open, then make yourself at home.':'The bridge connects this browser to UAI in Roblox. Set it up once, then pick up the same conversation in either window.'));root.append(title);
+  heading(root,'Connection',connected?button('Open chat',()=>show('chat'),'primary'):button('Setup instructions',()=>{const guide=$('connectionGuide');guide.open=true;guide.scrollIntoView({block:'start',behavior:'smooth'});},'outline'));
+  root.append(el('p','panel-description',connected?'Your browser and Roblox are working together. Keep the bridge running while you work.':'Connect the bridge to Roblox to bring your conversation and tools into this workspace.'));
   const path=el('div','connection-path');path.setAttribute('aria-label','Browser, bridge, and Roblox connection status');
   for(const [name,detail,symbol,ready]of [['This browser','Open and ready','chat',true],['Local bridge',link==='online'?'Running on port '+location.port:'Reconnecting…','bridge',link==='online'],['Roblox',connected?(state.place?.name||'Connected'):'Waiting to connect','player',connected]]){
-    const n=el('div','connection-node');n.dataset.ready=String(ready);const glyph=el('span','connection-symbol');glyph.append(icon(symbol));const copy=el('div');copy.append(el('strong',null,name),el('small',null,detail));n.append(glyph,copy);path.append(n);
-  }root.append(path,el('h2','section-heading','Three steps to start'));
-  const steps=el('div','setup-steps');root.append(steps);
-  function step(number,title,complete){const n=el('section','setup-step');n.dataset.complete=String(complete);n.append(el('span','step-number',complete?'✓':String(number)),el('h3',null,title));steps.append(n);return n;}
+    const n=el('div','connection-node');n.dataset.ready=String(ready);n.append(el('span','status-dot'),el('strong',null,name),el('small',null,detail));path.append(n);
+  }root.append(path);
+  const runtime=card(root);runtime.classList.add('runtime-summary');const runtimeHead=el('div','provider-heading');runtimeHead.append(el('h2',null,state.runtime==='web'?'Web runtime':'Game runtime'),el('span','pill','Automatic'));runtime.append(runtimeHead,el('p',null,'Web runtime starts as soon as Roblox connects. Disconnecting returns your game to Game runtime.'),el('small','muted','The bridge waits without a time limit for completion, a provider error, or Stop. Roblox continues to run tools and save your conversation.'));
+  const usage=card(root);usage.classList.add('metrics');usage.append(metric(state.usage?.total||0,state.usage?.estimated?'Tokens · estimated':'Tokens used'),metric(state.usage?.requests||0,'Requests'),metric('$'+(state.usage?.cost||0).toFixed(4),'Estimated cost'));
+  const update=el('section','bridge-update'),updateCopy=el('div');updateCopy.append(el('h3',null,'Bridge updates'),el('p',null,bridgeUpdate.currentVersion?'Version '+bridgeUpdate.currentVersion+(bridgeUpdate.availableVersion?' · '+bridgeUpdate.availableVersion+' available':''):'Automatic updates'));
+  const labels={current:'Up to date',checking:'Checking for updates',staged:'Ready when the workspace is idle',restarting:'Installing update',updated:'Updated',error:'Update check unavailable'};update.append(updateCopy,el('span','pill',labels[bridgeUpdate.state]||'Automatic'));if(bridgeUpdate.error)update.append(el('small','update-error',bridgeUpdate.error));root.append(update);
+  const guide=el('details','setup-guide');guide.id='connectionGuide';guide.open=!connected;guide.append(el('summary',null,'Setup instructions'));root.append(guide);
+  const steps=el('div','setup-steps');guide.append(steps);
+  function step(number,title,complete){const n=el('section','setup-step');n.dataset.complete=String(complete);n.append(el('span','step-number',String(number)),el('h3',null,title));steps.append(n);return n;}
   const one=step(1,'Start the bridge',link==='online');
   one.append(el('p',null,'Install Node.js 18+ on this computer. Download the bridge in Roblox → UAI → Cowork, then open a terminal in your executor workspace.'));
   const source=select(one,'Your installation',[['executor','Downloaded in Roblox'],['repo','Git checkout']],installSource);
@@ -565,34 +679,23 @@ function renderCowork(root){
   source.onchange=()=>{installSource=source.value;code.textContent=installSource==='repo'?'node bridge/server.js':'node UAI/bridge/start.txt';try{localStorage.setItem('uai.installSource',installSource);}catch{}};
   one.append(code,button('Copy start command',()=>copyText(code.textContent),'outline'),el('small','setup-detail','Keep this terminal open. No npm install or file renaming needed.'));
   const two=step(2,'Connect Roblox',connected);
-  two.append(el('p',null,'In Roblox, open UAI → Cowork. Paste the bridge token, set the port below, then turn Enabled on.'),el('code',null,'Port '+location.port),button('Copy bridge token',()=>copyText(token),'outline'),el('small','setup-detail','The token is the long code from the terminal. It changes whenever the bridge restarts.'));
+  two.append(el('p',null,'In Roblox, open UAI → Cowork. Paste the bridge token, set the port below, then turn Enabled on.'),el('code',null,'Port '+location.port),button('Copy bridge token',()=>copyText(token),'outline'),el('small','setup-detail','The token is the long code from the terminal. Automatic updates keep it; a manual restart creates a new one.'));
   const three=step(3,'Open your workspace',connected);
   three.append(el('p',null,'Open the browser link printed by the terminal. Choose a provider and model, then send your first message. Your game stays in control of tools and permissions.'));
   three.append(button(connected?'Open chat →':'Check connection',async()=>{if(connected){show('chat');$('input').focus();return;}try{const hello=await api('/hello');connected=!!hello.connected;refresh();renderPanel();if(!connected)toast('Still waiting. Paste the token into Roblox’s Cowork panel and turn Enabled on.');}catch(e){toast(e.message);}},connected?'primary':'outline'));
   three.append(el('small','setup-detail',connected?'Browser and Roblox share the active conversation.':'Your connection status updates automatically.'));
-  root.append(el('h2','section-heading','Choose how responses arrive'));
-  const modes=el('div','runtime-options');
-  for(const [value,name,badge,copy]of [['web','Web runtime','LIVE IN YOUR BROWSER','Get responses as they arrive when your provider supports streaming. Roblox still runs your tools and saves the conversation.'],['game','Game runtime','DIRECT FROM ROBLOX','Use the provider connection from your game. The browser shows the response once Roblox receives it.']]){
-    const n=button('',()=>action('runtime',{value}),'runtime-option'+(state.runtime===value?' selected':''),'runtime:'+value);n.setAttribute('aria-pressed',String(state.runtime===value));n.setAttribute('aria-label',name);n.disabled=!connected||busy||state.subagents?.some(a=>a.status==='running')||state.loops?.some(l=>l.state==='running');const head=el('div');head.append(el('strong',null,name),el('span','pill',badge));n.append(head,el('p',null,copy));modes.append(n);
-  }root.append(modes,el('p','runtime-note','Switch modes when work is idle. Keep both Roblox and the bridge running in either mode.'));
-  const usage=card(root,'This session');usage.classList.add('metrics');usage.append(metric(state.usage?.total||0,state.usage?.estimated?'Tokens · estimated':'Tokens'),metric(state.usage?.requests||0,'Requests'),metric('$'+(state.usage?.cost||0).toFixed(4),'Estimated cost'));
   const faq=el('div','setup-faq');
   for(const [question,answer]of [
-    ['Roblox is still waiting to connect','Keep Roblox and the terminal open on the same computer. Match the port shown above, paste the latest token, and turn Enabled on in UAI → Cowork. After a bridge restart, both windows need the new token.'],
+    ['Roblox is still waiting to connect','Keep Roblox and the terminal open on the same computer. Match the port shown above, paste the latest token, and turn Enabled on in UAI → Cowork. After a manual bridge restart, both windows need the new token. Automatic updates preserve your connection token.'],
     ['Node or the start file cannot be found','Install Node.js, then reopen your terminal. Open it in your executor’s workspace folder—the one containing UAI. If you downloaded this repository instead, choose Git checkout in step 1 and run its command from the repository folder.'],
     ['Can the AI see attached pictures?','Yes, when your selected model supports vision. PNG, JPEG, and WebP images are sent with your message. Keep the bridge running; if an image expires or the bridge restarts, attach it again. Reload the updated game client to enable image sends.'],
     ['What happens if I refresh or close the browser?','Refreshing reconnects to the conversation. Drafts are saved in this browser when storage is available. Closing the browser does not stop work in Roblox. Use Stop to cancel a turn. Pictures expire after 15 minutes of inactivity and are cleared when the bridge stops.']
   ]){const detail=el('details');detail.append(el('summary',null,question),el('p',null,answer));faq.append(detail);}root.append(faq);
-  const advanced=el('details','card');advanced.append(el('summary',null,'Advanced connection settings'));
-  const timeout=field(advanced,'Provider timeout in seconds',state.relayTimeout||180,'number');timeout.min=10;timeout.max=86400;timeout.step=1;
-  timeout.onchange=()=>{if(timeout.reportValidity())action('setting',{path:'bridge.requestTimeout',value:Number(timeout.value)});};
-  advanced.append(el('small','setup-detail','How long Web runtime waits for a provider response. The default is 180 seconds. Stop cancels it immediately.'));root.append(advanced);
 }
 
 // Mirrors the choices enforced by net/bridge_commands.lua for protocol-2 clients.
 const SETTING_CHOICES={
   'ui.density':['comfortable','compact'],'ui.accent':['claude','aurora','indigo','amber','rose'],
-  'ui.reduceMotion':[['auto','Follow system'],['on','Reduce motion'],['off','Normal motion']],
   'ui.layout':['auto','sheet','panel','window','tv'],'ui.codeTheme':['dark','light'],'ui.transcriptWidth':['narrow','medium','wide'],
   'iy.mode':['off','hidden','visible'],'agent.effort':['low','medium','high','xhigh','max']
 };
@@ -600,16 +703,16 @@ const SETTING_RANGES={'ui.fontScale':[.85,1.4,.05],'agent.temperature':[0,2,.1],
   'agent.maxTurns':[1,1000,1],'agent.toolTimeout':[1,86400,1],'agent.requestTimeout':[1,86400,1],'agent.retries':[1,10,1],
   'agent.contextTokens':[1000,2000000,1],'agent.contextFraction':[.3,.95,.05],'agent.maxTokens':[1,1000000,1]};
 function renderSettings(root){
-  heading(root,'Make it yours');root.append(el('p','panel-description','Appearance for this browser, and the settings shared with your Roblox workspace.'));
-  const appearance=card(root,'Browser appearance');
+  heading(root,'Settings');root.append(el('p','panel-description','Personalize this browser and manage the settings shared with Roblox.'));
+  const appearance=card(root,'Browser appearance');appearance.classList.add('settings-section');
   const theme=select(appearance,'Theme',[['system','Follow this computer'],['light','Light'],['dark','Dark'],['game','Match Roblox']],UAI.theme.get());theme.onchange=()=>UAI.theme.set(theme.value);
   appearance.append(el('small','setup-detail','Saved in this browser. Match Roblox uses your game’s palette.'));
-  const permissions=card(root,'Permissions'),modes=el('div','segments');
+  const permissions=card(root,'Permissions'),modes=el('div','segments');permissions.classList.add('settings-section');
   for(const [mode,name]of [['readonly','Read only'],['ask','Ask first'],['auto','Auto'],['full','Allow all']]){const n=button(name,()=>action('permission-mode',{mode}),state.permissions?.mode===mode?'selected':'','permission:'+mode);n.setAttribute('aria-pressed',String(state.permissions?.mode===mode));n.disabled=!connected;modes.append(n);}permissions.append(modes,el('small','setup-detail','Ask first lets you review actions that change your game.'));
   for(const [section,values]of Object.entries(state.settings||{})){
-    const details=el('details','card');details.append(el('summary',null,({ui:'Workspace appearance',agent:'Agent behavior',logs:'Logging',iy:'Infinite Yield',identity:'Provider identity'})[section]||section));
+    const details=el('details','card settings-section');details.append(el('summary',null,({ui:'Workspace appearance',agent:'Agent behavior',logs:'Logging',iy:'Infinite Yield',identity:'Provider identity'})[section]||section));
     for(const [key,value]of Object.entries(values)){
-      if(['lastSeenVersion','lastSeenChangelog','panel'].includes(key)||typeof value==='object')continue;
+      if(['lastSeenVersion','lastSeenChangelog','panel'].includes(key)||(section==='ui'&&key==='reduceMotion')||(section==='bridge'&&key==='requestTimeout')||typeof value==='object')continue;
       const path=section+'.'+key,row=el('label','setting'),caption=el('span',null,key.replace(/([A-Z])/g,' $1').replace(/^./,c=>c.toUpperCase())),status=el('small','save-status');status.setAttribute('aria-live','polite');caption.append(status);row.append(caption);
       let input;
       if(typeof value==='boolean'){input=el('input');input.type='checkbox';input.checked=value;}
@@ -626,11 +729,19 @@ function renderSettings(root){
         finally{queueMicrotask(flushPanelRefresh);}
       };
       row.append(input);details.append(row);
-    }root.append(details);
+    }if(details.childElementCount>1)root.append(details);
   }
-  const extras=card(root,'Configuration');extras.append(el('p','muted','A full configuration export includes your API keys. Keep the downloaded file private.'));
-  const row=el('div','row');row.append(button('Export full config',async()=>{try{const data=await command('config:export');download('uai-config.json',data.text,'application/json');}catch(e){toast(e.message);}},'outline'),button('Import full config',()=>modal('Import configuration',body=>{body.append(el('p','muted','This replaces your current configuration. Stop running work before importing.'));const input=field(body,'Paste configuration JSON','','textarea');body.append(button('Import configuration',async()=>{try{await command('config:import',{text:input.value});$('modal').close();toast('Configuration imported');}catch(e){toast(e.message);}},'primary'));}),'outline'));extras.append(row);
+  const extras=card(root,'Configuration');extras.classList.add('settings-section');extras.append(el('p','muted','Move your full configuration between installations. Exports include your API keys.'));
+  const row=el('div','row');row.append(button('Export full config',async()=>{try{const data=await command('config:export');download('uai-config.json',data.text,'application/json');}catch(e){toast(e.message);}},'outline'),button('Import full config',importConfig,'outline'));extras.append(row);
 }
+function importConfig(){modal('Import configuration',root=>{
+  const form=el('form','dialog-form');form.id='modalForm';root.append(form);
+  const input=field(form,'Paste configuration JSON','','textarea');input.className='code-input';input.spellcheck=false;input.required=true;input.placeholder='Paste your full config export.';
+  const preview=el('p','field-help','Your JSON stays in this dialog until you import it.');form.append(preview);
+  input.oninput=()=>{try{const parsed=JSON.parse(input.value);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw Error();preview.textContent='Valid JSON object. Import will replace the current configuration.';input.setCustomValidity('');}catch{preview.textContent=input.value?'Enter a valid configuration JSON object.':'Your JSON stays in this dialog until you import it.';input.setCustomValidity(input.value?'Enter a valid JSON object.':'');}};
+  form.onsubmit=event=>{event.preventDefault();modalCommand('config:import',{text:input.value});};
+  const submit=el('button','primary','Import configuration');submit.type='submit';submit.setAttribute('form',form.id);modalActions(modalCancel(),submit);
+},{description:'This replaces your saved settings and provider credentials. Stop running work before importing.',size:'wide'});}
 async function submit(){
   if(sending||sendPhase!=='idle'||readingFiles||draftLoads.has(sessionId)||busy||!connected)return;
   const text=$('input').value;
@@ -752,12 +863,20 @@ $('newThread').onclick=$('newConversation').onclick=()=>openConversation();$('mo
 $('attach').onclick=()=>$('fileInput').click();$('fileInput').onchange=attachFiles;
 $('attachPictures').onclick=()=>{if(window.UAI&&UAI.pictures)UAI.pictures.openPicker();};
 $('themeToggle').onclick=()=>{if(window.UAI&&UAI.theme)UAI.theme.toggle();};
-$('setupHelp').onclick=$('connectionAction').onclick=()=>show('cowork');
+$('setupHelp').onclick=$('connectionAction').onclick=()=>{show('cowork');$('connectionGuide').open=true;};
 $('permissionBadge').onclick=()=>show('settings');
 $('deliveryCheck').onclick=checkDelivery;
 $('deliveryReview').onclick=()=>{const operation=sendOperation;if(!operation?.lost)return;UAI.pictures.releaseCommand(operation.commandId);forgetOperation();setPhase('idle');show('chat');$('input').focus();toast('Draft kept. Check the conversation before sending it again.');};
 $('sidebarOverlay').onclick=()=>closeSidebar(true);
-$('options').onclick=()=>modal('Conversation options',root=>{root.className='stack';root.append(button('Model and effort',models),button('Permissions',()=>{$('modal').close();show('settings');}),button('Chat loops',()=>{$('modal').close();show('loops');}));for(const [title,,prompt]of starters)root.append(button(title,()=>{$('modal').close();insert(prompt);}));root.append(button('Export JSON',()=>download('uai-events.json',JSON.stringify({events,pictures:UAI.pictures.manifest(),pictureNote:'Picture metadata only. Images are sent to the selected model but their bytes are not included in this export.'},null,2),'application/json')));});
+$('options').onclick=()=>modal('Conversation options',root=>{
+  const choices=el('div','option-list');root.append(choices);
+  function option(title,description,handler){const n=button('',handler,'option-row');const copy=el('span');copy.append(el('strong',null,title),el('small',null,description));n.append(copy,el('span','option-arrow','›'));choices.append(n);}
+  option('Model and effort','Choose a provider, model, and reasoning level.',models);
+  option('Permissions','Review what the agent is allowed to do.',()=>{closeModal(true,false);show('settings');});
+  option('Chat loops','Manage chatbots and automatic replies.',()=>{closeModal(true,false);show('loops');});
+  option('Export JSON','Download conversation events and picture metadata.',()=>download('uai-events.json',JSON.stringify({events,pictures:UAI.pictures.manifest(),pictureNote:'Picture metadata only. Images are sent to the selected model but their bytes are not included in this export.'},null,2),'application/json'));
+  root.append(el('h3','dialog-section-title','Start with an idea'));const prompts=el('div','prompt-options');for(const [title,,prompt]of starters)prompts.append(button(title,()=>{closeModal(true,false);insert(prompt);},'outline'));root.append(prompts);modalActions(modalCancel('Done'));
+},{description:'Tune this conversation or pick a starting point.',size:'compact'});
 $('sidebarToggle').onclick=()=>{const mobile=innerWidth<=768;document.body.classList.toggle(mobile?'sidebar-open':'sidebar-hidden');syncSidebar();if(mobile&&document.body.classList.contains('sidebar-open'))$('closeSidebar').focus();};
 document.addEventListener('keydown',e=>{
   if(innerWidth>768||!document.body.classList.contains('sidebar-open')||$('modal').open)return;
@@ -807,7 +926,7 @@ document.addEventListener('uai:theme',themeChanged);themeChanged();
 window.addEventListener('resize',()=>{syncSidebar();resizeComposer();});syncSidebar();
 window.addEventListener('pagehide',()=>{saveDraft();persistDrafts();});
 function showGate(reason=''){
-  saveDraft();persistDrafts();stream?.close();clearTimeout(connectionRetry);closeSidebar();if($('modal').open)$('modal').close();
+  saveDraft();persistDrafts();stream?.close();clearTimeout(connectionRetry);closeSidebar();if($('modal').open)closeModal(true,false);
   connected=false;link='disconnected';$('app').hidden=true;$('gate').hidden=false;$('gate-error').textContent=reason;
   $('gate-connect').disabled=false;refresh();$('gate-token').focus({preventScroll:true});
 }
@@ -822,7 +941,7 @@ async function enter(){
     UAI.pictures.reset();renderer.reset();events=[];eventBytes=0;tools.clear();state={};$('transcript').replaceChildren();
     if(sendOperation){sendOperation.lost=true;setPhase('uncertain');persistOperation();}
   }
-  instance=hello.instance;connected=!!hello.connected;link='online';
+  instance=hello.instance;connected=!!hello.connected;bridgeUpdate=hello.update||{};link='online';
   UAI.pictures.setToken(token);await UAI.pictures.configure(hello);
   try{sessionStorage.setItem('uai.token',token);sessionStorage.setItem('uai.instance',instance);localStorage.removeItem('uai.token');}catch{}
   $('gate').hidden=true;$('gate-error').textContent='';$('gate-token').value='';$('app').hidden=false;refresh();welcome();syncSidebar();(page==='chat'?$('input'):$('panel')).focus({preventScroll:true});

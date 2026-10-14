@@ -23,7 +23,7 @@ function request(path, options = {}) {
   });
 }
 async function desktop(t) {
-  const proc = spawn(process.execPath, ['bridge/server.js', '--desktop'], { cwd: root, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const proc = spawn(process.execPath, ['bridge/server.js', '--desktop'], { cwd: root, env: { ...process.env, UAI_BRIDGE_TEST_NO_UPDATES: '1' }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   const exit = once(proc, 'exit');
   const stop = async (eof = false) => {
     if (proc.exitCode !== null || proc.signalCode !== null) return;

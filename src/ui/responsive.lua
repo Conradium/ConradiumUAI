@@ -106,21 +106,9 @@ return function(env)
 		pcall(function()
 			M.console = env.guisvc:IsTenFootInterface() == true
 		end)
-		pcall(function()
-			M.reduceMotion = env.guisvc.ReducedMotionEnabled == true
-		end)
-		-- The platform preference is the default, not the last word: someone who wants
-		-- the motion off in this client and on everywhere else has to be able to say so,
-		-- and someone whose platform reports it wrongly has to be able to say the
-		-- opposite. "auto" is the setting that defers.
-		do
-			local wanted = tostring(env.require("runtime/config").get("ui.reduceMotion", "auto"))
-			if wanted == "on" then
-				M.reduceMotion = true
-			elseif wanted == "off" then
-				M.reduceMotion = false
-			end
-		end
+		-- Application motion is permanently enabled; older saved preferences and
+		-- platform changes cannot turn off the client's owned transitions.
+		M.reduceMotion = false
 		pcall(function()
 			local value = tonumber(env.guisvc.PreferredTransparency)
 			M.transparency = value and util.clamp(value, 0, 1) or 1
@@ -270,7 +258,7 @@ return function(env)
 			end)
 		end
 
-		for _, property in ipairs({ "ReducedMotionEnabled", "PreferredTransparency" }) do
+		for _, property in ipairs({ "PreferredTransparency" }) do
 			pcall(function()
 				watch(env.guisvc:GetPropertyChangedSignal(property):Connect(function() refresh(property) end))
 			end)
@@ -287,7 +275,7 @@ return function(env)
 
 		local config = env.require("runtime/config")
 		releases[#releases + 1] = dispose.add(config.changed:connect(function(path)
-			if path == "ui.layout" or path == "ui.reduceMotion" then refresh("setting") end
+			if path == "ui.layout" then refresh("setting") end
 		end), "responsive settings")
 		watch(screenGui.Destroying:Connect(function()
 			if M.screen == screenGui then M.destroy() end

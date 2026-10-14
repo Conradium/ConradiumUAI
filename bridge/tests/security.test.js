@@ -156,7 +156,7 @@ test('static serving resolves junctions before exposing files', async t => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'uai-static-'));
   const app = path.join(temporary, 'app'), outside = path.join(temporary, 'outside');
   fs.mkdirSync(path.join(app, 'web'), { recursive: true }); fs.mkdirSync(outside);
-  for (const name of ['server.js', 'inference.js', 'picture-store.js']) fs.copyFileSync(path.join(__dirname, '..', name), path.join(app, name));
+  for (const name of require('../updater').ROOT_FILES) fs.copyFileSync(path.join(__dirname, '..', name), path.join(app, name));
   fs.writeFileSync(path.join(app, 'web/index.html'), '<html>fixture</html>'); fs.writeFileSync(path.join(outside, 'private.txt'), 'not a web asset');
   fs.symlinkSync(outside, path.join(app, 'web/escape'), process.platform === 'win32' ? 'junction' : 'dir');
   let bridge;

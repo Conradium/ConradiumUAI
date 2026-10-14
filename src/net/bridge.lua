@@ -26,6 +26,11 @@ return function(env)
 	local M = { running = false, online = false, lastError = nil, changed = signal.new("bridge") }
 	local clientId = env.services.HttpService:GenerateGUID(false)
 	local alive, generation = false, 0
+	local uploadFailed, pollFailed = false, false
+	local function syncRuntime()
+		local value = M.online and "web" or "game"
+		if config.get("bridge.runtime") ~= value then config.set("bridge.runtime", value, { transient = true }) end
+	end
 
 	-- Queue bounds limit offline buffering; event text itself stays lossless so
 	-- Markdown, code listings, and streamed finals agree between both interfaces.
@@ -146,7 +151,9 @@ return function(env)
 	-- out of the Requests view.
 	local function call(spec)
 		local mine = generation
+		local supplied = spec.headers or {}
 		spec.headers = headers()
+		if supplied["X-UAI-Poll-Wait-Ms"] then spec.headers["X-UAI-Poll-Wait-Ms"] = supplied["X-UAI-Poll-Wait-Ms"] end
 		spec.aborted = function() return not alive or mine ~= generation end
 		spec.identity = "none"
 		spec.silent = true
@@ -222,20 +229,26 @@ return function(env)
 
 	-- Reported once per streak rather than per attempt: with the bridge not running,
 	-- a per-attempt warning would be the only thing in the log.
-	local function offline(reason)
+	local function offline(reason, direction)
+		if direction == "upload" then uploadFailed = true else pollFailed = true end
 		local moved = M.online or M.lastError == nil
+		local changed = M.online or M.lastError ~= reason
 		M.online = false
 		M.lastError = reason
+		syncRuntime()
 		if moved then
 			log.warn("bridge", "not reachable", reason)
-			M.changed:fire()
 		end
+		if changed then M.changed:fire() end
 	end
 
-	local function onlineNow()
+	local function onlineNow(direction)
+		if direction == "upload" then uploadFailed = false else pollFailed = false end
+		if uploadFailed or pollFailed then return end
 		if M.online then return end
 		M.online = true
 		M.lastError = nil
+		syncRuntime()
 		log.info("bridge", "connected to the local bridge")
 		M.changed:fire()
 	end
@@ -361,7 +374,6 @@ return function(env)
 			attachments = { inlineLimit = env.require("runtime/attachments").INLINE_LIMIT,
 				maxBytes = env.require("runtime/attachments").MAX_BYTES, available = caps.fs },
 			runtime = config.get("bridge.runtime", "game"),
-			relayTimeout = config.get("bridge.requestTimeout", 180),
 			sessionId = current.id,
 			player = env.plr and env.plr.DisplayName or "you",
 			settings = settings, theme = themeColors, loops = loops, todos = current.todos,
@@ -397,21 +409,27 @@ return function(env)
 	local lastStateJson, lastStateAt = nil, 0
 	local STATE_EVERY = 1000
 	local inflight, commandResults = nil, {}
+	local unackedCommands = {}
+	local function commandScope() return base() .. "\0" .. connection.get().token .. "\0" end
 
-	local function drain()
+	local function drain(mine)
 		if next(commandResults) then
 			local results = {}
 			for _, result in pairs(commandResults) do results[#results + 1] = result end
 			local res = call({ url = base() .. "/api/agent/ack", method = "POST", body = util.encode({ results = results }), timeout = 10 })
+			if not alive or mine ~= generation then return true end
 			if res and res.ok then
 				for _, result in ipairs(results) do
 					if commandResults[result.id] == result then commandResults[result.id] = nil end
+					local key = commandScope() .. result.id
+					if unackedCommands[key] == result then unackedCommands[key] = nil end
 				end
 			end
 		end
 		if inflight then
 			local res, err = call({ url = base() .. "/api/agent/events", method = "POST", body = inflight, timeout = 10 })
-			if res and res.ok then inflight = nil; return true end
+			if not alive or mine ~= generation then return true end
+			if res and res.ok then inflight = nil; onlineNow("upload"); return true end
 			return false, err or "Bridge upload failed"
 		end
 		attach()
@@ -441,7 +459,8 @@ return function(env)
 			body = inflight,
 			timeout = 10,
 		})
-		if res and res.ok then inflight = nil; return true end
+		if not alive or mine ~= generation then return true end
+		if res and res.ok then inflight = nil; onlineNow("upload"); return true end
 
 		-- Keep this exact encoded batch and ID until acknowledged. Events arriving
 		-- during the request stay in the next batch instead of being duplicated.
@@ -451,14 +470,14 @@ return function(env)
 	local function uploadLoop(mine)
 		local attempt = 0
 		while alive and mine == generation do
-			local ok, reason = drain()
+			local ok, reason = drain(mine)
 			if not alive or mine ~= generation then return end
 			if ok then
 				attempt = 0
 				clock.wait(DRAIN_SECONDS)
 			else
 				attempt = attempt + 1
-				offline(reason)
+				offline(reason, "upload")
 				clock.wait(clock.backoff(attempt, { cap = 10 }))
 			end
 		end
@@ -467,43 +486,63 @@ return function(env)
 	local handledCommands = {}
 	local function pollLoop(mine)
 		local attempt = 0
+		local scope = commandScope()
+		local mobile = false
+		pcall(function() mobile = env.uis.TouchEnabled == true and env.uis.MouseEnabled ~= true end)
+		local timeout = POLL_TIMEOUT
+		if mobile then
+			local hello = call({ url = base() .. "/api/hello", method = "GET", timeout = 2 })
+			if not alive or mine ~= generation then return end
+			local info = hello and hello.ok and #hello.body <= 16384 and util.decode(hello.body)
+			local inbox = type(info) == "table" and type(info.capabilities) == "table" and info.capabilities.agentInbox
+			if type(inbox) == "table" and inbox.waitHeader == "X-UAI-Poll-Wait-Ms" then timeout = 5 end
+		end
 		while alive and mine == generation do
+			-- After a failed poll, prove the inbox is back without waiting through
+			-- another idle long poll before Web runtime can recover.
+			local waitMs = attempt > 0 and "0" or (mobile and "1000" or nil)
 			local res, err = call({
 				url = base() .. "/api/agent/inbox",
 				method = "GET",
-				timeout = POLL_TIMEOUT,
+				timeout = timeout,
+				headers = waitMs and { ["X-UAI-Poll-Wait-Ms"] = waitMs } or nil,
 			})
 			-- The request parked for up to eighteen seconds; an unload during that
 			-- window means the answer is no longer wanted.
 			if not alive or mine ~= generation then return end
 
-			if res and res.ok then
+			local decoded = res and res.ok and util.decode(res.body)
+			local commands = type(decoded) == "table" and decoded.commands
+			if res and res.ok and type(commands) == "table" then
 				attempt = 0
-				onlineNow()
-				local decoded = util.decode(res.body)
-				local commands = type(decoded) == "table" and decoded.commands or nil
+				onlineNow("poll")
 				local handled = 0
-				if type(commands) == "table" then
-					for _, command in ipairs(commands) do
+				for _, command in ipairs(commands) do
+					if type(command) == "table" then
 						handled = handled + 1
 						-- One bad command must not stop the poller: that would take the
 						-- browser offline until the next reload.
 						local id = command.commandId
-						if id and handledCommands[id] then
-							if handledCommands[id] ~= true then commandResults[id] = handledCommands[id] end
+						if type(id) ~= "string" or #id == 0 or #id > 160 then id = nil end
+						local key = id and scope .. id
+						if key and handledCommands[key] then
+							if handledCommands[key] ~= true then commandResults[id] = handledCommands[key] end
 						else
 							if id then
-								handledCommands[id] = true
+								handledCommands[key] = true
 								commandResults[id] = { id = id, pending = true }
 							end
 							clock.spawn(function()
 								if not alive or mine ~= generation then return end
 								local ok, result = pcall(runCommand, command)
-								if not alive or mine ~= generation then return end
 								if id then
 									local answer = { id = id, ok = ok, error = not ok and tostring(result) or nil,
 										data = ok and type(result) == "table" and result or nil }
-									handledCommands[id], commandResults[id] = answer, answer
+									-- Pending ACKs remove the inbox command. Retain its final
+									-- receipt until this endpoint accepts it, even across Stop.
+									handledCommands[key] = answer
+									unackedCommands[key] = answer
+									if alive and commandScope() == scope then commandResults[id] = answer end
 								elseif not ok then log.warn("bridge", "command failed", result) end
 							end)
 						end
@@ -516,7 +555,7 @@ return function(env)
 				if (res.ms or 0) < 100 then clock.wait(handled == 0 and 0.25 or 0.05) end
 			else
 				attempt = attempt + 1
-				offline(err or ("status " .. tostring(res and res.status or 0)))
+				offline(err or (res and res.ok and "Invalid bridge inbox response" or "status " .. tostring(res and res.status or 0)), "poll")
 				clock.wait(clock.backoff(attempt, { cap = 10 }))
 			end
 		end
@@ -529,11 +568,13 @@ return function(env)
 		alive = false
 		M.running = false
 		M.online = false
+		syncRuntime()
 		if detach then pcall(detach) end
 		detach, attachedId = nil, nil
 		queue = {}
 		snapshotPending = nil
 		inflight = nil
+		commandResults = {}
 	end
 
 	function M.start()
@@ -548,6 +589,11 @@ return function(env)
 		generation = generation + 1
 		lastStateJson, lastStateAt = nil, 0
 		M.lastError = nil
+		uploadFailed, pollFailed = false, false
+		local scope = commandScope()
+		for key, answer in pairs(unackedCommands) do
+			if key:sub(1, #scope) == scope then commandResults[answer.id] = answer end
+		end
 		attach()
 		clock.spawn(uploadLoop, generation)
 		clock.spawn(pollLoop, generation)
@@ -555,7 +601,7 @@ return function(env)
 		-- stop them. The canceller is kept rather than discarded because stopping
 		-- from Settings has to unregister as well, or the drain would run it twice.
 		unregister = dispose.add(shutdown, "bridge")
-		log.info("bridge", "polling " .. base())
+		log.debug("bridge", "connecting to " .. base())
 		M.changed:fire()
 		return true
 	end
@@ -592,6 +638,7 @@ return function(env)
 			source = connection.get().source,
 			searching = connection.searching(),
 			queued = #queue,
+			runtime = M.online and "web" or "game",
 			error = M.lastError,
 		}
 	end
@@ -606,8 +653,10 @@ return function(env)
 		M.changed:fire()
 	end), "bridge connection")
 	dispose.add(config.changed:connect(function(path)
-		if path == "bridge.runtime" or path == "bridge.requestTimeout" then lastStateJson = nil end
+		if path == nil or path == "bridge" or path == "bridge.runtime" then syncRuntime(); lastStateJson = nil end
 	end), "bridge config")
+	-- Runtime is a live connection fact, including when an older save selected Web.
+	syncRuntime()
 
 	return M
 

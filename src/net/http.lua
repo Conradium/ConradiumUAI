@@ -266,13 +266,27 @@ return function(env)
 
 		if aborted(spec) then return nil, "aborted", 0 end
 		if workers >= MAX_WORKERS then return nil, "deadline: native HTTP worker limit reached", 0 end
+		local relayEndpoint = spec.relay and env.require("net/transport").endpoint()
 		local deadline = math.min(tonumber(spec.deadlineMs) or math.huge, started + math.max(1, math.min(300, tonumber(spec.timeout) or 120)) * 1000)
+		-- The PC bridge owns the long provider connection. Only its individual
+		-- executor exchanges have a time limit; waiting for that job does not.
+		if relayEndpoint and relayEndpoint.target == "cowork" then
+			deadline = math.huge
+			for name in pairs(headers) do if name:lower() == "x-stainless-timeout" then headers[name] = nil end end
+		end
 		if deadline <= started then return nil, "deadline: request budget expired", 0 end
 		local pending = { done = false, accepting = true }
 		workers = workers + 1
 		clock.spawn(function()
 			local ok, response, problem = pcall(function()
-				if spec.relay then return env.require("net/relay").request(spec, headers, M.request) end
+				if spec.relay then
+					local relaySpec = {}
+					for key, value in pairs(spec) do relaySpec[key] = value end
+					relaySpec.deadlineMs = deadline
+					relaySpec.relayEndpoint = relayEndpoint
+					relaySpec.aborted = function() return not pending.accepting or aborted(spec) end
+					return env.require("net/relay").request(relaySpec, headers, M.request)
+				end
 				return send(url, method, headers, spec.body, math.max(0.001, (deadline - clock.ms()) / 1000))
 			end)
 			workers = math.max(0, workers - 1)
@@ -437,6 +451,7 @@ return function(env)
 	function M.send(spec)
 		local attempts = math.max(1, math.min(8, tonumber(spec.attempts) or 1))
 		local deadline = tonumber(spec.deadlineMs) or (clock.ms() + math.max(1, math.min(300, tonumber(spec.timeout) or 120)) * 1000)
+		if spec.relay and env.require("net/transport").coworkWeb() then deadline = math.huge end
 		local lastRes, lastErr
 		for attempt = 1, attempts do
 			if aborted(spec) then return nil, "aborted" end

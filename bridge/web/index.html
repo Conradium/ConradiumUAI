@@ -3,27 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="Your Roblox workspace, with room to think. Connect Project UAI to your browser.">
-  <title>Cowork · Project UAI</title>
-  <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="icon" href="icon-32.png" sizes="32x32" type="image/png">
+  <meta name="description" content="Your conversation, tools, and Roblox workspace in one place.">
+  <title>Cowork</title>
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
   <script src="theme.js"></script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main id="gate" hidden>
     <div class="gate-intro">
-      <a class="wordmark" href="/"><img src="icon.svg" width="34" height="34" alt=""><span>Project UAI <small>Cowork</small></span></a>
-      <div><span class="eyebrow">A LITTLE MORE ROOM TO CREATE</span><h1>Your game.<br>Your ideas.<br><em>One workspace.</em></h1><p>Bring your Roblox conversation into the browser. More room for code, live responses, and the things you want to build.</p></div>
-      <span class="gate-local"><span class="status-dot"></span> A local connection, on your computer.</span>
+      <a class="wordmark" href="/">Cowork</a>
+      <div><span class="eyebrow">YOUR CONNECTED WORKSPACE</span><h1>Build from<br>where you are.</h1><p>Chat, write code, and work with your game. Your conversation and tools stay together across Roblox and the browser.</p><div class="gate-features"><span>One conversation</span><span>Live responses</span><span>Your game’s tools</span></div></div>
+      <span class="gate-local"><span class="status-dot"></span> Runs locally on your computer</span>
     </div>
     <form id="gate-form" class="gate-card">
-      <span class="eyebrow">CONNECT YOUR WORKSPACE</span>
-      <h2>Pick up where you are.</h2>
+      <h2>Connect to Cowork</h2>
       <p>Open the link printed in your bridge terminal, or paste its token below.</p>
       <label for="gate-token">Bridge token</label>
       <input id="gate-token" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" required placeholder="Paste the token from your terminal">
-      <button id="gate-connect" class="primary" type="submit">Connect to bridge <span aria-hidden="true">→</span></button>
+      <button id="gate-connect" class="primary" type="submit">Connect to bridge</button>
       <p id="gate-error" class="form-error" role="alert"></p>
       <details class="gate-help"><summary>First time connecting?</summary><ol><li>Install Node.js 18 or newer on this computer.</li><li>In Roblox, open <strong>UAI → Cowork → Download bridge files</strong>.</li><li>Open a terminal in your executor workspace and run <code>node UAI/bridge/start.txt</code>.</li><li>Open the printed link. Paste the same token into Roblox’s Cowork panel and turn <strong>Enabled</strong> on.</li></ol><p>Keep Roblox and the terminal open while you work.</p></details>
     </form>
@@ -33,31 +31,31 @@
     <div id="sidebarOverlay" class="sidebar-overlay" hidden></div>
     <aside id="sidebar" aria-label="Workspace navigation">
       <div class="sidebar-top">
-        <div class="wordmark"><img src="icon.svg" width="30" height="30" alt=""><span>Project UAI <small>Cowork</small></span></div>
+        <div class="wordmark">Cowork <span class="workspace-label">Local</span></div>
         <button id="newThread" class="icon-button" title="New conversation" aria-label="New conversation"><svg class="icon" aria-hidden="true"><use href="icons.svg#plus"></use></svg></button>
         <button id="closeSidebar" class="icon-button" aria-label="Close sidebar"><svg class="icon" aria-hidden="true"><use href="icons.svg#close"></use></svg></button>
       </div>
       <div class="segments main-segments" aria-label="Workspace view">
-        <button data-page="chat" class="selected" aria-current="page"><svg class="icon" aria-hidden="true"><use href="icons.svg#chat"></use></svg> Chat</button>
-        <button data-page="cowork"><svg class="icon" aria-hidden="true"><use href="icons.svg#bridge"></use></svg> Cowork</button>
+        <button data-page="chat" class="selected" aria-current="page">Chat</button>
+        <button data-page="cowork">Connection</button>
       </div>
-      <button id="newConversation" class="outline"><svg class="icon" aria-hidden="true"><use href="icons.svg#plus"></use></svg><span>New conversation</span></button>
+      <button id="newConversation" class="outline">New conversation</button>
       <details class="more-nav" open>
         <summary>Workspace</summary>
         <nav aria-label="Workspace tools">
-          <button data-page="providers"><svg class="icon" aria-hidden="true"><use href="icons.svg#providers"></use></svg>Providers</button>
-          <button data-page="tools"><svg class="icon" aria-hidden="true"><use href="icons.svg#tools"></use></svg>Tools</button>
-          <button data-page="agents"><svg class="icon" aria-hidden="true"><use href="icons.svg#agents"></use></svg>Subagents</button>
-          <button data-page="memory"><svg class="icon" aria-hidden="true"><use href="icons.svg#memory"></use></svg>Memory &amp; skills</button>
-          <button data-page="loops"><svg class="icon" aria-hidden="true"><use href="icons.svg#loop"></use></svg>Chat loops</button>
-          <button data-page="logs"><svg class="icon" aria-hidden="true"><use href="icons.svg#logs"></use></svg>Logs &amp; traces</button>
-          <button data-page="settings"><svg class="icon" aria-hidden="true"><use href="icons.svg#settings"></use></svg>Settings</button>
+          <button data-page="providers">Providers</button>
+          <button data-page="tools">Tools</button>
+          <button data-page="agents">Subagents</button>
+          <button data-page="memory">Memory &amp; skills</button>
+          <button data-page="loops">Chat loops</button>
+          <button data-page="logs">Activity</button>
+          <button data-page="settings">Settings</button>
         </nav>
       </details>
       <div class="history-heading"><span class="eyebrow">CONVERSATIONS</span><button id="searchThreads" class="icon-button" title="Search conversations" aria-label="Search conversations" aria-controls="threadSearch" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="icons.svg#search"></use></svg></button></div>
       <input id="threadSearch" type="search" placeholder="Find a conversation…" aria-label="Search conversations" hidden>
       <div id="threads" class="history"></div>
-      <button id="connectionLink" class="connection-link" data-page="cowork"><span class="status-dot"></span><span id="connectionLabel">Connect your game</span><span aria-hidden="true">↗</span></button>
+      <button id="connectionLink" class="connection-link" data-page="cowork"><span class="status-dot"></span><span id="connectionLabel">Connect your game</span></button>
       <button id="profile" data-page="settings"><span class="avatar" id="playerInitial" aria-hidden="true">U</span><span><strong id="playerName">Your workspace</strong><small id="providerName">No provider connected</small></span><svg class="icon" aria-hidden="true"><use href="icons.svg#settings"></use></svg></button>
     </aside>
 
@@ -87,7 +85,7 @@
             <div class="composer-content">
               <div id="pictureTray" class="picture-tray" hidden></div>
               <div id="attachments"></div>
-              <textarea id="input" rows="1" placeholder="What would you like to do in your game?" aria-label="Message" aria-describedby="composerHint"></textarea>
+              <textarea id="input" rows="1" placeholder="Ask, build, or explore your game…" aria-label="Message" aria-describedby="composerHint"></textarea>
             </div>
             <div class="composer-toolbar">
               <button id="attach" class="icon-button" aria-label="Attach text or code files" title="Attach text or code files"><svg class="icon" aria-hidden="true"><use href="icons.svg#attach"></use></svg></button>
@@ -109,7 +107,12 @@
     </div>
   </div>
 
-  <dialog id="modal" aria-labelledby="modalTitle"><div class="modal-head"><h2 id="modalTitle"></h2><button id="modalClose" class="icon-button" aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="icons.svg#close"></use></svg></button></div><div id="modalBody"></div><div id="modalNotice" class="modal-notice" role="status" aria-live="polite" aria-atomic="true"></div></dialog>
+  <dialog id="modal" aria-labelledby="modalTitle" aria-describedby="modalDescription">
+    <div class="modal-head"><div class="modal-heading"><h2 id="modalTitle" tabindex="-1"></h2><p id="modalDescription" hidden></p></div><button id="modalClose" class="icon-button" aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="icons.svg#close"></use></svg></button></div>
+    <div id="modalBody"></div>
+    <div id="modalNotice" class="modal-notice" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div id="modalFooter" class="modal-footer"></div>
+  </dialog>
   <div id="toast" role="status" aria-live="polite" hidden></div>
   <noscript><p class="noscript">Enable JavaScript to use the local bridge.</p></noscript>
   <script src="markdown.js"></script>

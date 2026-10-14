@@ -1,14 +1,23 @@
-UAI BRIDGE 1.0 — WINDOWS 10/11 (64-BIT)
+UAI BRIDGE 3.1.0 — WINDOWS 10/11 (64-BIT)
 
-1. Extract the entire ZIP to a folder of your choice.
-2. Open UAI Bridge.exe and click Start Cowork.
+1. Download UAI-Bridge-3.1.0-win-x64.exe and open it directly.
+2. If Node.js is missing, choose Download Node.js or use
+   the manual installation link. Then click Start Cowork.
 3. Load the updated Project UAI script in Roblox. It connects automatically.
 
-The browser opens automatically. Node and .NET are included; no terminal,
-administrator access, or separate runtime installation is required.
+The browser opens automatically. Installed Node.js 18+ is detected, or the app
+downloads a verified Node.js LTS runtime for your account. Node is no longer
+bundled. .NET, the bridge, browser assets and client are included in the single
+executable. Supporting files are prepared automatically in your private user
+cache. No ZIP extraction, terminal or administrator access is needed.
 
-This package includes the matching script in client/uai.lua. If your published
-loader still has an older client, run this updated script in your executor.
+The bridge downloads updates automatically and applies them when work is idle.
+The desktop app also fetches updates from GitHub and applies them on restart.
+The previous version remains available if an update cannot start. Automatic
+bridge updates preserve pairing; manually restarting the app rotates its token.
+
+The executable includes the matching client as part of its embedded files.
+Use the updated Project UAI loader in your executor.
 Roblox must remain running. The app does not launch Roblox or an executor.
 
 If Roblox is not connecting, open UAI > Cowork. Turn on "Find desktop app
@@ -23,8 +32,9 @@ Port 28791 is reserved by this app while it is running. If another program
 uses it, the app reports the conflict. It never terminates other programs.
 
 This build is not code-signed. Windows may identify it as an unrecognized app.
-Download only from a source you trust. Package hashes are in manifest.json;
-they identify file content and are not a publisher signature.
+Download only from the official release. The adjacent .sha256 and
+desktop-release.json identify the executable content; they are not a publisher
+signature. The app verifies its embedded files before starting the bridge.
 
 Source: https://github.com/Project-Ptolemy/ProjectUAI
-Licenses and third-party notices are in licenses/.
+Licenses and third-party notices are included in the embedded files.

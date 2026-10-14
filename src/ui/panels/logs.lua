@@ -13,6 +13,7 @@ return function(env)
 	local overlay = env.require("ui/overlay")
 	local http = env.require("net/http")
 	local log = env.require("runtime/log")
+	local deadlineHelp = env.require("ui/deadline_help")
 
 	local M = {}
 
@@ -118,6 +119,10 @@ return function(env)
 			if not dialog then return end
 			panel.detail = dialog
 			dialog.card.Name = kind == "requests" and "RequestDetails" or "LogDetails"
+			local deadline = kind == "requests" and deadlineHelp.matches(entry.error)
+				or kind ~= "requests" and (entry.level == "warn" or entry.level == "error")
+					and (deadlineHelp.matches(entry.message) or deadlineHelp.matches(entry.detail))
+			if deadline then deadlineHelp.new(dialog.content, 0) end
 			local lines = { title }
 			for index, field in ipairs(fields) do
 				lines[#lines + 1] = field[1] .. ": " .. field[2]

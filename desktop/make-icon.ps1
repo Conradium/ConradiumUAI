@@ -1,13 +1,10 @@
 param(
-    [Parameter(Mandatory = $true)][string]$Source,
     [Parameter(Mandatory = $true)][string]$Destination
 )
 $ErrorActionPreference = 'Stop'
-$source = (Resolve-Path -LiteralPath $Source).Path
 $destination = [IO.Path]::GetFullPath($Destination)
 Add-Type -AssemblyName System.Drawing
 
-# The web favicon is a PNG regardless of its name, so CSC cannot embed it directly.
 # This emits a classic uncompressed BGRA .ico that the compiler accepts, at every
 # size Windows asks for. 32-bit frames carry transparency in the alpha channel.
 function New-IconFrame($bitmap) {
@@ -43,7 +40,20 @@ function New-IconFrame($bitmap) {
     } finally { $writer.Dispose(); $stream.Dispose() }
 }
 
-$image = [System.Drawing.Image]::FromFile($source)
+$image = [System.Drawing.Bitmap]::new(256, 256)
+$drawing = [System.Drawing.Graphics]::FromImage($image)
+try {
+    $drawing.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $drawing.Clear([System.Drawing.Color]::FromArgb(24, 48, 43))
+    $pen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(182, 237, 199), 16)
+    $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    try {
+        $drawing.DrawLine($pen, 70, 160, 186, 96)
+        $drawing.DrawEllipse($pen, 44, 134, 52, 52)
+        $drawing.DrawEllipse($pen, 160, 70, 52, 52)
+    } finally { $pen.Dispose() }
+} finally { $drawing.Dispose() }
 try {
     $sizes = @(16, 24, 32, 48, 64, 128, 256)
     $frames = @()

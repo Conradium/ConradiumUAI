@@ -16,6 +16,7 @@ return function(env)
 	local P = env.require("ui/primitives")
 	local C = env.require("ui/controls")
 	local usage = env.require("agent/usage")
+	local deadlineHelp = env.require("ui/deadline_help")
 
 	-- How many lines of a block are shown before it folds. Generous, because the point
 	-- of showing code at all is that it can be read; the fold is for a thousand-line
@@ -1111,7 +1112,8 @@ return function(env)
 	-- and compacted once read as three warnings rather than as three footnotes.
 	function M.notice(parent, props, order)
 		local tone = props.tone or "info"
-		local holder = wrapper(parent, { name = "Notice", layoutOrder = order })
+		local holder = P.column(parent, { name = "Notice", layoutOrder = order,
+			size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xs })
 		local bad = tone == "bad"
 		local row = P.row(holder, {
 			size = UDim2.new(1, 0, 0, 0),
@@ -1123,6 +1125,7 @@ return function(env)
 			-- further than the plain one above it. The fill is what marks it, not the inset.
 			padding = { x = bad and theme.space.sm or 0, y = bad and theme.space.xs or 0 },
 			alignY = "Top",
+			layoutOrder = 1,
 		})
 		-- The same slot width the tool and reasoning rows put their caret in, so every
 		-- top-level row in the transcript starts its text at one x. This was a bare 4px
@@ -1148,7 +1151,8 @@ return function(env)
 			flex = "Fill",
 			layoutOrder = 2,
 		})
-		return { root = holder, label = label }
+		local help = bad and deadlineHelp.matches(props.text) and deadlineHelp.new(holder, 2) or nil
+		return { root = holder, label = label, help = help }
 	end
 
 	-- The working indicator: one row that reports the current status text, replaced

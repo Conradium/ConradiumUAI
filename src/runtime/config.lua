@@ -18,7 +18,6 @@ return function(env)
 		ui = {
 			density = "comfortable",
 			accent = "claude",
-			reduceMotion = "auto",
 			layout = "auto",
 			panel = "chat",
 			fontScale = 1,
@@ -192,7 +191,6 @@ return function(env)
 			port = 8790,
 			token = "",
 			runtime = "game",
-			requestTimeout = 180,
 		},
 		-- The local inference relay (mobile companion). It owns the upstream
 		-- connection so every executor-visible call stays short, which is what a
@@ -242,6 +240,10 @@ return function(env)
 	}
 
 	local flush
+	local function retirePreferences(data)
+		if type(data.ui) == "table" then data.ui.reduceMotion = nil end
+		if type(data.bridge) == "table" then data.bridge.requestTimeout = nil end
+	end
 
 	function M.load()
 		local stored = fsx.readJson(FILE, nil)
@@ -250,12 +252,14 @@ return function(env)
 		else
 			M.data = util.deepCopy(DEFAULTS)
 		end
+		retirePreferences(M.data)
 		M.loaded = true
 		M.changed:fire(nil, M.data)
 		return M.data
 	end
 
 	function M.saveNow()
+		retirePreferences(M.data)
 		if not fsx.enabled then
 			M.dirty = false
 			return false, "no filesystem"
@@ -288,6 +292,22 @@ return function(env)
 	-- Fires with the path so a subscriber can react to one setting rather than
 	-- rebuilding on every keystroke of an unrelated field.
 	function M.set(path, value, opts)
+		-- Client motion is always enabled. Retired preferences cannot be restored
+		-- by an old host integration or by replacing the appearance section.
+		if path == "ui.reduceMotion" or tostring(path):sub(1, 16) == "ui.reduceMotion." then
+			return nil, "Client animations are always enabled"
+		end
+		if path == "bridge.requestTimeout" or tostring(path):sub(1, 22) == "bridge.requestTimeout." then
+			return nil, "Bridged requests wait until completion or Stop"
+		end
+		if path == "ui" and type(value) == "table" then
+			value = util.deepCopy(value)
+			value.reduceMotion = nil
+		end
+		if path == "bridge" and type(value) == "table" then
+			value = util.deepCopy(value)
+			value.requestTimeout = nil
+		end
 		opts = opts or {}
 		util.set(M.data, path, value)
 		if not opts.quiet then M.changed:fire(path, value) end
@@ -300,6 +320,7 @@ return function(env)
 	function M.replace(snapshot)
 		if type(snapshot) ~= "table" then return false, "configuration must be a table" end
 		local nextData = util.merge(DEFAULTS, snapshot)
+		retirePreferences(nextData)
 		if fsx.enabled then
 			local ok = fsx.writeJson(FILE, nextData)
 			if not ok then return false, "Could not save imported settings. Your current configuration is unchanged." end
@@ -308,16 +329,14 @@ return function(env)
 		M.loaded = true
 		M.dirty = false
 		M.changed:fire(nil, M.data)
-		-- These live accessibility/layout consumers listen for their exact paths.
+		-- Live layout consumers listen for this exact path.
 		M.changed:fire("ui.layout", M.data.ui.layout)
-		M.changed:fire("ui.reduceMotion", M.data.ui.reduceMotion)
 		return true, fsx.enabled == true
 	end
 
 	function M.toggle(path)
 		local value = M.get(path) ~= true
-		M.set(path, value)
-		return value
+		return M.set(path, value)
 	end
 
 	function M.reset(section)

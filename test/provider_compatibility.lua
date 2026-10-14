@@ -588,6 +588,31 @@ case("cat-jam traits and tool capping preserve OpenCode compatibility", function
 	f.healthy(); f.close()
 end)
 
+case("tool capping preserves supplied declarations and fills the exact ceiling", function()
+	local f = F.new(); local adapter = f.env.require("provider/openai")
+	for _, flat in ipairs({ false, true }) do
+		local tools = {}
+		for _, tool in ipairs(adapter.opencodeTools) do tools[#tools + 1] = flat and tool["function"] or tool end
+		for index = 1, 174 do
+			local fn = { name = "tool_" .. index, parameters = { type = "object" } }
+			tools[#tools + 1] = flat and fn or { type = "function", ["function"] = fn }
+		end
+		local capped = adapter.capTools(tools, 128, true)
+		check("standard declarations at the front still fill the ceiling", #capped == 128)
+		check("input order and schema survive", capped[1] == tools[1] and capped[128] == tools[128])
+		check("a small ceiling is never exceeded", #adapter.capTools(tools, 2, true) == 2)
+	end
+	local generic = { tools = {} }
+	for index = 1, 140 do generic.tools[index] = { type = "function", ["function"] = { name = "custom_" .. index } } end
+	adapter.repairForTest(generic, "Invalid tools: maximum number of items is 128")
+	check("generic repair caps the declared tools", #generic.tools == 128)
+	for index, tool in ipairs(generic.tools) do check("generic repair never invents an OpenCode tool", tool["function"].name == "custom_" .. index) end
+	local record = recordFor(f, "zen"); record.model = "cat-jam-free"
+	record.toolsCap = { model = record.model, limit = 256 }
+	check("a saved cap cannot exceed the model ceiling", adapter.toolCeiling(record) == 128)
+	f.healthy(); f.close()
+end)
+
 case("OpenCode session validator migrates legacy sessions and connection tests stream", function()
 	local f = F.new()
 	local registry = f.env.require("provider/registry")
@@ -599,6 +624,10 @@ case("OpenCode session validator migrates legacy sessions and connection tests s
 	local refreshed = registry.opencodeSessionFor(record, {})
 	check("opencodeSessionFor refreshes legacy session", registry.validOpencodeSession(refreshed))
 	check("record.opencodeSession is updated", record.opencodeSession == refreshed)
+	local corrupt = refreshed:sub(1, -2) .. "!"
+	check("valid timestamp cannot hide a malformed Base62 suffix", not registry.validOpencodeSession(corrupt))
+	record.opencodeSession = corrupt
+	check("malformed saved suffix is migrated", registry.validOpencodeSession(registry.opencodeSessionFor(record, {})))
 
 	local intercepted
 	f.h.http.handler = function(spec)
@@ -621,6 +650,160 @@ case("OpenCode session validator migrates legacy sessions and connection tests s
 	check("body.stream is true", f.h.json.decode(intercepted.body).stream == true)
 	check("header Accept is text/event-stream", intercepted.headers.Accept == "text/event-stream")
 	check("session header is valid inverted timestamp", registry.validOpencodeSession(intercepted.headers["x-opencode-session"]))
+	f.healthy(); f.close()
+end)
+
+case("Responses connection tests retain OpenCode identity on Game and Web routes", function()
+	for _, route in ipairs({ "game", "web", "image" }) do
+		local f = F.new(); local record = recordFor(f, "zen")
+		record.model = "muse-spark-fixture"
+		record.baseUrl = record.baseUrl .. "?tenant=one"
+		record.query = { mode = "a b" }
+		local captured, relayed
+		f.loaded["net/transport"] = { streamForced = function() return route == "web" end,
+			coworkWeb = function() return route ~= "game" end,
+			endpoint = function() return route ~= "game" and { target = "cowork", base = "http://127.0.0.1:8790", token = "fixture" } or nil end,
+			shouldRelay = function(images) return route == "web" or images end }
+		local function answer(spec, headers, via)
+			captured, relayed = { url = spec.url, headers = headers, body = f.h.json.decode(spec.body), sessionId = spec.sessionId }, via
+			local raw = f.h.json.encode({ type = "response.completed", response = { status = "completed", output = {
+				{ type = "message", content = { { type = "output_text", text = "ready" } } },
+			} } })
+			return "data: " .. raw .. "\n\n"
+		end
+		f.loaded["net/relay"] = { request = function(spec, headers)
+			return { status = 200, headers = { ["content-type"] = "text/event-stream" }, body = answer(spec, headers, true), via = "web", inferenceId = "response-preview" }
+		end }
+		f.h.http.handler = function(spec)
+			return { StatusCode = 200, Headers = { ["content-type"] = "text/event-stream" }, Body = answer(spec, spec.headers, false) }
+		end
+		local image = { url = "uai-image://pic_responses_fixture/" .. string.rep("a", 64), sessionId = "responses-session", mediaType = "image/png", bytes = 100 }
+		local result = complete(f, record, { sessionId = "responses-session", stream = false, maxTokens = 12,
+			messages = { { role = "user", content = "ready", images = route == "image" and { image } or nil } } })
+		check(route .. " connection test succeeds", result and result.content == "ready")
+		check(route .. " selects the requested transport", relayed == (route ~= "game"))
+		check("direct provider calls match route", f.h.http.requestCount == (route == "game" and 1 or 0))
+		check("Responses query survives", captured.url == "https://opencode.ai/inference/v1/responses?tenant=one&mode=a%20b")
+		check("Responses retains desktop identity", captured.headers["x-opencode-client"] == "desktop" and captured.headers["User-Agent"] == "opencode/latest/2.0.27/desktop")
+		check("Responses retains valid session", f.env.require("provider/registry").validOpencodeSession(captured.headers["x-opencode-session"]))
+		check("Responses preserves streaming and tool declarations", captured.body.stream == true and #captured.body.tools >= 3)
+		if route ~= "game" then check("preview belongs to conversation", captured.sessionId == "responses-session" and result.requestId == "response-preview") end
+		if route == "image" then check("runtime image references enter Responses input", captured.body.input[1].content[2].type == "input_image" and captured.body.input[1].content[2].image_url == image.url) end
+		f.healthy(); f.close()
+	end
+end)
+
+case("Responses lane handoff preserves the selected key and original deadline", function()
+	local f = F.new(); local record = recordFor(f, "zen"); record.apiKey = "first-key\nsecond-key"
+	local specs, keys = {}, {}
+	local http = f.env.require("net/http"); local send = http.send
+	http.send = function(spec) specs[#specs + 1] = spec; return send(spec) end
+	f.h.http.handler = function(spec)
+		keys[#keys + 1] = spec.headers.Authorization
+		if spec.url:find("/chat/completions", 1, true) then
+			return { StatusCode = 403, Body = f.h.json.encode({ error = { type = "FreeTierError" } }) }
+		end
+		return { StatusCode = 200, Body = f.h.json.encode({ object = "response", status = "completed", output = {
+			{ type = "message", content = { { type = "output_text", text = "recovered" } } },
+		} }) }
+	end
+	local result = complete(f, record)
+	check("fallback succeeds", result and result.content == "recovered")
+	check("fallback stays within original deadline", #specs == 2 and specs[1].deadlineMs == specs[2].deadlineMs)
+	check("fallback keeps the chosen credential", keys[1] == "Bearer first-key" and keys[2] == keys[1])
+	check("next operation rotates once", complete(f, record) and keys[3] == "Bearer second-key")
+	f.healthy(); f.close()
+end)
+
+case("Cowork provider calls and explicit-refusal recovery outlive native request limits", function()
+	for _, lane in ipairs({ "chat", "responses", "messages", "handoff" }) do
+		local f = F.new(); local record = recordFor(f, lane == "messages" and "anthropic-messages" or "zen")
+		if lane == "responses" then record.model = "muse-spark-fixture" end
+		record.apiKey = "first-key\nsecond-key"
+		local calls, deadlines = 0, {}
+		f.loaded["net/transport"] = {
+			streamForced = function() return true end, coworkWeb = function() return true end,
+			shouldRelay = function() return true end,
+			endpoint = function() return { target = "cowork", base = "http://127.0.0.1:8790", token = "fixture" } end,
+		}
+		f.loaded["net/relay"] = { request = function(spec)
+			calls = calls + 1; deadlines[#deadlines + 1] = spec.deadlineMs
+			if calls == 1 then
+				f.h.sched.wait(301)
+				return { status = lane == "handoff" and 403 or 429, body = lane == "handoff" and '{"error":{"type":"FreeTierError"}}' or '{"error":{"message":"quota"}}', headers = {}, via = "web" }
+			end
+			local body
+			if spec.url:find("/responses", 1, true) then
+				body = { object = "response", status = "completed", output = { { type = "message", content = { { type = "output_text", text = "ready" } } } } }
+			elseif lane == "messages" then
+				body = { type = "message", role = "assistant", content = { { type = "text", text = "ready" } }, stop_reason = "end_turn" }
+			else body = { choices = { { message = { role = "assistant", content = "ready" }, finish_reason = "stop" } } } end
+			return { status = 200, body = f.h.json.encode(body), headers = {}, via = "web", inferenceId = "unlimited-response" }
+		end }
+		local result, why = f.run(function() return f.env.require("provider/chat").complete(record, {
+			messages = { { role = "user", content = "hi" } }, timeout = 1,
+		}) end, 303)
+		check(lane .. " outlives old one-second and 300-second limits: " .. tostring(why), result and result.content == "ready")
+		check(lane .. " uses one dispatch per explicit refusal", calls == 2 and f.h.http.requestCount == 0)
+		check(lane .. " recovery retains unlimited bridge deadline", deadlines[1] == math.huge and deadlines[2] == math.huge)
+		f.healthy(); f.close()
+	end
+end)
+
+case("Responses fallback failure stays terminal and never pins the lane", function()
+	for _, failure in ipairs({ "stream", "deadline" }) do
+		local f = F.new(); local record = recordFor(f, "zen"); local calls = 0
+		f.h.http.handler = function(spec)
+			calls = calls + 1
+			if spec.url:find("/chat/completions", 1, true) then
+				if failure == "deadline" then f.h.sched.wait(0.6) end
+				return { StatusCode = 403, Body = f.h.json.encode({ error = { type = "FreeTierError" } }) }
+			end
+			if failure == "deadline" then f.h.sched.wait(1) end
+			return { StatusCode = 200, Body = 'data: {"type":"response.output_text.delta","delta":"partial"}\n\n' }
+		end
+		local result, why = f.run(function() return f.env.require("provider/chat").complete(record, { messages = { { role = "user", content = "hi" } }, timeout = 1 }) end, 1.3)
+		check(failure .. " is terminal", not result and f.env.require("net/http").terminal(why))
+		check("exactly one request per lane", calls == 2)
+		check("failed lane is not remembered", not f.env.require("provider/responses").remembered(record))
+		f.h.sched.advance(1); f.healthy(); f.close()
+	end
+end)
+
+case("Responses key rotation and proxy recovery preserve identity and request budget", function()
+	local f = F.new(); local record = recordFor(f, "zen")
+	record.model, record.apiKey = "muse-spark-fixture", "first-key\nsecond-key"
+	local captured, deadlines = {}, {}
+	local http = f.env.require("net/http"); local send = http.send
+	http.send = function(spec) deadlines[#deadlines + 1] = spec.deadlineMs; return send(spec) end
+	f.h.http.handler = function(spec)
+		captured[#captured + 1] = spec
+		if #captured == 1 then return { StatusCode = 429, Body = '{"error":{"message":"quota"}}' } end
+		if #captured == 2 then return { StatusCode = 403, Body = '{"error":{"message":"unauthorized client"}}' } end
+		return { StatusCode = 200, Body = f.h.json.encode({ object = "response", status = "completed", output = {
+			{ type = "message", content = { { type = "output_text", text = "recovered" } } },
+		} }) }
+	end
+	local result = complete(f, record, { messages = { { role = "user", content = "hi" } }, onRetry = function() error("fixture retry callback") end })
+	check("quota and client refusal recover", result and result.content == "recovered" and #captured == 3)
+	check("only quota rejection rotates the key", captured[1].headers.Authorization == "Bearer first-key" and captured[2].headers.Authorization == "Bearer second-key" and captured[3].headers.Authorization == captured[2].headers.Authorization)
+	check("proxy uses Responses endpoint", captured[3].url == "https://puai-proxy.davidzk.tech/opencode/v1/responses")
+	check("one shared deadline", deadlines[1] == deadlines[2] and deadlines[2] == deadlines[3])
+	for _, spec in ipairs(captured) do check("desktop fingerprint survives recovery", spec.headers["x-opencode-client"] == "desktop" and spec.headers["x-opencode-session"] == captured[1].headers["x-opencode-session"]) end
+	f.healthy(); f.close()
+end)
+
+case("Responses refuses incomplete and failed output even when it contains partial text", function()
+	local f = F.new(); local responses = f.env.require("provider/responses")
+	for _, status in ipairs({ "incomplete", "failed", "cancelled" }) do
+		local value = { object = "response", status = status, incomplete_details = { reason = "max_output_tokens" }, output = {
+			{ type = "message", content = { { type = "output_text", text = "partial" } } },
+		} }
+		check(status .. " JSON is not a completion", responses.fromResponse(value).streamError ~= nil)
+		local stream = "data: " .. f.h.json.encode({ type = "response." .. status, response = value }) .. "\n\n"
+		stream = stream .. "data: " .. f.h.json.encode({ type = "response.completed", response = { status = "completed" } }) .. "\n\n"
+		check(status .. " stream cannot become successful later", responses.parse(stream).streamError ~= nil)
+	end
 	f.healthy(); f.close()
 end)
 

@@ -66,7 +66,7 @@ test('cancelled and truncated provider streams do not become successful answers'
 
 test('bridge authenticates, redelivers unacknowledged commands, and deduplicates event batches', async t => {
   const reserve=http.createServer();reserve.listen(0,'127.0.0.1');await once(reserve,'listening');const port=reserve.address().port;await new Promise(r=>reserve.close(r));
-  const process=spawn(global.process.execPath,['bridge/server.js','--port',String(port)],{cwd:require('node:path').join(__dirname,'../..'),stdio:['ignore','pipe','pipe']});
+  const process=spawn(global.process.execPath,['bridge/server.js','--port',String(port)],{cwd:require('node:path').join(__dirname,'../..'),env:{...global.process.env,UAI_BRIDGE_TEST_NO_UPDATES:'1'},stdio:['ignore','pipe','pipe']});
   t.after(()=>process.kill());
   let output=''; const token=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Server did not start')),5000);process.stdout.on('data',chunk=>{output+=chunk;const match=output.match(/Token\s+([a-f0-9]{64})/);if(match){clearTimeout(timer);resolve(match[1]);}});process.once('error',reject);});
   const base=`http://127.0.0.1:${port}`;
@@ -178,4 +178,39 @@ test('a malformed request target returns 400 and the server keeps serving', asyn
   const hello = await fetch(base + '/api/hello', { headers: { Authorization: 'Bearer ' + token } });
   assert.equal(hello.status, 200);
   assert.equal((await hello.json()).protocol, 2);
+});
+
+test('mobile inbox polls return within their requested wait and replacements release old sockets', async t => {
+  const { base, token } = await startBridge(t);
+  const headers = { Authorization: 'Bearer ' + token, 'X-UAI-Client': 'mobile-fixture' };
+  const hello = await (await fetch(base + '/api/hello', { headers })).json();
+  assert.equal(hello.capabilities.agentInbox.waitHeader, 'X-UAI-Poll-Wait-Ms');
+  const started = Date.now();
+  const poll = await fetch(base + '/api/agent/inbox', { headers: { ...headers, 'X-UAI-Poll-Wait-Ms': '80' } });
+  assert.deepEqual(await poll.json(), { commands: [] });
+  assert.ok(Date.now() - started < 1500, 'short idle poll finishes before mobile HTTP deadline');
+  assert.equal((await fetch(base + '/api/agent/inbox', { headers: { ...headers, 'X-UAI-Poll-Wait-Ms': 'bad' } })).status, 400);
+  const old = fetch(base + '/api/agent/inbox', { headers });
+  await sleep(50);
+  const replacement = fetch(base + '/api/agent/inbox', { headers: { ...headers, 'X-UAI-Poll-Wait-Ms': '80' } });
+  assert.deepEqual(await (await old).json(), { commands: [] });
+  assert.deepEqual(await (await replacement).json(), { commands: [] });
+});
+
+test('malformed actions and acknowledgement batches never mutate the command queue', async t => {
+  const { base, token } = await startBridge(t);
+  const headers = { Authorization: 'Bearer ' + token, 'content-type': 'application/json' };
+  const post = (route, value) => fetch(base + route, { method: 'POST', headers, body: JSON.stringify(value) });
+  for (const route of ['/api/abort', '/api/clear']) assert.equal((await post(route, null)).status, 400);
+  const command = { type: 'abort', commandId: 'atomic-ack-command' };
+  assert.equal((await post('/api/command', command)).status, 202);
+  assert.equal((await post('/api/agent/ack', { results: [{ id: command.commandId, ok: true }, null] })).status, 400);
+  const receipt = await (await fetch(base + '/api/commands/' + command.commandId, { headers })).json();
+  assert.equal(receipt.state, 'queued');
+  const permission = { id: 'approval-fixture', allow: true, commandId: 'permission-command' };
+  const first = await (await post('/api/permission', permission)).json();
+  const second = await (await post('/api/permission', permission)).json();
+  assert.equal(first.id, second.id);
+  const inbox = await (await fetch(base + '/api/agent/inbox', { headers })).json();
+  assert.equal(inbox.commands.length, 2);
 });

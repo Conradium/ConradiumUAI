@@ -4,12 +4,17 @@ A universal AI agent that runs inside a Roblox client. It works in any game,
 with Chat Completions and Anthropic Messages endpoints, including compatible
 local servers and relays.
 
-**Version 3.0.0 — October 13, 2026.** Reuse unchanged source analysis, find files
-without reading their contents, and run selected project tests. Larger useful
-result pages and retained HTTP/web snapshots reduce repeated reads. Agent,
-streaming, capture and scheduling changes avoid duplicate work; tool results
-report observed changes, incomplete coverage and unavailable capabilities more
-precisely. UI LIB remains 1.3.0 and the embedding SDK 1.0.0.
+**Version 3.1.0 — October 14, 2026: Bridge improvements.** Cowork gets a complete
+visual redesign, rebuilt dialogs, automatic bridge updates, and automatic Web
+runtime on connection with Game runtime on disconnect. Bridged model requests
+wait without a configurable time limit. The Roblox mobile sidebar uses smaller
+navigation text. Mobile relay discovery
+stays quiet during routine checks, and the OpenCode Responses path works through
+the bridge. The redesigned Windows app is a single executable that detects or
+downloads Node.js and fetches its own GitHub release updates. Deadline errors
+link to Discord help.
+Client animations are always enabled. UI LIB remains 1.3.0 and the
+embedding SDK 1.0.0.
 See the [release notes](CHANGELOG.md), [script development manual](docs/SCRIPT_DEVELOPMENT.md)
 and [UI library guide](docs/UI_LIBRARY.md). The client exposes the scripting
 manual through `scripting_docs`: start with `quickstart`, then read only the
@@ -22,9 +27,9 @@ it. The model modal edits the same global effort setting, including for other
 models when **Options → Reasoning support** is enabled. The Thinking row estimates
 visible text only. A long retained trace is labelled
 **Excerpt**, not a 5,999-token model limit. See [provider behavior](docs/PROVIDER_COMPATIBILITY.md).
-Use the [3.0.0 verification record](docs/TESTING_3.0.0.md) for focused offline checks and
-the features to exercise in Roblox. The [audit ledger](docs/AUDIT_3.0.0.md) records
-module and tool coverage, changes, retained behavior and exclusions.
+Use the [3.1.0 verification record](docs/TESTING_3.1.0.md) for focused bridge checks
+and native follow-up. The earlier [3.0.0 audit ledger](docs/AUDIT_3.0.0.md) retains
+its module and tool coverage.
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai.lua"))()
@@ -651,10 +656,13 @@ first two entirely.
 
 Cowork gives your Roblox conversation more room in the browser. Keep Roblox and
 its local bridge running on the same computer. The [Windows desktop launcher](desktop/README.md)
-includes its runtimes: extract the ZIP, open **UAI Bridge.exe**, click **Start
-Cowork**, and load the updated UAI script. It discovers the app on dedicated port
-**28791** and reconnects automatically after app restarts. The matching script is
-also included in the package under `client/uai.lua`.
+is a single **UAI-Bridge-3.1.0-win-x64.exe** download. Open it directly,
+complete Node setup if needed using **Download Node.js** or an existing
+installation, click **Start Cowork**, and load the updated UAI script. It discovers the app on dedicated port
+**28791** and reconnects automatically after app restarts. The executable includes
+.NET, the bridge, browser assets and matching client, and prepares its embedded
+files automatically. Node.js is detected or installed separately; no ZIP extraction
+or adjacent supporting files are needed.
 
 For manual terminal setup, **Node.js 18+** is required; there are no production
 npm dependencies. An enabled manual bridge takes priority over desktop discovery.
@@ -677,10 +685,15 @@ can download them. Node verifies the package and restores its real filenames.
 No manual renaming is needed. A failed download preserves the previous launcher.
 After restarting the bridge, use its new token and browser link.
 
-Choose **Web runtime** in Cowork for live responses when your provider supports
-streaming. **Game runtime** uses the provider connection in Roblox. Switch while
-work is idle. The provider deadline defaults to 180 seconds and can be changed
-in Cowork's advanced settings.
+Cowork selects **Web runtime** automatically on authenticated connection and
+restores **Game runtime** on disconnect. Bridged requests have no overall time
+limit or timeout setting; individual status polls remain short and recoverable.
+Stop cancels the original request without submitting it again.
+
+Bridge releases download automatically from GitHub and apply when work is idle.
+The desktop app also downloads its own updates and applies them on restart.
+Both verify package hashes and keep a working fallback. Existing desktop 1.0
+users need one manual download of the 3.1.0 executable to gain the updater.
 
 The browser includes conversations, provider/model controls, code attachments,
 permissions, tool forms, subagents, chat loops, memory, logs, exports and settings.

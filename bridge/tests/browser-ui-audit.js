@@ -58,20 +58,24 @@ function contrast(foreground, background) {
     const context = await browser.newContext({ viewport: { width: 390, height: 568 }, colorScheme: 'light', reducedMotion: 'reduce' });
     page = await context.newPage(); page.setDefaultTimeout(12000);
     const errors = [], outcomes = new Map();
-    let commandError = null, unauthorized = false;
+    let commandError = null, commandUncertain = false, unauthorized = false, receiptDelay = 0, commandCount = 0;
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/api/command', route => {
       if (unauthorized) return route.fulfill({ status: 401, body: 'Invalid token' });
       const command = route.request().postDataJSON();
-      outcomes.set(command.commandId, commandError);
+      commandCount++;
+      outcomes.set(command.commandId, { error: commandError, uncertain: commandUncertain });
       return route.fulfill({ json: { id: command.commandId } });
     });
-    await page.route('**/api/commands/*', route => {
-      const error = outcomes.get(new URL(route.request().url()).pathname.split('/').at(-1));
-      return route.fulfill({ json: { state: 'completed', result: error ? { ok: false, error } : { ok: true, data: { ok: true } } } });
+    await page.route('**/api/commands/*', async route => {
+      const { error, uncertain } = outcomes.get(new URL(route.request().url()).pathname.split('/').at(-1)) || {};
+      if (receiptDelay) await new Promise(resolve => setTimeout(resolve, receiptDelay));
+      return route.fulfill({ json: { state: 'completed', result: error ? { ok: false, error, uncertain } : { ok: true, data: { ok: true } } } });
     });
     const navigate = async name => {
-      if (page.viewportSize().width <= 768 && await page.locator('#sidebarToggle').getAttribute('aria-expanded') !== 'true') await page.locator('#sidebarToggle').click();
+      // The resize event may arrive after setViewportSize resolves. The drawer
+      // class records the user's mobile intent even while aria-expanded catches up.
+      if (page.viewportSize().width <= 768 && !await page.locator('body').evaluate(node => node.classList.contains('sidebar-open'))) await page.locator('#sidebarToggle').click();
       await page.locator(`#sidebar [data-page="${name}"]`).first().click();
     };
     const screenshot = async name => {
@@ -96,6 +100,12 @@ function contrast(foreground, background) {
     await page.goto(bridge.base + '/#t=' + bridge.token);
     await page.locator('#app').waitFor({ state: 'visible' });
     await page.waitForFunction(() => document.querySelector('#modelLabel').textContent === 'fixture-model');
+    assert.equal(await page.locator('img[src="icon.svg"]').count(), 0, 'the workspace contains no UAI logo imagery');
+    assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), 'icon.svg');
+    assert.equal(await page.evaluate(async () => {
+      const svg = await (await fetch('icon.svg')).text();
+      return new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement.childElementCount;
+    }), 0, 'the favicon is blank');
 
     const palette = await page.evaluate(() => {
       const css = getComputedStyle(document.documentElement);
@@ -202,10 +212,12 @@ function contrast(foreground, background) {
 
     // Live selections must update while their activating buttons still have focus.
     await navigate('cowork');
-    await page.locator('[data-focus-key="runtime:game"]').click(); state.runtime = 'game'; await push();
-    assert.equal(await page.locator('[data-focus-key="runtime:game"]').getAttribute('aria-pressed'), 'true');
-    assert.equal(await page.locator('[data-focus-key="runtime:web"]').getAttribute('aria-pressed'), 'false');
-    assert.equal(await activeKey(), 'runtime:game');
+    assert.match(await page.locator('.runtime-summary').textContent(), /Web runtime.*Automatic/s);
+    assert.equal(await page.locator('.runtime-summary button').count(), 0, 'runtime follows the connection without an override control');
+    assert.match(await page.locator('.runtime-summary').textContent(), /waits without a time limit/);
+    assert.equal(await page.getByLabel('Provider timeout in seconds').count(), 0, 'Web inference has no timeout setting');
+    state.runtime = 'game'; await push();
+    assert.match(await page.locator('.runtime-summary').textContent(), /Game runtime.*Automatic/s);
     await navigate('settings');
     await page.locator('[data-focus-key="permission:readonly"]').click(); state.permissions.mode = 'readonly'; await push();
     assert.equal(await page.locator('[data-focus-key="permission:readonly"]').getAttribute('aria-pressed'), 'true');
@@ -294,7 +306,7 @@ function contrast(foreground, background) {
     commandError = null;
 
     await page.setViewportSize({ width: 390, height: 844 }); await navigate('providers');
-    await page.getByRole('button', { name: '＋ Add provider', exact: true }).click();
+    await page.getByRole('button', { name: 'Add provider', exact: true }).click();
     await page.getByLabel('Name', { exact: true }).fill('Audited provider');
     commandError = saveError; await page.getByRole('button', { name: 'Save', exact: true }).click();
     await page.waitForFunction(text => document.querySelector('#modalNotice')?.textContent.includes(text), saveError);
@@ -331,8 +343,103 @@ function contrast(foreground, background) {
     await screenshot('bridge-audit-forced-colors'); await page.emulateMedia({ forcedColors: 'none' });
     state.agent.busy = false; await push();
 
+    // All dialog families share bounded content, a reachable header and action footer.
+    state.settings.ui.fontScale = 1.4; state.settings.ui.reduceMotion = 'on';state.settings.bridge = { requestTimeout: 180 };
+    state.tools = [{ name: 'audit_tool', description: 'A tool with a long code editor and multiple fields.', available: true, enabled: true, risk: 'write', group: 'audit', parameters: { type: 'object', properties: { code: { type: 'string', description: 'Code to inspect.' }, options: { type: 'object' }, count: { type: 'integer' } } } }];
+    await push();
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    const openDialog = async kind => {
+      if (kind === 'provider') { await navigate('providers'); await page.getByRole('button', { name: 'Add provider', exact: true }).click(); }
+      if (kind === 'model') { await navigate('chat'); await page.locator('#modelButton').click(); }
+      if (kind === 'options') { await navigate('chat'); await page.locator('#options').click(); }
+      if (kind === 'thread') { if (page.viewportSize().width <= 768) await page.locator('#sidebarToggle').click(); await page.locator('.thread-menu').click(); }
+      if (kind === 'import') { await navigate('settings'); await page.getByRole('button', { name: 'Import full config', exact: true }).click(); }
+      if (kind === 'tool') { await navigate('tools'); await page.getByRole('button', { name: 'Run…', exact: true }).click(); }
+    };
+    for (const size of [{ width: 1440, height: 960 }, { width: 390, height: 844 }, { width: 320, height: 480 }, { width: 844, height: 390 }]) {
+      await page.setViewportSize(size);
+      for (const kind of ['provider', 'model', 'options', 'import', 'tool', 'thread']) {
+        await openDialog(kind);
+        await page.locator('#modal').evaluate(node => Promise.all(node.getAnimations().map(animation => animation.finished)));
+        await withinViewport('#modalClose', kind + ' close at ' + size.width);
+        await withinViewport('#modalFooter', kind + ' footer at ' + size.width);
+        const geometry = await page.locator('#modal').evaluate(node => ({ width: node.clientWidth, scroll: node.scrollWidth, body: document.querySelector('#modalBody').clientHeight }));
+        assert.ok(geometry.scroll <= geometry.width + 1 && geometry.body >= 48, kind + ' must have a useful content scrollport: ' + JSON.stringify(geometry));
+        await page.locator('#modalBody').evaluate(node => { node.scrollTop = node.scrollHeight; });
+        await withinViewport('#modalClose', kind + ' close after scrolling');
+        if (size.width === 390 || size.width === 1440) await screenshot('bridge-310-' + kind + '-' + size.width);
+        await closeModal();
+        if (kind === 'thread' && size.width <= 768) await page.locator('#closeSidebar').click();
+      }
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('#sidebarToggle').click();
+    assert.equal(await page.locator('.more-nav nav button').first().evaluate(node => parseFloat(getComputedStyle(node).fontSize)), 12, 'game font scaling must not enlarge mobile navigation');
+    assert.ok(await page.locator('.more-nav nav button').first().evaluate(node => node.getBoundingClientRect().height) >= 38, 'compact labels keep usable touch targets');
+    await screenshot('bridge-310-mobile-sidebar');await page.locator('#closeSidebar').click();
+    await navigate('settings');await page.getByText('Workspace appearance', { exact: true }).click();
+    assert.equal(await page.locator('[data-setting="ui.reduceMotion"]').count(), 0, 'the script animation setting is no longer exposed');
+    assert.equal(await page.locator('[data-setting="bridge.requestTimeout"]').count(), 0, 'legacy connection snapshots cannot reintroduce the timeout setting');
+    await openDialog('provider');
+    assert.notEqual(await page.locator('#modal').evaluate(node => getComputedStyle(node).animationName), 'none', 'legacy game motion settings cannot turn off browser transitions');
+    await closeModal();
+
+    // Double submits are suppressed, and a finished old action cannot close a new dialog.
+    await page.setViewportSize({ width: 1280, height: 800 });await openDialog('provider');
+    const before = commandCount;receiptDelay = 700;
+    await page.getByLabel('Name', { exact: true }).fill('Pending provider');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.locator('#modalForm').evaluate(node => node.requestSubmit());
+    assert.equal(await page.locator('#modal').getAttribute('aria-busy'), 'true');
+    await closeModal();await openDialog('model');
+    await page.waitForTimeout(850);receiptDelay = 0;
+    assert.equal(commandCount, before + 1, 'a pending form submits once');
+    assert.equal(await page.locator('#modalTitle').textContent(), 'Models', 'an old save cannot dismiss a replacement modal');
+    assert.equal(await page.locator('#modal').evaluate(node => node.open), true);
+    await closeModal();
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'modelButton', 'closing restores the original dialog invoker');
+    await page.locator('#options').click();await page.getByRole('button', { name: /Model and effort/ }).click();await closeModal();
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'options', 'replacing a dialog retains its original invoker');
+    await page.locator('#modelButton').click();
+    const dialogRect = await page.locator('#modal').boundingBox();
+    await page.mouse.move(dialogRect.x + 50, dialogRect.y + 40);await page.mouse.down();await page.mouse.move(2, 2);await page.mouse.up();
+    assert.equal(await page.locator('#modal').evaluate(node => node.open), true, 'dragging from a dialog onto its backdrop cannot dismiss it');
+    await page.mouse.click(2, 2);await page.locator('#modal').waitFor({ state: 'hidden' });
+    await openDialog('provider');await page.keyboard.press('Escape');await page.locator('#modal').waitFor({ state: 'hidden' });
+    await openDialog('provider');commandError = 'Fixture: this action may still be running.';commandUncertain = true;
+    const uncertainCount = commandCount, uncertainRequest = requestFor('provider:save');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    const uncertainId = (await uncertainRequest).postDataJSON().commandId;
+    await page.getByRole('button', { name: 'Check status', exact: true }).waitFor({ state: 'visible' });
+    assert.equal(await page.getByRole('button', { name: 'Save', exact: true }).isDisabled(), true, 'uncertain actions keep mutation controls locked');
+    await closeModal();await openDialog('provider');await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.getByRole('button', { name: 'Check status', exact: true }).waitFor({ state: 'visible' });
+    assert.equal(commandCount, uncertainCount + 1, 'reopening a form cannot redispatch the same unresolved action');
+    outcomes.set(uncertainId, { error: null });commandError = null;commandUncertain = false;
+    await page.getByRole('button', { name: 'Check status', exact: true }).click();await page.locator('#modal').waitFor({ state: 'hidden' });
+    assert.equal(commandCount, uncertainCount + 1, 'checking an uncertain action reads its original receipt without re-dispatching');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+
+    // Deadline guidance belongs only to presentation and links to the existing community.
+    const timeoutText = 'deadline exceeded: the transport timed out';
+    await push({ sessionId: 'audit', snapshot: [{ kind: 'error', sessionId: 'audit', message: timeoutText }, { kind: 'error', sessionId: 'audit', message: 'HTTP 429: request rate limited' }] });
+    await navigate('chat');
+    assert.equal(await page.locator('#transcript > .error .deadline-help').count(), 1);
+    assert.equal(await page.locator('#transcript > .error .deadline-help').getAttribute('href'), 'https://discord.gg/9xYyyYuKap');
+    assert.equal(await page.locator('#transcript > .error .error-message').first().textContent(), timeoutText);
+    await page.evaluate(() => {
+      renderer.start({ id: 'deadline-preview', sessionId: 'audit' });
+      renderer.done({ id: 'deadline-preview', sessionId: 'audit', state: 'failed', error: 'transport_timeout: request failed' });
+    });
+    assert.equal(await page.locator('.stream-error .deadline-help').count(), 1, 'streamed timeout failures receive the same tutorial action');
+    await screenshot('bridge-310-deadline-help');
+    await page.evaluate(() => apply({ kind: 'bridge:update', update: { state: 'staged', currentVersion: '3.1.0', availableVersion: '3.1.1' } }));
+    await navigate('cowork');
+    assert.match(await page.locator('.bridge-update').textContent(), /3\.1\.0.*3\.1\.1 available.*Ready when the workspace is idle/s);
+    await screenshot('bridge-310-update-status');
+
     // Reauthentication must remove the modal top layer and move focus to the token.
-    await navigate('providers'); await page.getByRole('button', { name: '＋ Add provider', exact: true }).click();
+    await navigate('providers'); await page.getByRole('button', { name: 'Add provider', exact: true }).click();
     unauthorized = true; await page.getByRole('button', { name: 'Save', exact: true }).click();
     await page.locator('#gate').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#modal').evaluate(node => node.open), false, '401 must dismiss the stale modal');

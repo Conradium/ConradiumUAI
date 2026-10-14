@@ -13,15 +13,14 @@ return function(env)
 			if not result then error(err, 0) end
 			return result
 		elseif kind == "runtime" then
-			if #sessions.busy() > 0 or #env.require("agent/subagent").running() > 0
-				or #env.require("runtime/chatloops").running() > 0 then error("Stop running work before switching runtime", 0) end
 			if command.value ~= "game" and command.value ~= "web" then error("Unknown runtime", 0) end
-			config.set("bridge.runtime", command.value)
+			if command.value ~= config.get("bridge.runtime", "game") then
+				error("Runtime follows the bridge connection automatically: Web when connected, Game when disconnected", 0)
+			end
 		elseif kind == "setting" then
 			local path = tostring(command.path or "")
 			local section = path:match("^([^.]+)%.")
-			if not ({ ui = true, agent = true, logs = true, memory = true, iy = true, identity = true, relay = true })[section]
-				and path ~= "bridge.requestTimeout" then error("Setting is not editable here", 0) end
+			if not ({ ui = true, agent = true, logs = true, memory = true, iy = true, identity = true, relay = true })[section] then error("Setting is not editable here", 0) end
 			local default = util.get(config.defaults, path)
 			if default == nil or type(default) == "table" or type(command.value) ~= type(default) then error("Invalid setting value", 0) end
 			if type(command.value) == "number" and (command.value ~= command.value or math.abs(command.value) > 10000000 or command.value < 0) then error("Invalid numeric setting", 0) end
@@ -29,7 +28,6 @@ return function(env)
 			local choices = {
 				["ui.density"] = { comfortable = true, compact = true },
 				["ui.accent"] = { claude = true, aurora = true, indigo = true, amber = true, rose = true },
-				["ui.reduceMotion"] = { auto = true, on = true, off = true },
 				["ui.layout"] = { auto = true, sheet = true, panel = true, window = true, tv = true },
 				["ui.codeTheme"] = { dark = true, light = true },
 				["ui.transcriptWidth"] = { narrow = true, medium = true, wide = true },
@@ -41,7 +39,7 @@ return function(env)
 			local ranges = { ["ui.fontScale"] = { 0.85, 1.4 }, ["agent.temperature"] = { 0, 2 },
 				["agent.toolConcurrency"] = { 1, 8 }, ["agent.maxTurns"] = { 1, 1000 },
 				["agent.toolTimeout"] = { 1, 86400 }, ["agent.requestTimeout"] = { 1, 86400 },
-				["bridge.requestTimeout"] = { 10, 86400 }, ["agent.retries"] = { 1, 10 },
+				["agent.retries"] = { 1, 10 },
 				["agent.contextTokens"] = { 1000, 2000000 }, ["agent.contextFraction"] = { 0.3, 0.95 },
 				["relay.port"] = { 1, 65535 },
 				["agent.maxTokens"] = { 1, 1000000 } }

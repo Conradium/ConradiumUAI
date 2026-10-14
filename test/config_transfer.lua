@@ -51,7 +51,6 @@ local function envelope(snapshot)
 end
 local full = util.deepCopy(config.defaults)
 full.ui.density = "compact"
-full.ui.reduceMotion = "on"
 full.ui.layout = "window"
 full.ui.window = { width = 1050, height = 700, x = 30, y = 40, maximised = false, placed = true }
 full.ui.showToolDetail = true
@@ -79,7 +78,7 @@ full.providers = {
 }
 full.identity.extraHeaders = { ["X-Identity"] = "identity-secret" }
 full.memory.entries = { { key = "preference", value = "concise", at = 123 } }
-full.bridge = { enabled = true, autoDiscover = false, port = 8795, token = "bridge-secret", runtime = "web", requestTimeout = 300 }
+full.bridge = { enabled = true, autoDiscover = false, port = 8795, token = "bridge-secret", runtime = "web" }
 full.logs = { level = "debug", mirror = true }
 full.skills.disabled = { ["sample.md"] = true, ["other.md"] = false }
 full.extension = { token = "extension-secret", active = false }
@@ -108,12 +107,25 @@ local ok, persisted = transfer.apply(preview)
 check("apply succeeds and persists", ok and persisted and #writes == 1 and writes[1].path == "config.json")
 check("apply replaces full configuration including old providers", same(config.data, full) and config.data.stale == nil)
 check("persisted snapshot matches the complete applied snapshot", same(writes[1].value, full))
-check("apply publishes one complete snapshot and live layout preferences", #events == 3 and events[1].path == nil and events[1].value == config.data and events[2].path == "ui.layout" and events[3].path == "ui.reduceMotion")
+check("apply publishes one complete snapshot and live layout preferences", #events == 2 and events[1].path == nil and events[1].value == config.data and events[2].path == "ui.layout")
 check("applied settings do not alias preview", config.data ~= preview.config and config.data.providers.list ~= preview.config.providers.list)
 local minimal = { version = 1, ui = {}, agent = {}, providers = {}, permissions = {} }
 local normalized = assert(transfer.validate(minimal))
 check("empty known sections receive defaults", same(normalized, config.defaults))
 check("unknown JSON extension fields survive normalization", normalized.extension == nil and full.extension.token == preview.config.extension.token)
+local legacy = util.deepCopy(full)
+legacy.ui.reduceMotion = "on"
+legacy.bridge.requestTimeout = 35
+local migrated = assert(transfer.preview(util.encode(envelope(legacy))))
+check("older exports retire motion preferences without changing other values", same(migrated.config, full) and legacy.ui.reduceMotion == "on")
+local motionEvents, motionWrites = #events, #writes
+local motionSet, motionError = config.set("ui.reduceMotion", "on")
+check("motion cannot be disabled through the configuration API", motionSet == nil and type(motionError) == "string"
+	and config.get("ui.reduceMotion") == nil and #events == motionEvents and #writes == motionWrites)
+check("motion cannot be restored as a nested configuration map", config.set("ui.reduceMotion.enabled", false) == nil)
+check("motion cannot be toggled through the configuration API", config.toggle("ui.reduceMotion") == nil)
+check("bridge duration is not configurable", config.set("bridge.requestTimeout", 35) == nil and config.defaults.bridge.requestTimeout == nil)
+check("bridge duration cannot be restored as a nested map", config.set("bridge.requestTimeout.seconds", 35) == nil)
 
 local before, beforeEvents, beforeWrites
 local function unchanged()
@@ -137,7 +149,6 @@ reject("reject invalid known preference type", function(c) c.ui.notifications = 
 reject("reject nested known preference type", function(c) c.ui.window.width = "wide" end)
 reject("reject invalid appearance choice", function(c) c.ui.density = "very-dense" end)
 reject("reject invalid inference runtime", function(c) c.bridge.runtime = "unknown" end)
-reject("reject invalid relay timeout", function(c) c.bridge.requestTimeout = 0 end)
 reject("reject invalid permissions mode", function(c) c.permissions.mode = "sometimes" end)
 reject("reject invalid permissions verdict", function(c) c.permissions.rules.read = "maybe" end)
 reject("reject non-boolean skill preferences", function(c) c.skills.disabled["sample.md"] = "yes" end)

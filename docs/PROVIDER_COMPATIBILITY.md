@@ -1,10 +1,10 @@
 # Provider compatibility and WebSockets
 
-Applies to **2.8.0**, October 12, 2026.
+Applies to **3.1.0**, October 14, 2026.
 
-UAI implements two inference protocols: **Chat Completions** and **Anthropic
-Messages**. A provider works through one of these APIs, including when it is a
-local server or a relay. This is protocol compatibility, not a guarantee that
+UAI implements **Chat Completions** and **Anthropic Messages**, plus a dedicated
+**Responses** path for supported OpenCode models. Local servers and other custom
+providers use the first two APIs. This is protocol compatibility, not a guarantee that
 every model, server version, account or proprietary API works.
 
 The compatibility checks use synthetic HTTP responses and socket events. They
@@ -35,7 +35,10 @@ Standing prompt rules precede changing environment metadata so compatible
 providers can reuse more of their prompt cache. Actual cache use and latency
 depend on the endpoint. Buffered executor HTTP delivers the response at completion;
 UI changes cannot expose tokens before delivery. Native requests still have a
-300-second maximum, regardless of a higher configured wait.
+300-second maximum, regardless of a higher configured wait. Connected Cowork
+inference has no overall client or bridge time limit; its individual status polls
+stay short and Stop remains available. Direct/companion timeout settings do not
+shorten Cowork requests, and the old bridge timeout setting is retired.
 
 Stream failures preserve the provider's error code and message when supplied,
 including plain-text `event: error` responses. Details are redacted and bounded.
@@ -45,8 +48,9 @@ socket/HTTP dispatch or execute a partially delivered tool call.
 ## Image input
 
 PNG, JPEG and WebP attachments from the web bridge are delivered as actual image
-content: Chat Completions receives `image_url` data URLs and Messages receives
-base64 `image` blocks. Select a model and endpoint that support vision. Text-only
+content: Chat Completions receives `image_url` data URLs, Messages receives
+base64 `image` blocks, and the OpenCode Responses path receives `input_image`
+blocks. Select a model and endpoint that support vision. Text-only
 models remain usable for conversations without image attachments.
 
 Reload the updated game client and restart the updated bridge to enable this
@@ -83,7 +87,7 @@ An ordinary text reply does not prove tool support. Agent use also needs a model
 and context window large enough for the selected tools and conversation.
 
 Ollama's native `/api/chat` and `/api/generate`, Gemini `generateContent`, OpenAI
-Responses/Realtime, legacy Completions, Bedrock's native API and other proprietary
+Realtime, generic Responses endpoints, legacy Completions, Bedrock's native API and other proprietary
 formats are not adapters in this client. Use a compatible surface or an external
 adapter. Known mismatched native paths produce an actionable diagnostic.
 
@@ -100,7 +104,7 @@ the key cannot list models, manual ids remain usable.
 | AgentRouter | `agentrouter.org/v1` | Messages | x-api-key |
 | OpenAI | `api.openai.com/v1` | Chat Completions | Bearer |
 | OpenRouter | `openrouter.ai/api/v1` | Chat Completions | Bearer |
-| OpenCode Zen | `opencode.ai/zen/v1` | Chat Completions | Bearer |
+| OpenCode Zen | `opencode.ai/zen/v1` | Chat Completions; dedicated Responses lane when required | Bearer |
 | Azure AI Foundry | `<resource>.openai.azure.com/openai/v1` | Chat Completions | api-key |
 | Anthropic Messages | `api.anthropic.com/v1` | Messages | x-api-key |
 | Anthropic OpenAI compatibility | `api.anthropic.com/v1` | Chat Completions | x-api-key |
@@ -120,6 +124,25 @@ Relays can impose account, model or official-client restrictions that an adapter
 does not remove. Discovery is not authorization to use every listed model.
 
 ## Connection and response behavior
+
+### OpenCode protocol compatibility
+
+The four October 13 OpenCode fixes remain in 3.1.0: timestamp-based session
+identity with legacy-session migration, connection tests with the current
+conversation identity, the required tool declarations and 128-tool ceiling, and
+the model-specific Chat/Responses selection. The dedicated Responses lane is
+used for `muse-spark` models and remembered successful protocol recovery.
+
+Responses requests use the same transport decision as ordinary chat, including
+the Cowork bridge and companion. The bridge projects text, reasoning and tool
+events, recognizes Responses completion, and treats failed or incomplete streams
+as errors. Protocol recovery retains the original selected key. Direct and
+companion requests retain their remaining deadline; Cowork requests have no
+overall duration limit. A lost status poll cannot cause another provider dispatch.
+
+These are compatibility behaviors covered with synthetic providers. The
+historical [OpenCode investigation](../REPORT_OPENCODE_ZEN_LOCKOUT_SOLVED.md)
+records the earlier live observations; upstream availability can change.
 
 ### Automatic unauthorized-client recovery
 

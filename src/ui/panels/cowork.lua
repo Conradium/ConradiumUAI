@@ -98,29 +98,34 @@ return function(env)
 			end
 			local parts = { "port " .. tostring(status.port) }
 			if status.server ~= "" then parts[#parts + 1] = "server " .. status.server end
-			if #token > 10 then parts[#parts + 1] = "token " .. token:sub(1, 6) .. "…" .. token:sub(-4) end
+			if #token > 10 then parts[#parts + 1] = "paired ···" .. token:sub(-4) end
 			if (status.placeId or 0) > 0 then parts[#parts + 1] = "place " .. tostring(status.placeId) end
 			if status.error then parts[#parts + 1] = tostring(status.error) end
 			relayDetail.Text = table.concat(parts, "  ·  ")
 		end
-		C.segmented(relayCard, {
+		local relayMode = C.segmented(relayCard, {
 			options = { { label = "Auto", value = "auto" }, { label = "Always", value = "always" }, { label = "Off", value = "off" } },
 			value = config.get("relay.mode", "auto"), layoutOrder = 5,
 			onChange = function(value) config.set("relay.mode", value) end })
 		local relayButtons = P.row(relayCard, { size = UDim2.new(1, 0, 0, 0), auto = "Y", wrap = true, gap = theme.space.sm, layoutOrder = 6 })
 		P.button(relayButtons, {
 			name = "RelayScan", text = "Scan now", variant = "secondary", size = "sm", layoutOrder = 1,
-			onClick = function()
+			onClick = function(button)
+				button.setEnabled(false)
+				button.setText("Scanning…")
 				local ok, err = relayLink.scan()
+				if not relayCard.Parent then return end
+				button.setEnabled(true)
+				button.setText("Scan now")
 				describeRelay()
 				if not ok then overlay.toast(tostring(err or "No companion answered on that port"), "warn", 3) end
 			end })
 		P.button(relayButtons, {
-			name = "RelayUnpair", text = "Unpair", variant = "ghost", size = "sm", layoutOrder = 2,
+			name = "RelayUnpair", text = "Reset pairing", variant = "ghost", size = "sm", layoutOrder = 2,
 			onClick = function()
 				relayLink.forget()
 				describeRelay()
-				overlay.toast("Companion unpaired", "good", 2)
+				overlay.toast("Pairing reset", "good", 2)
 			end })
 
 		local desktopCard
@@ -178,9 +183,11 @@ return function(env)
 		-- Everything on this row is a fact about the running bridge rather than a
 		-- control, which is why it is text and not a badge: three of the four values are
 		-- only interesting when something is wrong.
+		local runtimeText
 		local function describe()
 			local status = bridge.status()
 			local shared = sessions.current()
+			if runtimeText then runtimeText.Text = status.online and "Web runtime · Connected" or "Game runtime · No bridge connection" end
 			if not status.running then
 				dot.BackgroundColor3 = theme.color.textTertiary
 				statusText.Text = status.searching and "Looking for UAI Bridge. Click Start Cowork in the desktop app."
@@ -280,20 +287,13 @@ return function(env)
 				role = "caption", wrap = true, auto = "Y", layoutOrder = 5 })
 		end
 		local settings = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
-		P.text(settings, { text = "2. Connect Roblox", role = "label", layoutOrder = 0 })
+		P.text(settings, { text = "Manual connection", role = "label", layoutOrder = 0 })
 		local runtimeCard = P.card(container, { layoutOrder = nextOrder(), gap = theme.space.sm })
-		P.text(runtimeCard, { text = "3. Open the browser link", role = "label", layoutOrder = 1 })
-		P.text(runtimeCard, { text = "Open the link printed in the terminal. Choose a provider and model, then send a message. Web shows live responses when supported; Game shows replies after Roblox receives them. Tools and permissions stay in Roblox.",
+		P.text(runtimeCard, { text = "Automatic runtime", role = "label", layoutOrder = 1 })
+		P.text(runtimeCard, { text = "Connecting to Cowork automatically selects Web for live replies. Disconnecting returns new requests to Game. Tools and permissions stay in Roblox. Open the browser link to start chatting.",
 			role = "caption", wrap = true, auto = "Y", layoutOrder = 2 })
-		C.segmented(runtimeCard, { options = { { label = "Game", value = "game" }, { label = "Web", value = "web" } },
-			value = config.get("bridge.runtime", "game"), layoutOrder = 3, onChange = function(value)
-				local ok, err = pcall(env.require("net/bridge_commands").run, { type = "runtime", value = value })
-				if not ok then overlay.toast(tostring(err), "warn", 3) end
-			end })
-		P.field(runtimeCard, { name = "BridgeRequestTimeout", text = tostring(config.get("bridge.requestTimeout", 180)),
-			placeholder = "Provider timeout in seconds", layoutOrder = 4, onBlur = function(value)
-				config.set("bridge.requestTimeout", util.clamp(tonumber(value) or 180, 10, 86400))
-			end })
+		runtimeText = P.text(runtimeCard, { name = "BridgeRuntimeStatus", text = "", role = "small", wrap = true, auto = "Y", layoutOrder = 3 })
+		P.text(runtimeCard, { text = "Bridge replies have no time limit. Use Stop to cancel a reply.", role = "caption", wrap = true, auto = "Y", layoutOrder = 4 })
 		P.text(settings, { text = "Port", role = "small", layoutOrder = 1 })
 		P.field(settings, {
 			name = "BridgePort",
@@ -371,6 +371,7 @@ return function(env)
 				toggle.set(config.get("bridge.enabled", false) == true, true)
 			end
 			if path == nil or path == "relay" or util.startsWith(tostring(path), "relay.") then
+				relayMode.set(config.get("relay.mode", "auto"))
 				describeRelay()
 			end
 		end)

@@ -10,10 +10,14 @@ return function(env)
 	local M = { PORT = 28791, changed = signal.new("bridge connection") }
 	local alive, started, paused = true, false, false
 	local desktop, epoch, nextProbe = nil, 0, 0
+	local function phone()
+		local ok, value = pcall(function() return env.uis.TouchEnabled == true and env.uis.MouseEnabled ~= true end)
+		return ok and value
+	end
 
 	local function automatic()
 		return alive and not paused and config.get("bridge.autoDiscover", true) == true
-			and config.get("bridge.enabled", false) ~= true
+			and config.get("bridge.enabled", false) ~= true and not phone()
 	end
 
 	function M.get()

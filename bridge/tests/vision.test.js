@@ -89,3 +89,22 @@ test('old game clients reject image sends with a useful upgrade error', async t 
   const response = await fetch(bridge.base + '/api/send', { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: 's1', pictureIds: ['pic_old_client'] }) });
   assert.equal(response.status, 400); assert.match((await response.json()).error, /reload.*client/i);
 });
+
+test('Responses input hydrates session-owned images and expires history in Responses format', () => {
+  const store = createPictureStore(), owner = { browserId: 'browser', sessionId: 'responses-session' };
+  const bytes = makePng(5, 7), id = 'pic_responses_image';
+  store.stage({ id, ...owner, name: 'colors.png', mediaType: 'image/png', bytes });
+  store.markQueued([id], 'responses-command');
+  const image = store.reference(id, owner);
+  const body = { input: [{ role: 'user', content: [{ type: 'input_text', text: 'Look' }, { type: 'input_image', image_url: image.url }] }] };
+  const output = JSON.parse(store.providerBody(JSON.stringify(body), owner.sessionId));
+  assert.deepEqual(output.input[0].content[1], { type: 'input_image', image_url: 'data:image/png;base64,' + bytes.toString('base64'), detail: 'auto' });
+  assert.throws(() => store.providerBody(JSON.stringify(body), 'wrong-session'), /belong/);
+  store.markStatus(id, 'expired');
+  assert.throws(() => store.providerBody(JSON.stringify(body), owner.sessionId), /expired/);
+  body.input.push({ role: 'user', content: 'Continue' });
+  const history = JSON.parse(store.providerBody(JSON.stringify(body), owner.sessionId));
+  assert.equal(history.input[0].content[1].type, 'input_text');
+  assert.match(history.input[0].content[1].text, /earlier image/);
+  store.close();
+});
