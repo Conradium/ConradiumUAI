@@ -1024,7 +1024,7 @@ return function(env)
 		end
 		local wantStream = request.stream
 		if wantStream == nil then wantStream = record.stream ~= false and config.get("agent.stream", true) end
-		if env.require("net/transport").streamForced() then wantStream = true end
+		if env.require("net/transport").streamForced() or registry.isOpencode(record) then wantStream = true end
 
 		local body = M.buildBody(record, util.merge(request, { stream = wantStream }))
 		applyRemembered(record, body)

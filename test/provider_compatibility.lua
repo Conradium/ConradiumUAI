@@ -588,4 +588,40 @@ case("cat-jam traits and tool capping preserve OpenCode compatibility", function
 	f.healthy(); f.close()
 end)
 
+case("OpenCode session validator migrates legacy sessions and connection tests stream", function()
+	local f = F.new()
+	local registry = f.env.require("provider/registry")
+	local chat = f.env.require("provider/chat")
+	local record = recordFor(f, "zen")
+	record.opencodeSession = "ses_a1b2c3d4e5f6abcdefghijklmn"
+
+	check("legacy random hex session fails validation", not registry.validOpencodeSession(record.opencodeSession))
+	local refreshed = registry.opencodeSessionFor(record, {})
+	check("opencodeSessionFor refreshes legacy session", registry.validOpencodeSession(refreshed))
+	check("record.opencodeSession is updated", record.opencodeSession == refreshed)
+
+	local intercepted
+	f.h.http.handler = function(spec)
+		intercepted = spec
+		return {
+			StatusCode = 200,
+			Headers = { ["content-type"] = "text/event-stream" },
+			Body = 'data: {"choices":[{"delta":{"content":"ready"}}]}' .. "\n\n" .. 'data: [DONE]' .. "\n\n",
+		}
+	end
+
+	local result = f.run(function()
+		return chat.complete(record, {
+			messages = { { role = "user", content = "ready" } },
+			stream = false,
+			maxTokens = 12,
+		})
+	end)
+	check("connection test with stream=false is forced to streaming for OpenCode", result and result.content == "ready")
+	check("body.stream is true", f.h.json.decode(intercepted.body).stream == true)
+	check("header Accept is text/event-stream", intercepted.headers.Accept == "text/event-stream")
+	check("session header is valid inverted timestamp", registry.validOpencodeSession(intercepted.headers["x-opencode-session"]))
+	f.healthy(); f.close()
+end)
+
 suite.finish()

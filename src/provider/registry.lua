@@ -275,6 +275,23 @@ return function(env)
 	end
 	M.opencodeId = opencodeId
 
+	local function validOpencodeSession(id)
+		if type(id) ~= "string" or #id ~= 30 or not id:match("^ses_%x%x%x%x%x%x%x%x%x%x%x%x") then
+			return false
+		end
+		local hex = id:sub(5, 16)
+		local recovered = 0
+		for i = 1, 12, 2 do
+			local b = 255 - (tonumber(hex:sub(i, i + 1), 16) or 0)
+			recovered = recovered * 256 + b
+		end
+		local sesMs = math.floor(recovered / 4096)
+		local nowMs = math.floor(((clock and clock.ms and clock.ms()) or (os.time() * 1000))) % (2 ^ 36)
+		local diff = (nowMs - sesMs) % (2 ^ 36)
+		return diff < 2592000000 or diff > (2 ^ 36 - 600000)
+	end
+	M.validOpencodeSession = validOpencodeSession
+
 	local sessionCache = {}
 	M.opencodeSessionCache = sessionCache
 
@@ -297,11 +314,11 @@ return function(env)
 
 		if session then
 			local existing = session.opencodeSession
-			if type(existing) == "string" and util.trim(existing) ~= "" and #existing >= 25 then
+			if validOpencodeSession(existing) then
 				if session.id then sessionCache[session.id] = existing end
 				return existing
 			end
-			if session.id and sessionCache[session.id] then
+			if session.id and validOpencodeSession(sessionCache[session.id]) then
 				session.opencodeSession = sessionCache[session.id]
 				return sessionCache[session.id]
 			end
@@ -312,7 +329,7 @@ return function(env)
 		end
 
 		if sessionId then
-			if sessionCache[sessionId] then
+			if validOpencodeSession(sessionCache[sessionId]) then
 				return sessionCache[sessionId]
 			end
 			local created = opencodeId("ses_")
@@ -320,7 +337,7 @@ return function(env)
 			return created
 		end
 
-		if util.trim(record.opencodeSession or "") == "" or #record.opencodeSession < 25 then
+		if not validOpencodeSession(record.opencodeSession) then
 			record.opencodeSession = opencodeId("ses_")
 			-- Header construction also runs for unsaved provider-editor drafts.
 			if M.get(record.id) == record then M.save(record, { quiet = true }) end

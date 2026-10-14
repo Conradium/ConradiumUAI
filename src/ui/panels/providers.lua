@@ -756,7 +756,7 @@ return function(env)
 				task.spawn(function()
 					local result, err = chat.complete(candidate, {
 						messages = { { role = "user", content = "Reply with the single word: ready" } },
-						stream = false,
+						stream = registry.isOpencode(candidate) or false,
 						maxTokens = 12,
 						attempts = 1,
 						aborted = aborted,
