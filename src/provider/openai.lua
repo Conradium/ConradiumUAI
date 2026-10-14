@@ -254,6 +254,11 @@ return function(env)
 			end
 		end
 
+		local toolCeiling = M.toolCeiling(record)
+		if toolCeiling and body.tools and #body.tools > toolCeiling then
+			body.tools = M.capTools(body.tools, toolCeiling, registry.isOpencode(record))
+		end
+
 		-- Sampling parameters are rejected outright by the current Claude generations
 		-- rather than ignored, so a model documented to refuse one is never sent it.
 		-- Every other model keeps the behaviour it has always had, because
@@ -516,6 +521,91 @@ return function(env)
 		end
 		record.maxTokensCap = { model = record.model, tokens = tokens, scope = scope }
 		registry.save(record, { force = true })
+	end
+	function M.toolCeiling(record)
+		if not record then return nil end
+		local cap = record.toolsCap
+		local scope = registry.compatibilityKey(record)
+		if type(cap) == "table" and cap.model == record.model and (cap.scope == nil or cap.scope == scope) then
+			local limit = tonumber(cap.limit)
+			if limit and limit > 0 then return limit end
+		end
+		return traits.maxTools(record.model)
+	end
+
+	function M.rememberToolCeiling(record, limit)
+		limit = tonumber(limit)
+		if not limit or limit ~= limit or limit <= 0 or limit == math.huge then return end
+		limit = math.floor(limit)
+		local previous = record.toolsCap
+		local previousLimit = type(previous) == "table" and tonumber(previous.limit)
+		local scope = registry.compatibilityKey(record)
+		if previousLimit and previous.model == record.model and (previous.scope == nil or previous.scope == scope) and previousLimit > 0 then
+			limit = math.min(limit, previousLimit)
+		end
+		record.toolsCap = { model = record.model, limit = limit, scope = scope }
+		registry.save(record, { force = true })
+	end
+
+	function M.toolCeilingFromMessage(message)
+		local text = tostring(message or ""):lower():gsub("(%d),(%d%d%d)", "%1%2")
+		if not (text:find("tool", 1, true) or text:find("function", 1, true) or text:find("items", 1, true)) then return nil end
+		local patterns = {
+			"maximum number of items is%s*(%d+)",
+			"maximum of%s*(%d+)%s*tools",
+			"maximum of%s*(%d+)%s*functions",
+			"at most%s*(%d+)%s*tools",
+			"at most%s*(%d+)%s*functions",
+			"tools.-maximum.-is%s*(%d+)",
+			"tools.-at most%s*(%d+)",
+			"tools.-limit.-is%s*(%d+)",
+		}
+		for _, pattern in ipairs(patterns) do
+			local limit = tonumber(text:match(pattern))
+			if limit and limit >= 1 and limit < 1000 then return limit end
+		end
+		return nil
+	end
+
+	function M.capTools(tools, limit, isOpencode)
+		limit = tonumber(limit) or 128
+		if not tools or #tools <= limit then return tools end
+		if not isOpencode then
+			local capped = {}
+			for i = 1, limit do capped[i] = tools[i] end
+			return capped
+		end
+
+		local stdNames = {}
+		for _, stdTool in ipairs(OPENCODE_TOOLS) do
+			stdNames[stdTool["function"].name] = stdTool
+		end
+
+		local capped = {}
+		local included = {}
+		local maxRegular = limit - #OPENCODE_TOOLS
+
+		for _, t in ipairs(tools) do
+			local name = t["function"] and t["function"].name or t.name
+			if stdNames[name] then
+				if not included[name] then
+					capped[#capped + 1] = t
+					included[name] = true
+				end
+			elseif #capped < maxRegular then
+				capped[#capped + 1] = t
+				if name then included[name] = true end
+			end
+		end
+
+		for _, stdTool in ipairs(OPENCODE_TOOLS) do
+			local name = stdTool["function"].name
+			if not included[name] and #capped < limit then
+				capped[#capped + 1] = stdTool
+				included[name] = true
+			end
+		end
+		return capped
 	end
 
 	-- Read the window named by a context refusal, never the request size or the
@@ -818,6 +908,16 @@ return function(env)
 				end
 			end,
 		},
+		{
+			match = "cap_tools",
+			apply = function(body, message)
+				local limit = (message and M.toolCeilingFromMessage(message)) or 128
+				local before = body.tools and #body.tools or 0
+				if before <= limit then return nil end
+				body.tools = M.capTools(body.tools, limit, true)
+				return string.format("capped tools from %d to %d", before, #body.tools), "cap_tools"
+			end,
+		},
 	}
 
 	-- Repairs that change the shape of message content rather than a top-level
@@ -843,6 +943,12 @@ return function(env)
 		-- the repairs still parse their numbers from the original wording.
 		local camel = tostring(message or ""):gsub("(%l)(%u)", "%1_%2")
 		local lowered = camel:lower()
+		local toolCeil = M.toolCeilingFromMessage(message)
+		if toolCeil and body.tools and #body.tools > toolCeil then
+			local before = #body.tools
+			body.tools = M.capTools(body.tools, toolCeil, true)
+			return string.format("capped tools from %d to %d", before, #body.tools), "cap_tools"
+		end
 		if body.max_completion_tokens and not body.max_tokens and lowered:find("max_completion_tokens", 1, true) then
 			local note = REPAIRS[2].apply(body, message)
 			if note then return note, "max_tokens" end
@@ -1078,6 +1184,10 @@ return function(env)
 				if key == "max_tokens" then
 					-- A value, not a switch: replaying a halving repair would lower it on every turn.
 					M.rememberMaxTokens(record, body.max_tokens or body.max_completion_tokens)
+				elseif key == "cap_tools" then
+					local limit = M.toolCeilingFromMessage(message) or 128
+					M.rememberToolCeiling(record, limit)
+					remember(record, key)
 				elseif not EPHEMERAL_REPAIRS[key] then
 					remember(record, key)
 				end

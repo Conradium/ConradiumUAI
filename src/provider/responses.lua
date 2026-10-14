@@ -202,6 +202,11 @@ return function(env)
 				names[tool.name] = true
 			end
 		end
+		local openai = env.require("provider/openai")
+		local toolCeiling = openai.toolCeiling(record)
+		if toolCeiling and #tools > toolCeiling then
+			tools = openai.capTools(tools, toolCeiling, registry.isOpencode(record))
+		end
 		if #tools > 0 then body.tools = tools end
 		if request.toolChoice ~= nil then body.tool_choice = request.toolChoice end
 		-- The lane has its own spelling and rejections: max_output_tokens rather

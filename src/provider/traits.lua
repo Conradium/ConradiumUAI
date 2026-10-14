@@ -54,6 +54,7 @@ return function(env)
 		["claude-sonnet-4-6"] = { context = 1000000, output = 128000,
 			effort = FOUR, thinking = "adaptive", default = "high" },
 		["claude-haiku-4-5"] = { context = 200000 },
+		["cat-jam"] = { context = 262144, maxTools = 128, thinking = "adaptive", default = "high" },
 	}
 
 	local EMPTY = {}
@@ -98,6 +99,10 @@ return function(env)
 
 	function M.maxOutput(model)
 		return M.of(model).output
+	end
+
+	function M.maxTools(model)
+		return M.of(model).maxTools
 	end
 
 	-- True unless the model is documented to reject them. Withholding a parameter a

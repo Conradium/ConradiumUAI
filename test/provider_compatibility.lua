@@ -555,4 +555,37 @@ case("OpenCode session and request IDs encode monotonic timestamps", function()
 	f.healthy(); f.close()
 end)
 
+case("cat-jam traits and tool capping preserve OpenCode compatibility", function()
+	local f = F.new()
+	local traits = f.env.require("provider/traits")
+	local adapter = f.env.require("provider/openai")
+	local record = recordFor(f, "zen")
+	record.model = "cat-jam-free"
+	check("cat-jam documents 128 max tools", traits.maxTools("cat-jam-free") == 128)
+	check("cat-jam context window is 262144", traits.contextWindow("cat-jam-free") == 262144)
+
+	local bigTools = {}
+	for i = 1, 174 do
+		bigTools[#bigTools + 1] = { type = "function", ["function"] = { name = "tool_" .. i, description = "tool", parameters = { type = "object" } } }
+	end
+
+	local body = adapter.buildBody(record, { tools = bigTools, stream = true })
+	check("body tools are capped to 128", #body.tools == 128)
+	local names = {}
+	for _, t in ipairs(body.tools) do names[t["function"].name] = true end
+	for _, std in ipairs(adapter.opencodeTools) do
+		check("OpenCode standard tool " .. std["function"].name .. " is preserved", names[std["function"].name] == true)
+	end
+
+	local msg = "Upstream request failed: [invalid_value] Invalid value for 'tools': maximum number of items is 128."
+	check("extracts ceiling from message", adapter.toolCeilingFromMessage(msg) == 128)
+	local otherRecord = recordFor(f, "zen")
+	otherRecord.model = "unlisted-model"
+	local testBody = { tools = bigTools }
+	local note, key = adapter.repairForTest(testBody, msg)
+	check("repair detects cap_tools", key == "cap_tools")
+	check("repair capped tools to 128", #testBody.tools == 128)
+	f.healthy(); f.close()
+end)
+
 suite.finish()
