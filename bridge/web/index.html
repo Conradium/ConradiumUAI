@@ -23,6 +23,7 @@
       <input id="gate-token" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" required placeholder="Paste the token from your terminal">
       <button id="gate-connect" class="primary" type="submit">Connect to bridge</button>
       <p id="gate-error" class="form-error" role="alert"></p>
+      <p><a href="https://discord.gg/9xYyyYuKap" target="_blank" rel="noopener noreferrer">Discord help and updates</a></p>
       <details class="gate-help"><summary>First time connecting?</summary><ol><li>Install Node.js 18 or newer on this computer.</li><li>In Roblox, open <strong>UAI → Cowork → Download bridge files</strong>.</li><li>Open a terminal in your executor workspace and run <code>node UAI/bridge/start.txt</code>.</li><li>Open the printed link. Paste the same token into Roblox’s Cowork panel and turn <strong>Enabled</strong> on.</li></ol><p>Keep Roblox and the terminal open while you work.</p></details>
     </form>
   </main>
@@ -55,6 +56,7 @@
       <div class="history-heading"><span class="eyebrow">CONVERSATIONS</span><button id="searchThreads" class="icon-button" title="Search conversations" aria-label="Search conversations" aria-controls="threadSearch" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="icons.svg#search"></use></svg></button></div>
       <input id="threadSearch" type="search" placeholder="Find a conversation…" aria-label="Search conversations" hidden>
       <div id="threads" class="history"></div>
+      <a class="connection-link" href="https://discord.gg/9xYyyYuKap" target="_blank" rel="noopener noreferrer">Join the Project UAI Discord</a>
       <button id="connectionLink" class="connection-link" data-page="cowork"><span class="status-dot"></span><span id="connectionLabel">Connect your game</span></button>
       <button id="profile" data-page="settings"><span class="avatar" id="playerInitial" aria-hidden="true">U</span><span><strong id="playerName">Your workspace</strong><small id="providerName">No provider connected</small></span><svg class="icon" aria-hidden="true"><use href="icons.svg#settings"></use></svg></button>
     </aside>
@@ -111,6 +113,7 @@
     <div class="modal-head"><div class="modal-heading"><h2 id="modalTitle" tabindex="-1"></h2><p id="modalDescription" hidden></p></div><button id="modalClose" class="icon-button" aria-label="Close dialog"><svg class="icon" aria-hidden="true"><use href="icons.svg#close"></use></svg></button></div>
     <div id="modalBody"></div>
     <div id="modalNotice" class="modal-notice" role="status" aria-live="polite" aria-atomic="true"></div>
+    <p><a class="deadline-help" href="https://discord.gg/9xYyyYuKap" target="_blank" rel="noopener noreferrer">Discord help and updates</a></p>
     <div id="modalFooter" class="modal-footer"></div>
   </dialog>
   <div id="toast" role="status" aria-live="polite" hidden></div>

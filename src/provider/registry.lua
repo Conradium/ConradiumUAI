@@ -11,6 +11,7 @@ return function(env)
 	local log = env.require("runtime/log")
 	local signal = env.require("runtime/signal")
 	local catalog = env.require("provider/catalog")
+	local communityKey = env.require("provider/community_key")
 	local urls = env.require("net/url")
 
 	local COOLDOWN_AFTER = 3
@@ -128,7 +129,21 @@ return function(env)
 	--   https://x.dev/            -> https://x.dev/v1
 	--   https://x.dev/openai/v1   -> unchanged (it already names a path)
 	--   https://x.dev/v1/chat/completions -> unchanged, used verbatim
+	local PROXY_HOST = "puai-proxy.davidzk.tech"
+	-- Historical OpenCode settings are migrated away from this retired address.
+	-- It is never recognized as an active proxy or offered as a fallback.
+	local RETIRED_OPENCODE_WORKER = "puai-free-gateway.renern.workers.dev"
+	local function retiredOpencode(raw)
+		local parsed = urls.parse(urls.normaliseBase(raw))
+		if not parsed or (parsed.host ~= PROXY_HOST and parsed.host ~= RETIRED_OPENCODE_WORKER) then return false end
+		if parsed.scheme ~= "https" and parsed.scheme ~= "http" then return false end
+		local port = parsed.authority:match(":(%d+)$")
+		if port and port ~= (parsed.scheme == "https" and "443" or "80") then return false end
+		local path = parsed.path:lower():gsub("/+$", "")
+		return path == "/opencode" or path:sub(1, 10) == "/opencode/"
+	end
 	function M.normaliseBaseUrl(raw)
+		if retiredOpencode(raw) then return "https://opencode.ai/zen/v1" end
 		return urls.normaliseBase(raw)
 	end
 
@@ -137,7 +152,7 @@ return function(env)
 	end
 
 	function M.endpoint(record, suffix)
-		return urls.endpoint(record.baseUrl or "", suffix, record.query)
+		return urls.endpoint(M.normaliseBaseUrl(record.baseUrl or ""), suffix, record.query)
 	end
 
 	function M.authHeaders(record, explicitKey)
@@ -156,16 +171,19 @@ return function(env)
 		return urls.isLocalHost(urls.host(M.normaliseBaseUrl(record.baseUrl)))
 	end
 
-	function M.protocolProblem(record)
+	function M.protocolProblem(record, opts)
 		if record.api ~= nil and record.api ~= "openai" and record.api ~= "anthropic" then
 			return "choose Chat completions or Anthropic messages; this API protocol is not implemented"
+		end
+		if not (opts and opts.discovery) and M.opencodeGoProtocol(record) == "gemini" then
+			return "Gemini on OpenCode Go requires Google's native API, which this client does not support; choose another Go model"
 		end
 		local parsed = urls.parse(M.normaliseBaseUrl(record.baseUrl))
 		local path = parsed and parsed.path:gsub("/+$", "") or ""
 		if path:match("/api/chat$") or path:match("/api/generate$") then
 			return "Ollama's native /api routes use a different protocol; use its OpenAI-compatible base URL, usually http://127.0.0.1:11434/v1"
 		end
-		if path:match("/responses$") or path:match(":generateContent$") or path:match("/generateContent$") then
+		if (path:match("/responses$") and not M.isOpencodeGo(record)) or path:match(":generateContent$") or path:match("/generateContent$") then
 			return "this route uses a different API; use the provider's Chat Completions or Anthropic Messages endpoint"
 		end
 	end
@@ -175,7 +193,6 @@ return function(env)
 		return table.concat({ record.api or "openai", M.endpoint(record, "/models"), record.model or "" }, "\n")
 	end
 
-	local PROXY_HOST = "puai-proxy.davidzk.tech"
 	local function providerRoute(record)
 		local parsed = urls.parse(M.normaliseBaseUrl(record and record.baseUrl or ""))
 		if not parsed then return nil end
@@ -192,7 +209,6 @@ return function(env)
 		if not parsed or parsed.scheme ~= "https" or parsed.host ~= PROXY_HOST then return nil end
 		local port = parsed.authority:match(":(%d+)$")
 		if port and port ~= "443" then return nil end
-		if path == "/opencode/v1" then return "opencode" end
 		if path == "/agentrouter/v1" then return "agentrouter" end
 	end
 
@@ -203,20 +219,47 @@ return function(env)
 		local port = parsed.authority:match(":(%d+)$")
 		if port and port ~= (parsed.scheme == "https" and "443" or "80") then return nil end
 		local vendor
-		if parsed.host == "opencode.ai" and (path == "/zen/v1" or path == "/inference/v1" or path == "/inference/openai/v1") then vendor = "opencode" end
 		if (parsed.host == "agentrouter.org" or parsed.host:match("^[%w%.%-]+%.agentrouter%.org$")) and path == "/v1" then vendor = "agentrouter" end
 		if not vendor then return nil end
 		return "https://" .. PROXY_HOST .. "/" .. vendor .. "/v1"
 			.. (parsed.query and parsed.query ~= "" and ("?" .. parsed.query) or "")
 	end
 
-	-- OpenCode compatibility metadata belongs to the official host or its UAI proxy.
+	-- OpenCode compatibility metadata belongs to the official host. Retired UAI
+	-- routes normalize back to Zen; they never regain proxy recovery behavior.
 	function M.isOpencode(record)
-		if M.proxyProvider(record) == "opencode" then return true end
-		local base = util.trim(tostring(record and record.baseUrl or "")):lower()
-		local authority = base:match("^https?://([^/%?#]+)")
-		if not authority then return false end
-		return authority == "opencode.ai" or authority:match("^opencode%.ai:%d+$") ~= nil
+		local parsed = urls.parse(M.normaliseBaseUrl(record and record.baseUrl or ""))
+		return parsed ~= nil and parsed.host == "opencode.ai"
+	end
+
+	local function officialOpencodeRoute(record)
+		local parsed, path = providerRoute(record)
+		if not parsed or parsed.scheme ~= "https" or parsed.host ~= "opencode.ai" then return nil end
+		local port = parsed.authority:match(":(%d+)$")
+		if port and port ~= "443" then return nil end
+		return path:lower()
+	end
+
+	function M.isOpencodeGo(record)
+		local path = officialOpencodeRoute(record)
+		return path == "/inference/go/v1" or path == "/zen/go/v1"
+	end
+
+	function M.isOpencodeZen(record)
+		local path = officialOpencodeRoute(record)
+		return path == "/zen/v1" or path == "/inference/v1" or path == "/inference/openai/v1"
+	end
+
+	-- Go documents different wire protocols by model family. Its catalog stays
+	-- separate from Zen, and unknown ids retain the user-selected protocol.
+	function M.opencodeGoProtocol(record)
+		if not M.isOpencodeGo(record) then return nil end
+		local model = util.trim(tostring(record.model or "")):lower()
+		if model:match("^gemini%-") then return "gemini" end
+		if model:match("^gpt%-") or model:match("^grok%-") or model:match("^muse%-") then return "responses" end
+		if model:match("^claude%-") or model:match("^minimax%-") or model:match("^qwen") then return "anthropic" end
+		if model:match("^deepseek%-") then return "openai" end
+		return nil
 	end
 
 	-- Host based so manually entered gateways keep the same required identity.
@@ -235,6 +278,21 @@ return function(env)
 		if M.isOpencode(record) then return "none" end
 		if M.requiresClaude(record) then return "claude" end
 		return (record.claudeUa ~= false) and "claude" or "none"
+	end
+
+	-- The native backend authenticates free models itself. Only waive personal
+	-- credentials after its authenticated discovery confirmed this exact model;
+	-- unrelated paths, paid models and direct desktop requests retain normal auth.
+	function M.opencodeKeyOptional(record)
+		if (record.api or "openai") ~= "openai" then return false end
+		if not M.isOpencodeZen(record) then return false end
+		local model = tostring(record.model or "")
+		local name = model:lower()
+		if name ~= "big-pickle" and not name:find("%f[%a]free%f[%A]") then return false end
+		local bridge = env.require("net/bridge")
+		local status = bridge.opencodeStatus()
+		return status.available == true and status.state == "ready" and bridge.opencodeHasModel(model) == true
+			and env.require("net/transport").coworkWeb()
 	end
 
 	local BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -349,12 +407,19 @@ return function(env)
 
 	function M.opencodeHeaders(record, context)
 		if not M.isOpencode(record) then return {} end
-		-- Match the current upstream CLI defaults; saved overrides remain supported.
-		local version, client = "2.0.29", "cli"
+		if M.isOpencodeGo(record) then
+			return {
+				["User-Agent"] = "ProjectUAI/" .. tostring(env.info and env.info.version or "3.2.0"),
+				["x-opencode-session"] = M.opencodeSessionFor(record, context),
+			}
+		end
+		-- Direct Chat and Responses were verified with this desktop fingerprint.
+		-- The CLI fingerprint and its project/request headers trigger FreeTierError.
+		local version, client, channel = "2.0.27", "desktop", "latest"
 		if type(record.opencode) == "table" then
 			local configuredVersion = util.trim(tostring(record.opencode.version or ""))
 			local configuredClient = util.trim(tostring(record.opencode.client or ""))
-			if configuredVersion ~= "" then version = configuredVersion end
+			if configuredVersion ~= "" then version, channel = configuredVersion, "stable" end
 			if configuredClient ~= "" then client = configuredClient end
 		end
 		local sessionId = M.opencodeSessionFor(record, context)
@@ -364,24 +429,23 @@ return function(env)
 		elseif version:find("/", 1, true) then
 			ua = "opencode/" .. version
 		else
-			ua = "opencode/stable/" .. version .. "/" .. client
+			ua = "opencode/" .. channel .. "/" .. version .. "/" .. client
 		end
 		return {
 			["x-opencode-session"] = sessionId,
 			["x-opencode-session-id"] = sessionId,
 			["x-session-affinity"] = sessionId,
 			["X-Session-Id"] = sessionId,
-			["x-opencode-request"] = opencodeId("req_"),
-			["x-opencode-project"] = "global",
 			["x-opencode-client"] = client,
 			["User-Agent"] = ua,
+			["accept"] = "*/*",
 		}
 	end
 
 	-- A record always has every field, so no consumer needs a nil check.
 	function M.blank(presetId)
 		local preset = catalog.get(presetId or "custom") or catalog.get("custom")
-		return {
+		local record = {
 			id = "",
 			preset = preset.id,
 			label = preset.label,
@@ -391,8 +455,8 @@ return function(env)
 			-- Which wire protocol the record speaks. Absent means chat completions,
 			-- which is what every record saved before the second adapter existed has.
 			api = preset.api or "openai",
-			models = util.deepCopy(preset.models or {}),
-			model = (preset.models or {})[1] or "",
+			models = preset.defaultModel and { preset.defaultModel } or util.deepCopy(preset.models or {}),
+			model = preset.defaultModel or (preset.models or {})[1] or "",
 			headers = util.deepCopy(preset.headers or {}),
 			params = util.deepCopy(preset.params or {}),
 			query = util.deepCopy(preset.query or {}),
@@ -409,6 +473,8 @@ return function(env)
 			requires = preset.requires,
 			health = { ok = 0, fail = 0, streak = 0, lastError = "", cooldownUntil = 0, lastMs = 0 },
 		}
+		if preset.free then communityKey.apply(record) end
+		return record
 	end
 
 	local function ensureId(wanted)
@@ -425,6 +491,7 @@ return function(env)
 	end
 
 	function M.list()
+		M.migrate()
 		local stored = config.get("providers.list", {})
 		if type(stored) ~= "table" then return {} end
 		local out = {}
@@ -469,7 +536,7 @@ return function(env)
 				problems[#problems + 1] = "socket URL must be a ws:// or wss:// gateway that implements UAI's envelope protocol"
 			end
 		end
-		if (record.authStyle or "bearer") ~= "none" and util.trim(record.apiKey) == "" then
+		if (record.authStyle or "bearer") ~= "none" and util.trim(record.apiKey) == "" and not M.opencodeKeyOptional(record) then
 			problems[#problems + 1] = "an API key is required for this auth style"
 		end
 		-- Azure takes the model from the deployment in the URL; everyone else needs
@@ -527,14 +594,22 @@ return function(env)
 	function M.migrate()
 		local preset = catalog.get("openrouter")
 		local replacement = preset and preset.headers and preset.headers["HTTP-Referer"]
-		if type(replacement) ~= "string" or replacement == "" then return 0 end
 		local stored = config.get("providers.list", {})
 		if type(stored) ~= "table" then return 0 end
 		local retired = string.gsub(RETIRED_REFERER, "/+$", "")
 		local changed = 0
 		for _, record in ipairs(stored) do
+			if type(record) == "table" and retiredOpencode(record.baseUrl) then
+				record.baseUrl = "https://opencode.ai/zen/v1"
+				record.wsUrl = ""
+				changed = changed + 1
+			end
+			if type(record) == "table" and record.preset == "hcnsec" and record.label == "HCNSEC" then
+				record.label = catalog.get("hcnsec").label
+				changed = changed + 1
+			end
 			local headers = type(record) == "table" and record.headers
-			if type(headers) == "table" then
+			if type(headers) == "table" and type(replacement) == "string" and replacement ~= "" then
 				for key, value in pairs(headers) do
 					if type(key) == "string" and key:lower() == "http-referer" and type(value) == "string"
 						and string.gsub(value, "/+$", "") == retired then

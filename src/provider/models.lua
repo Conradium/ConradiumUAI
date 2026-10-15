@@ -18,6 +18,8 @@ return function(env)
 	local proxy = env.require("provider/proxy")
 	local signal = env.require("runtime/signal")
 	local urls = env.require("net/url")
+	local communityKey = env.require("provider/community_key")
+	local support = env.require("runtime/support")
 
 	local CACHE_MS = 10 * 60 * 1000
 
@@ -31,9 +33,14 @@ return function(env)
 		return util.trim(record.id) ~= "" and record.id or record
 	end
 	local function scopeFor(record)
-		return util.deepCopy({ baseUrl = registry.normaliseBaseUrl(record.baseUrl), api = record.api or "openai",
+		local scope = { baseUrl = registry.normaliseBaseUrl(record.baseUrl), api = record.api or "openai",
 			apiKey = record.apiKey, authStyle = record.authStyle, headers = record.headers or {}, query = record.query or {},
-			claudeUa = record.claudeUa })
+			claudeUa = record.claudeUa }
+		if registry.isOpencodeZen(record) then
+			scope.opencode = env.require("net/bridge").opencodeStatus()
+			scope.bridge = env.require("net/bridge_connection").get()
+		end
+		return util.deepCopy(scope)
 	end
 	local function same(a, b)
 		if type(a) ~= type(b) then return false end
@@ -60,8 +67,10 @@ return function(env)
 	-- Pickle as free despite its unsuffixed id; only apply that alias on Zen.
 	-- Other ids use a distinct "free" token rather than matching "freedom".
 	function M.isFree(record, id)
+		if communityKey.isApplied(record) then return true end
+		if registry.isOpencodeGo(record) then return false end
 		local name = tostring(id or ""):lower()
-		if registry.isOpencode(record) and name == "big-pickle" then return true end
+		if registry.isOpencodeZen(record) and name == "big-pickle" then return true end
 		return name:find("%f[%a]free%f[%A]") ~= nil
 	end
 
@@ -129,8 +138,8 @@ return function(env)
 	-- a normal outcome, not an error: the user types the id instead.
 	function M.discover(record, opts)
 		opts = opts or {}
-		local problem = registry.protocolProblem(record)
-		if problem then return {}, problem end
+		local problem = registry.protocolProblem(record, { discovery = true })
+		if problem then return {}, support.error(problem) end
 		if not opts.force then
 			local hit = M.cached(record)
 			if hit then return hit, "cached" end
@@ -157,34 +166,41 @@ return function(env)
 				tag = "models:" .. tostring(record.id or "draft"),
 			})
 		end
-		local res, err = fetch()
-		if pending[key] == token and same(scope, scopeFor(record)) and recovery.recover(res, err) then
+		local res, err, decoded, decodeError
+		local cli = scope.opencode and scope.opencode.available == true
+		if cli then
+			decoded, err = env.require("net/bridge").opencodeModels(opts)
+			if decoded then res = { ok = true, status = 200 } end
+		else
+			res, err = fetch()
+		end
+		if not cli and pending[key] == token and same(scope, scopeFor(record)) and recovery.recover(res, err) then
 			scope = scopeFor(record)
 			snapshot = util.deepCopy(record)
 			url = registry.endpoint(snapshot, "/models")
 			if pending[key] == token then res, err = fetch() end
 		end
-		local decoded, decodeError
-		if res then decoded, decodeError = util.decode(res.body) end
+		if res and not cli then decoded, decodeError = util.decode(res.body) end
 		err = err or decodeError
 
 		if pending[key] ~= token or not same(scope, scopeFor(record)) then
 			if pending[key] == token then pending[key] = nil end
-			return {}, "model discovery was superseded or the connection changed -- fetch again"
+			return {}, support.error("model discovery was superseded or the connection changed -- fetch again")
 		end
 		pending[key] = nil
 		if not res or not res.ok or type(decoded) ~= "table" or decoded.error ~= nil then
+			if cli then return {}, support.error(err or "Could not read the OpenCode CLI model list.") end
 			local note = "could not read the model list"
 			if res and res.status == 404 then note = "this endpoint has no /models route -- add a model by hand" end
 			if res and res.status == 401 then note = "the API key was rejected" end
 			if res and res.status == 403 then note = "the key is not allowed to list models" end
-			if proxy.isClientRefusal(res) then
+			if proxy.isClientRefusal(res) or registry.isOpencode(record) then
 				note = "the endpoint rejected this client: " .. env.require("provider/chat").errorText(snapshot, res, err)
 			elseif res and res.status ~= 401 and res.status ~= 403 and res.status ~= 404 then
 				note = note .. ": " .. env.require("provider/chat").errorText(snapshot, res, err)
 			end
 			log.info("models", tostring(record.label) .. ": " .. note, err)
-			return {}, note
+			return {}, support.error(note)
 		end
 
 		-- The documented shape is { data = { { id = ... } } }. Some servers answer
@@ -212,9 +228,11 @@ return function(env)
 		M.changed:fire(record.id, found)
 
 		if #found == 0 then
-			return {}, "the endpoint returned an empty list -- add a model by hand"
+			return {}, support.error("the endpoint returned an empty list -- add a model by hand")
 		end
-		return found, string.format("%d model%s from %s", #found, #found == 1 and "" or "s", urls.display(url))
+		local note = string.format("%d model%s from %s", #found, #found == 1 and "" or "s", cli and "OpenCode CLI through Project UAI Bridge" or urls.display(url))
+		if registry.isOpencodeGo(record) then note = note .. "; public list -- subscription access is checked when you send" end
+		return found, note
 	end
 
 	function M.invalidate(providerId)

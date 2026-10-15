@@ -33,6 +33,8 @@ const path = require('node:path');
 const { createInference } = require('./inference');
 const { createPictureStore } = require('./picture-store');
 const RELEASE = require('./release');
+const { help, DISCORD } = require('./support');
+const { createOpenCode } = require('./opencode');
 
 const args = process.argv.slice(2);
 function flag(name, fallback) {
@@ -95,8 +97,9 @@ const commands = new Map();
 // holds image bytes; retained briefly with the receipt for reload/reconciliation.
 const commandPictures = new Map();
 const pictures = LEGACY ? null : createPictureStore({ limits: PICTURE_LIMITS });
+const opencode = createOpenCode();
 const inference = createInference({ publish: broadcast, legacy: LEGACY,
-  prepareBody: (body, sessionId) => pictures ? pictures.providerBody(body, sessionId) : body });
+  prepareBody: (body, sessionId) => pictures ? pictures.providerBody(body, sessionId) : body, opencode });
 let gameInstance = null;
 
 const state = {
@@ -123,6 +126,7 @@ const SECURITY_HEADERS = {
 function withSecurity(headers) { return { ...SECURITY_HEADERS, ...headers }; }
 
 function sendJson(res, status, value) {
+  if (status >= 400 && value && typeof value.error === 'string') value = { ...value, error: help(value.error) };
   const body = JSON.stringify(value);
   res.writeHead(status, withSecurity({
     'content-type': 'application/json; charset=utf-8',
@@ -135,7 +139,7 @@ function sendJson(res, status, value) {
 // Plain-text bodies so the browser transport helper can surface the real reason
 // (bad token / bad origin / method not allowed) instead of a generic failure.
 function sendText(res, status, text) {
-  const body = String(text);
+  const body = status >= 400 ? help(text) : String(text);
   res.writeHead(status, withSecurity({
     'content-type': 'text/plain; charset=utf-8',
     'content-length': Buffer.byteLength(body),
@@ -730,6 +734,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (route === '/api/hello' && req.method === 'GET') {
       const capabilities = { browserStream: { schema: 1, replay: true }, agentInbox: { waitHeader: 'X-UAI-Poll-Wait-Ms', maxWaitMs: HOLD_MS } };
+      capabilities.opencode = opencode.capability();
       if (!LEGACY) capabilities.pictures = { mode: 'provider-image-content', version: 2 };
       sendJson(res, 200, {
         ok: true, connected: state.connected, protocol: 2, instance: inference.instance,
@@ -740,6 +745,8 @@ const server = http.createServer(async (req, res) => {
           deliverableBytes: inference.limits.deliverableMax,
         },
       });
+    } else if (route === '/api/opencode/models' && req.method === 'GET') {
+      sendJson(res, 200, await opencode.models());
     } else if (route === '/api/inference' && post) {
       const input = JSON.parse(await readBody(req, 20 << 20));
       sendJson(res, 202, inference.start(input));
@@ -868,7 +875,7 @@ const server = http.createServer(async (req, res) => {
         // Close the connection so any remaining unread body is discarded rather
         // than kept alive for a request that was already refused.
         res.writeHead(413, withSecurity({ 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', connection: 'close' }));
-        res.end(JSON.stringify({ error: 'body too large' }));
+        res.end(JSON.stringify({ error: help('body too large') }));
       } else {
         sendJson(res, status, { error: String(err && err.message || err), code: err.code });
       }
@@ -902,6 +909,7 @@ setInterval(() => {
 }, 30000).unref();
 
 server.listen(PORT, HOST, () => {
+  if (opencode.capability().available) opencode.start().catch(() => {});
   const origin = `http://${HOST}:${PORT}`;
   process.send({ type: 'ready', version: RELEASE.version, updateProtocol: RELEASE.updateProtocol, token: TOKEN, port: PORT }, () => {});
   if (DESKTOP) {
@@ -921,7 +929,8 @@ server.listen(PORT, HOST, () => {
     `  3. Turn Enabled on. Cowork switches to Web when connected and Game when disconnected.\n\n` +
     `  Keep this terminal and Roblox open. Ctrl+C stops the bridge.\n` +
     `  Runs on this computer only. Keep the token private; it changes when you reopen the app.\n` +
-    `  New bridge releases apply automatically when idle.\n\n`
+    `  New bridge releases apply automatically when idle.\n` +
+    `  Community, help and updates: ${DISCORD}\n\n`
   );
 });
 
@@ -932,8 +941,9 @@ function shutdown() {
   inference.close();
   pictures?.close();
   server.closeAllConnections();
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 3000).unref();
+  const stopped = opencode.close();
+  server.close(() => stopped.finally(() => process.exit(0)));
+  setTimeout(() => process.exit(0), 5000).unref();
 }
 for (const event of ['SIGINT', 'SIGTERM']) process.on(event, shutdown);
 function updateBusy() {
@@ -980,11 +990,11 @@ server.on('error', (err) => {
     const message = err && err.code === 'EADDRINUSE'
       ? `Port ${PORT} is already in use. Close the other UAI Bridge app or the program using this port, then try again.`
       : 'The local bridge could not start. Restart the app and try again.';
-    process.stdout.write(JSON.stringify({ type: 'error', message }) + '\n', () => process.exit(1));
+    process.stdout.write(JSON.stringify({ type: 'error', message: help(message) }) + '\n', () => process.exit(1));
     return;
   }
   if (err && err.code === 'EADDRINUSE') {
-    process.stderr.write(`\n  Port ${PORT} is already in use. Try --port ${PORT + 1}.\n\n`);
+    process.stderr.write(`\n  ${help(`Port ${PORT} is already in use. Try --port ${PORT + 1}.`)}\n\n`);
     process.exit(1);
   }
   throw err;

@@ -11,6 +11,8 @@ const { Updater, RELEASES_URL, MANIFEST_NAME, PACKAGE_NAME, ROOT_FILES, checkPac
   compare, validPath, trustedUrl, releaseCandidates, cacheDirectory, hash, json } = require('../updater');
 const { Supervisor } = require('../supervisor');
 const RELEASE = require('../release');
+const { runtimeSource } = require('../../tools/build_bridge');
+process.env.UAI_OPENCODE_DISABLED = '1';
 const { materialize } = require('../launcher');
 const source = path.resolve(__dirname, '..');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -23,10 +25,10 @@ function temporary(t) {
   });
   return root;
 }
-function fixture(next = '3.2.0', overrides = {}) {
+function fixture(next = '3.3.0', overrides = {}) {
   const names = [...ROOT_FILES, 'web/index.html'].sort();
   const files = names.map(name => {
-    let data = name === 'web/index.html' ? Buffer.from('<html>synthetic bridge release</html>') : fs.readFileSync(path.join(source, name));
+    let data = name === 'web/index.html' ? Buffer.from('<html>synthetic bridge release</html>') : runtimeSource(name);
     if (name === 'release.js') data = Buffer.from("'use strict';\nmodule.exports = " + JSON.stringify({ ...RELEASE, version: next }) + ';\n');
     if (Object.hasOwn(overrides, name)) data = Buffer.from(overrides[name]);
     return { path: name, bytes: data.length, sha256: hash(data), data: data.toString('base64') };
@@ -73,15 +75,15 @@ async function until(predicate, message, timeout = 5000) {
 test('only newer stable releases with exact official asset paths are eligible', () => {
   const good = fixture();
   assert.equal(compare('3.10.0', '3.9.9'), 1);
-  assert.equal(compare('3.1.0', '3.1.0'), 0);
-  for (const bad of ['03.1.0', '3.1', '3.1.0-beta', '9007199254740992.1.0']) assert.throws(() => compare(bad, '3.1.0'));
+  assert.equal(compare('3.2.0', '3.2.0'), 0);
+  for (const bad of ['03.2.0', '3.1', '3.2.0-beta', '9007199254740992.1.0']) assert.throws(() => compare(bad, '3.2.0'));
   const copy = value => JSON.parse(JSON.stringify(value));
   const remote = copy(good.release); remote.assets[0].browser_download_url = 'https://example.invalid/bridge-release.json';
   const duplicate = copy(good.release); duplicate.assets.push(duplicate.assets[0]);
   const candidates = releaseCandidates([{ ...good.release, draft: true }, { ...good.release, prerelease: true },
-    { ...good.release, tag_name: 'bridge-v3.2.0-rc1' }, remote, duplicate, fixture('2.9.0').release, good.release], '3.1.0');
-  assert.deepEqual(candidates.map(x => x.version), ['3.2.0']);
-  assert.deepEqual(releaseCandidates([{ ...good.release, assets: [] }], '3.1.0'), [], 'old ZIP-only releases are skipped');
+    { ...good.release, tag_name: 'bridge-v3.3.0-rc1' }, remote, duplicate, fixture('2.9.0').release, good.release], '3.2.0');
+  assert.deepEqual(candidates.map(x => x.version), ['3.3.0']);
+  assert.deepEqual(releaseCandidates([{ ...good.release, assets: [] }], '3.2.0'), [], 'old ZIP-only releases are skipped');
   for (const url of ['http://github.com/', 'https://github.com.evil.invalid/', 'https://user:pw@github.com/',
     'https://github.com:8443/', 'https://raw.githubusercontent.com/evil/code', 'file:///C:/code.js']) assert.throws(() => trustedUrl(url));
   assert.equal(trustedUrl('https://release-assets.githubusercontent.com/github-production-release-asset/x').hostname, 'release-assets.githubusercontent.com');
@@ -97,23 +99,38 @@ test('package validation rejects hash, size, path, missing file and case collisi
   for (const files of [data.files.filter(f => f.path !== 'server.js'), [...data.files, { ...data.files.at(-1), path: data.files.at(-1).path.toUpperCase() }],
     data.files.map(f => f.path === 'server.js' ? { ...f, sha256: '0'.repeat(64) } : f),
     data.files.map(f => f.path === 'server.js' ? { ...f, bytes: f.bytes + 1 } : f)]) {
-    const broken = fromFiles('3.2.0', files);
+    const broken = fromFiles('3.3.0', files);
     assert.throws(() => checkPackage(broken.archive, broken.manifest));
   }
   assert.equal(fs.existsSync(updater.cacheDir), false);
 });
 
+test('the shipped 3.1 updater accepts the new release without additional root filenames', async t => {
+  const root = temporary(t), snapshot = Buffer.from(fs.readFileSync(path.join(__dirname, 'fixtures', 'updater-3.1.js.txt'), 'utf8').replace(/\r\n/g, '\n'));
+  assert.equal(hash(snapshot), '13092676e9075cd21f7014ef0d7be215dfb54768840c547ef832d211d372a985', 'exact released validator fixture');
+  fs.writeFileSync(path.join(root, 'updater.js'), snapshot);
+  fs.writeFileSync(path.join(root, 'release.js'), "module.exports={version:'3.1.0',protocol:2,updateProtocol:1,minNode:18};\n");
+  const previous = require(path.join(root, 'updater.js')), data = fixture('3.2.0');
+  const files = previous.checkPackage(data.archive, data.manifest);
+  assert.deepEqual(files.filter(file => !file.path.startsWith('web/')).map(file => file.path).sort(), previous.ROOT_FILES.slice().sort());
+  assert.ok(files.find(file => file.path === 'server.js').data.includes(Buffer.from('function createOpenCode')));
+  assert.ok(!files.find(file => file.path === 'inference.js').data.includes(Buffer.from("require('./support')")));
+  const updater = new previous.Updater({ cacheDir: path.join(root, 'cache'), fetchBytes: data.fetchBytes });
+  const staged = await updater.check('3.1.0'); assert.equal(staged.version, '3.2.0');
+  updater.activate(staged); assert.equal(updater.active('3.1.0').key, staged.key);
+});
+
 test('verified cache activation is isolated, detects corruption and repairs from a valid download', async t => {
   const data = fixture(), root = temporary(t), sourceBefore = fs.readFileSync(path.join(source, 'server.js'));
   const updater = new Updater({ cacheDir: path.join(root, 'cache'), fetchBytes: data.fetchBytes });
-  const release = await updater.check('3.1.0');
-  assert.equal(release.version, '3.2.0'); assert.equal(updater.active('3.1.0'), null);
+  const release = await updater.check('3.2.0');
+  assert.equal(release.version, '3.3.0'); assert.equal(updater.active('3.2.0'), null);
   assert.equal(data.requests.length, 3);
-  updater.activate(release); assert.equal(updater.active('3.1.0').key, release.key);
+  updater.activate(release); assert.equal(updater.active('3.2.0').key, release.key);
   fs.appendFileSync(release.entry, '\n// corrupt');
-  assert.equal(updater.active('3.1.0'), null); assert.throws(() => updater.verify(release.key), /size|SHA-256/);
-  assert.equal((await updater.check('3.1.0')).key, release.key, 'a corrupt saved version is repaired');
-  assert.equal(updater.active('3.1.0').version, '3.2.0');
+  assert.equal(updater.active('3.2.0'), null); assert.throws(() => updater.verify(release.key), /size|SHA-256/);
+  assert.equal((await updater.check('3.2.0')).key, release.key, 'a corrupt saved version is repaired');
+  assert.equal(updater.active('3.2.0').version, '3.3.0');
   fs.writeFileSync(path.join(path.dirname(release.entry), 'package.json'), '{}');
   assert.throws(() => updater.verify(release.key), /Unexpected/);
   assert.deepEqual(fs.readFileSync(path.join(source, 'server.js')), sourceBefore, 'even a dirty checkout is not an update destination');
@@ -124,9 +141,9 @@ test('cache junctions and cached metadata cannot redirect runnable files', async
   const root = temporary(t), outside = path.join(root, 'outside'); fs.mkdirSync(outside);
   const link = path.join(root, 'cache'); fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
   const data = fixture(), updater = new Updater({ cacheDir: link, fetchBytes: data.fetchBytes });
-  await assert.rejects(updater.check('3.1.0'), /symbolic link/); assert.deepEqual(fs.readdirSync(outside), []);
+  await assert.rejects(updater.check('3.2.0'), /symbolic link/); assert.deepEqual(fs.readdirSync(outside), []);
   const clean = new Updater({ cacheDir: path.join(root, 'clean'), fetchBytes: data.fetchBytes });
-  const release = await clean.check('3.1.0');
+  const release = await clean.check('3.2.0');
   const metadata = path.join(path.dirname(release.entry), '.release.json');
   const record = JSON.parse(fs.readFileSync(metadata, 'utf8'));
   record.files.find(f => f.path === 'web/index.html').sha256 = '0'.repeat(64);
@@ -161,8 +178,8 @@ test('busy agent, subagent, permission, and question state defer update; idle re
   assert.equal(await live.supervisor.applyStaged(), true);
   assert.notEqual(live.supervisor.worker.child.pid, original); assert.equal(live.supervisor.token, token);
   const hello = await (await call('/api/hello')).json();
-  assert.equal(hello.update.currentVersion, '3.2.0'); assert.equal(hello.capabilities.pictures, undefined, 'legacy flag survives worker update');
-  assert.equal(live.updater.active('3.1.0').version, '3.2.0');
+  assert.equal(hello.update.currentVersion, '3.3.0'); assert.equal(hello.capabilities.pictures, undefined, 'legacy flag survives worker update');
+  assert.equal(live.updater.active('3.2.0').version, '3.3.0');
 });
 
 test('queued commands and an unfinished request body block restart without duplicate delivery', async t => {
@@ -202,13 +219,13 @@ test('active PC inference waits indefinitely; completion is retained until autho
 });
 
 test('failed candidate startup rolls back to the original worker without moving active pointer', async t => {
-  const live = await running(t, fixture('3.2.0', { 'server.js': "'use strict'; process.exit(7);\n" }));
+  const live = await running(t, fixture('3.3.0', { 'server.js': "'use strict'; process.exit(7);\n" }));
   const original = live.supervisor.worker.child.pid, token = live.supervisor.token;
   await live.supervisor.checkUpdates();
-  assert.equal(live.supervisor.status.state, 'error'); assert.equal(live.supervisor.current.version, '3.1.0');
+  assert.equal(live.supervisor.status.state, 'error'); assert.equal(live.supervisor.current.version, '3.2.0');
   assert.notEqual(live.supervisor.worker.child.pid, original, 'previous files were launched after candidate failure');
   assert.equal(live.supervisor.token, token); assert.equal((await live.call('/api/hello')).status, 200);
-  assert.equal(live.updater.active('3.1.0'), null);
+  assert.equal(live.updater.active('3.2.0'), null);
 });
 
 test('live picture drafts survive staging until explicitly removed', async t => {
@@ -230,28 +247,28 @@ test('activation failure stops the candidate and restores the previous live vers
   const live = await running(t, fixture());
   live.updater.activate = () => { throw Error('simulated disk failure'); };
   await live.supervisor.checkUpdates();
-  assert.equal(live.supervisor.status.state, 'error'); assert.equal(live.supervisor.current.version, '3.1.0');
-  assert.equal((await live.call('/api/hello')).status, 200); assert.equal(live.updater.active('3.1.0'), null);
+  assert.equal(live.supervisor.status.state, 'error'); assert.equal(live.supervisor.current.version, '3.2.0');
+  assert.equal((await live.call('/api/hello')).status, 200); assert.equal(live.updater.active('3.2.0'), null);
 });
 
 test('a cached startup error is withheld until the installed fallback can become ready', async t => {
   let sup; t.after(() => sup?.stop());
-  const root = temporary(t), data = fixture('3.2.0', { 'server.js':
+  const root = temporary(t), data = fixture('3.3.0', { 'server.js':
     "process.stdout.write(JSON.stringify({type:'error',message:'synthetic startup failure'})+'\\n',()=>process.exit(7));\n" });
   const updater = new Updater({ cacheDir: path.join(root, 'cache'), fetchBytes: data.fetchBytes });
-  updater.activate(await updater.check('3.1.0'));
+  updater.activate(await updater.check('3.2.0'));
   let output = '';
   sup = new Supervisor({ updater, args: ['--port', String(await port())], initialDelayMs: 2 ** 30,
     stdout: { write: chunk => { output += chunk; } }, stderr: null });
   await sup.start();
   await until(() => /Token\s+[a-f0-9]{64}/.test(output), 'fallback prints its ready output');
-  assert.equal(sup.current.version, '3.1.0'); assert.ok(!output.includes('synthetic startup failure'));
+  assert.equal(sup.current.version, '3.2.0'); assert.ok(!output.includes('synthetic startup failure'));
 });
 
 test('a worker crash during idle negotiation restores a live worker instead of retrying a dead one', async t => {
   let sup; t.after(() => sup?.stop());
   const root = temporary(t), entry = path.join(root, 'base.js'), data = fixture();
-  fs.writeFileSync(entry, "process.send({type:'ready',version:'3.1.0',updateProtocol:1,token:process.env.UAI_BRIDGE_SESSION_TOKEN});\n" +
+  fs.writeFileSync(entry, "process.send({type:'ready',version:'3.2.0',updateProtocol:1,token:process.env.UAI_BRIDGE_SESSION_TOKEN});\n" +
     "process.on('message',m=>{if(m.type==='prepare-update'||m.type==='stop')process.exit(9);});\n" +
     "process.on('disconnect',()=>process.exit(0));process.stdin.resume();process.stdin.on('end',()=>process.exit(0));\n");
   const updater = new Updater({ cacheDir: path.join(root, 'cache'), fetchBytes: data.fetchBytes });
@@ -259,13 +276,13 @@ test('a worker crash during idle negotiation restores a live worker instead of r
   await sup.start(); const original = sup.worker.child.pid;
   await sup.checkUpdates();
   assert.equal(sup.status.state, 'error'); assert.notEqual(sup.worker.child.pid, original);
-  assert.equal(sup.worker.child.exitCode, null); assert.equal(sup.current.version, '3.1.0');
+  assert.equal(sup.worker.child.exitCode, null); assert.equal(sup.current.version, '3.2.0');
 });
 
 test('a downloaded start.txt keeps its cached update after the original runtime is rematerialized', async t => {
   let sup; t.after(() => sup?.stop());
   const root = temporary(t), packageDir = path.join(root, 'packages', 'original'); fs.mkdirSync(packageDir, { recursive: true });
-  const original = fixture('3.1.0');
+  const original = fixture('3.2.0');
   const manifest = { revision: 'a'.repeat(40), files: original.files.map(file => {
     const bytes = Buffer.from(file.data, 'base64'), target = path.join(packageDir, file.path + '.txt');
     fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, bytes);
@@ -273,12 +290,12 @@ test('a downloaded start.txt keeps its cached update after the original runtime 
   }) };
   const entry = materialize(manifest, packageDir);
   const cacheDir = path.join(root, 'user-cache'), update = fixture();
-  const updater = new Updater({ cacheDir, fetchBytes: update.fetchBytes }), release = await updater.check('3.1.0'); updater.activate(release);
+  const updater = new Updater({ cacheDir, fetchBytes: update.fetchBytes }), release = await updater.check('3.2.0'); updater.activate(release);
   materialize(manifest, packageDir);
   sup = new Supervisor({ entry, updater, args: ['--port', String(await port())], initialDelayMs: 2 ** 30, stdout: null, stderr: null });
   await sup.start();
-  assert.equal(sup.current.version, '3.2.0'); assert.equal(sup.worker.release.entry, release.entry);
-  assert.ok(fs.readFileSync(path.join(path.dirname(entry), 'release.js'), 'utf8').includes('3.1.0'));
+  assert.equal(sup.current.version, '3.3.0'); assert.equal(sup.worker.release.entry, release.entry);
+  assert.ok(fs.readFileSync(path.join(path.dirname(entry), 'release.js'), 'utf8').includes('3.2.0'));
   assert.equal(cacheDirectory(path.join(root, 'start.txt')), cacheDirectory(path.join(root, 'start.txt')));
   assert.ok(!cacheDirectory(path.join(root, 'start.txt')).startsWith(packageDir));
   const previous = process.env.UAI_BRIDGE_INSTALLATION_ID;

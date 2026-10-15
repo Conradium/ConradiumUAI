@@ -86,7 +86,7 @@ return function(env)
 		-- Native Anthropic presets select x-api-key. Explicit bearer auth is useful
 		-- for compatible Messages gateways and must remain a real choice.
 		local authRecord = record
-		if record.authStyle == nil then
+		if record.authStyle == nil and not registry.isOpencodeGo(record) then
 			explicitKey = explicitKey or registry.nextKey(record) or ""
 			authRecord = util.copy(record); authRecord.authStyle = "x-api-key"
 		end
@@ -518,8 +518,10 @@ return function(env)
 		local currentKey = registry.nextKey(record)
 
 		local function rebuildHeaders()
+			local accept = body.stream and "text/event-stream" or "application/json"
+			if registry.isOpencode(record) then accept = headerMap.get(record.headers, "Accept") or "*/*" end
 			return headerMap.merge(M.headers(record, currentKey), registry.opencodeHeaders(record, request),
-				{ Accept = body.stream and "text/event-stream" or "application/json" })
+				record.headers, { Accept = accept })
 		end
 
 		local headers = rebuildHeaders()

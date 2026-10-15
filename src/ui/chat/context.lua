@@ -92,8 +92,8 @@ return function(env)
 			if session.removed then modal.close(); return end
 			local ctx, record = session.ctx, providers.active()
 			local model = record and record.model
-			local window = traits.contextWindow(model)
-			local compactAt = math.max(ctx.limitFor(model), 1)
+			local window = traits.contextWindow(model, record)
+			local compactAt = math.max(ctx.limitFor(model, record), 1)
 			local scale = math.max(window or compactAt, 1)
 			local values = ctx.breakdown(record)
 			local used = values.used

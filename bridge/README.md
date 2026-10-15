@@ -3,12 +3,56 @@
 Use UAI in your browser while Roblox runs your tools and keeps the conversation.
 Run both on the same computer. The [Windows desktop app](../desktop/README.md)
 detects installed Node.js and offers a verified download if needed. Open the
-single **UAI-Bridge-3.1.0-win-x64.exe** download, complete Node setup, click **Start
+single **UAI-Bridge-3.2.0-win-x64.exe** download, complete Node setup, click **Start
 Cowork**, and load the updated UAI script. The browser opens and Roblox connects
 automatically on dedicated port **28791**. No terminal or token copying is needed.
 
 The terminal workflow below needs **Node.js 18 or newer** and has no production
 npm dependencies. It retains port 8790 and manual pairing.
+
+Join the [Project UAI Discord](https://discord.gg/9xYyyYuKap) for help, provider
+availability updates and new free options. Project UAI Free is the default for
+users without a provider; thank you for continuing to use and support Project UAI.
+
+## OpenCode on desktop
+
+The existing direct desktop workaround remains supported. Version 3.2 also adds
+an optional native route through an **already installed OpenCode CLI**. Install
+[OpenCode Desktop](https://opencode.ai), restart Cowork, and wait for its OpenCode
+status to become ready. UAI does not download or package the OpenCode binary.
+OpenCode free models are unsupported on mobile; use Project UAI Free or another provider.
+The retired OpenCode HTTPS proxy is never used; the proxy supports AgentRouter only.
+
+**OpenCode Go subscriptions use a separate endpoint:**
+`https://opencode.ai/inference/go/v1`, with your Go API key. The legacy
+`https://opencode.ai/zen/go/v1` route also remains accepted. Go requests use that
+endpoint directly and never enter the isolated native free-model connection.
+The desktop-only free-model restriction does not apply to Go subscriptions.
+
+The bridge detects OpenCode Desktop's Windows `resources/opencode-cli.exe`, native
+`opencode-cli`/`opencode` binaries on PATH, and `~/.opencode/bin`. A custom native
+binary may be selected with the absolute `UAI_OPENCODE_BINARY` environment variable.
+Shell shims are not executed. `UAI_OPENCODE_DISABLED=1` disables this optional route.
+OpenCode's v2 server API is required (verified with CLI 2.0.27).
+
+The bridge starts `serve` privately on a random loopback port with a random Basic
+Auth password and isolated configuration/data directories. It never reads the
+user's OpenCode account credentials or forwards a provider key to that process.
+Only models reported by the native public catalog route through it; paid/custom
+models and installations without a ready native backend retain the direct path.
+Model discovery uses authenticated `GET /api/opencode/models`; `/api/hello` exposes
+`capabilities.opencode = {schema:1, available, state, models}` without CLI credentials.
+
+Each request gets a temporary native session and location. UAI tools are exposed
+through a private MCP server, collected after the provider stream completes, and
+returned as ordinary tool calls for Roblox to execute. Native desktop actions are
+never approved. The native built-in schemas remain visible with ask permissions,
+as hiding them causes upstream `FreeTierError`. Text/reasoning previews and image
+attachments pass through the native API. Stop interrupts and deletes the session;
+bridge shutdown stops the owned CLI and removes its temporary data. Requests keep
+their original bridge ID across polling retries. No inference deadline is added.
+Usage totals include cached input and reasoning output; cache reads, cache writes,
+and reasoning counts remain available separately for UAI's usage accounting.
 
 ## Start in three steps
 
@@ -49,10 +93,13 @@ Failed downloads or startup keep a working version. Git checkouts and executor
 download packages are never overwritten; updates live in a per-install user cache.
 
 Publish `dist/bridge-release.json` and `dist/uai-bridge-package.json` on the same
-official `v3.1.0` or `bridge-v3.1.0` GitHub release. Generate them with
+official `v3.2.0` or `bridge-v3.2.0` GitHub release. Generate them with
 `node tools/build_bridge.js` after reviewing final bridge/web inputs, inspect
 the outputs, then run `node tools/build_bridge.js --check` and focused tests.
 Later releases must bump `bridge/release.js` and use the matching release tag.
+The release builder embeds OpenCode/support helpers into the original permitted
+root filenames so installed 3.1 updaters can verify and activate 3.2. Checkout,
+executor downloads and desktop payloads retain the separate source modules.
 
 The [desktop app](../desktop/README.md) independently downloads its own release
 and applies it on restart. An old 1.0 desktop ZIP needs one manual upgrade first.
@@ -108,12 +155,15 @@ guarantee; executor scheduling and the provider's response time also matter.
 | A picture is expired or unavailable | Attach it again. Pictures expire after 15 minutes of inactivity and disappear when the bridge stops. |
 | The bridge is reconnecting | Keep your draft in the tab and restart/reconnect the bridge. Review the conversation if a delivery receipt was lost. |
 | A deadline error appears | Use the highlighted Discord tutorial link. Cowork imposes no overall deadline, but an upstream provider or transport can still fail. |
+| OpenCode reports `FreeTierError` | Keep the direct desktop workaround enabled, or install/update OpenCode Desktop and restart Cowork for the native route. Mobile is unsupported. [Discord help](https://discord.gg/9xYyyYuKap). |
 
 ## Development and tests
 
 `server.js` owns authenticated loopback routes, command receipts and browser SSE.
 `inference.js` owns provider requests and bounded preview replay. `picture-store.js`
 keeps validated image bytes in memory. `launcher.js` restores executor downloads.
+`opencode.js` owns the external native server, temporary sessions and MCP handoff;
+`support.js` supplies consistent Discord error help.
 `supervisor.js` owns the worker process, token and idle replacement;
 `updater.js` validates releases and maintains the isolated cache.
 `web/` contains the dependency-free UI, Markdown, previews, pictures, themes and
@@ -128,7 +178,7 @@ Finish implementation, documentation and test edits before running verification:
 ```powershell
 luajit tools/bundle.lua --native
 node tools/build_site.js
-node bridge/tests/run.js
+node --test bridge/tests/opencode-native.test.js bridge/tests/opencode.test.js bridge/tests/desktop.test.js bridge/tests/security.test.js bridge/tests/streaming.test.js bridge/tests/updater.test.js
 luajit test/web_runtime.lua
 luajit test/bridge_install.lua
 ```
@@ -149,7 +199,7 @@ short screens with full drafts, long task lists and model names, live question a
 selection updates, dialog errors, keyboard focus, contrast, and forced colors.
 Inspect the saved screenshots as well as checking geometry. These fixtures do not
 replace a live executor check. See the [UI audit](UI_AUDIT.md) for the findings.
-The [3.1.0 verification record](../docs/TESTING_3.1.0.md) records the current
+The [3.2.0 verification record](../docs/TESTING_3.2.0.md) records the current
 bridge release checks; the entire native suite is not part of this pass.
 
 Protocol remains version 2. `/api/hello` advertises optional picture and normalized

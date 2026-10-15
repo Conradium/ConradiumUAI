@@ -29,6 +29,7 @@ local MATRIX = {
 	{ "openai", "https://api.openai.com/v1", "openai", "bearer" },
 	{ "openrouter", "https://openrouter.ai/api/v1", "openai", "bearer" },
 	{ "zen", "https://opencode.ai/zen/v1", "openai", "bearer" },
+	{ "opencode-go", "https://opencode.ai/inference/go/v1", "openai", "bearer" },
 	{ "azure-foundry", "https://YOUR-RESOURCE.openai.azure.com/openai/v1", "openai", "api-key" },
 	{ "anthropic-messages", "https://api.anthropic.com/v1", "anthropic", "x-api-key" },
 	{ "anthropic", "https://api.anthropic.com/v1", "openai", "x-api-key" },
@@ -78,7 +79,7 @@ for _, row in ipairs(MATRIX) do
 			posts = posts + 1
 			local body = f.h.json.decode(entry.body); seenBodies[posts] = body
 			check("model/deployment selection", row[1] == "azure" and body.model == nil or row[1] ~= "azure" and body.model == record.model)
-			check("effective Accept header", header(entry.headers, "Accept") == (body.stream and "text/event-stream" or "application/json"))
+			check("effective Accept header", header(entry.headers, "Accept") == ((row[1] == "zen" or row[1] == "opencode-go") and "*/*" or (body.stream and "text/event-stream" or "application/json")))
 			check("tools reach the server", type(body.tools) == "table" and #body.tools > 0)
 			if row[1] == "ollama" then check("Ollama avoids unsupported defaults", body.tool_choice == nil and body.parallel_tool_calls == nil) end
 			if posts == 1 then
@@ -648,8 +649,37 @@ case("OpenCode session validator migrates legacy sessions and connection tests s
 	end)
 	check("connection test with stream=false is forced to streaming for OpenCode", result and result.content == "ready")
 	check("body.stream is true", f.h.json.decode(intercepted.body).stream == true)
-	check("header Accept is text/event-stream", intercepted.headers.Accept == "text/event-stream")
+	check("header Accept matches the verified desktop fingerprint", f.env.require("net/headers").get(intercepted.headers, "accept") == "*/*")
 	check("session header is valid inverted timestamp", registry.validOpencodeSession(intercepted.headers["x-opencode-session"]))
+	check("Chat uses the verified desktop identity", intercepted.headers["x-opencode-client"] == "desktop"
+		and intercepted.headers["User-Agent"] == "opencode/latest/2.0.27/desktop")
+	for _, name in ipairs({ "x-opencode-session-id", "x-session-affinity", "X-Session-Id" }) do
+		check("desktop session headers retain one affinity", intercepted.headers[name] == intercepted.headers["x-opencode-session"])
+	end
+	check("CLI project/request headers stay absent", intercepted.headers["x-opencode-project"] == nil and intercepted.headers["x-opencode-request"] == nil)
+	f.healthy(); f.close()
+end)
+
+case("OpenCode saved identity overrides remain explicit on both protocol lanes", function()
+	local f = F.new(); local registry = f.env.require("provider/registry")
+	local record = recordFor(f, "zen")
+	record.opencode = { version = "1.0.118-test", client = "custom-client" }
+	local defaults = registry.opencodeHeaders(record)
+	check("explicit numeric version retains its prior format", defaults["User-Agent"] == "opencode/stable/1.0.118-test/custom-client")
+	check("explicit client is retained", defaults["x-opencode-client"] == "custom-client")
+	record.opencode.version = "opencode/custom/verified-client"
+	check("explicit complete user agent is unchanged", registry.opencodeHeaders(record)["User-Agent"] == "opencode/custom/verified-client")
+	record.model = "muse-spark-fixture"
+	local intercepted
+	f.h.http.handler = function(spec)
+		intercepted = spec
+		return { StatusCode = 200, Body = f.h.json.encode({ object = "response", status = "completed", output = {
+			{ type = "message", content = { { type = "output_text", text = "ready" } } },
+		} }) }
+	end
+	local result = complete(f, record)
+	check("Responses shares explicit saved overrides", result and intercepted.headers["User-Agent"] == "opencode/custom/verified-client"
+		and intercepted.headers["x-opencode-client"] == "custom-client")
 	f.healthy(); f.close()
 end)
 
@@ -685,6 +715,7 @@ case("Responses connection tests retain OpenCode identity on Game and Web routes
 		check("direct provider calls match route", f.h.http.requestCount == (route == "game" and 1 or 0))
 		check("Responses query survives", captured.url == "https://opencode.ai/inference/v1/responses?tenant=one&mode=a%20b")
 		check("Responses retains desktop identity", captured.headers["x-opencode-client"] == "desktop" and captured.headers["User-Agent"] == "opencode/latest/2.0.27/desktop")
+		check("Responses omits CLI project/request headers", captured.headers["x-opencode-project"] == nil and captured.headers["x-opencode-request"] == nil)
 		check("Responses retains valid session", f.env.require("provider/registry").validOpencodeSession(captured.headers["x-opencode-session"]))
 		check("Responses preserves streaming and tool declarations", captured.body.stream == true and #captured.body.tools >= 3)
 		if route ~= "game" then check("preview belongs to conversation", captured.sessionId == "responses-session" and result.requestId == "response-preview") end
@@ -770,7 +801,7 @@ case("Responses fallback failure stays terminal and never pins the lane", functi
 	end
 end)
 
-case("Responses key rotation and proxy recovery preserve identity and request budget", function()
+case("Responses rotates quota keys without recovering through the retired proxy", function()
 	local f = F.new(); local record = recordFor(f, "zen")
 	record.model, record.apiKey = "muse-spark-fixture", "first-key\nsecond-key"
 	local captured, deadlines = {}, {}
@@ -779,17 +810,16 @@ case("Responses key rotation and proxy recovery preserve identity and request bu
 	f.h.http.handler = function(spec)
 		captured[#captured + 1] = spec
 		if #captured == 1 then return { StatusCode = 429, Body = '{"error":{"message":"quota"}}' } end
-		if #captured == 2 then return { StatusCode = 403, Body = '{"error":{"message":"unauthorized client"}}' } end
-		return { StatusCode = 200, Body = f.h.json.encode({ object = "response", status = "completed", output = {
-			{ type = "message", content = { { type = "output_text", text = "recovered" } } },
-		} }) }
+		return { StatusCode = 403, Body = '{"error":{"message":"unauthorized client"}}' }
 	end
-	local result = complete(f, record, { messages = { { role = "user", content = "hi" } }, onRetry = function() error("fixture retry callback") end })
-	check("quota and client refusal recover", result and result.content == "recovered" and #captured == 3)
-	check("only quota rejection rotates the key", captured[1].headers.Authorization == "Bearer first-key" and captured[2].headers.Authorization == "Bearer second-key" and captured[3].headers.Authorization == captured[2].headers.Authorization)
-	check("proxy uses Responses endpoint", captured[3].url == "https://puai-proxy.davidzk.tech/opencode/v1/responses")
-	check("one shared deadline", deadlines[1] == deadlines[2] and deadlines[2] == deadlines[3])
-	for _, spec in ipairs(captured) do check("desktop fingerprint survives recovery", spec.headers["x-opencode-client"] == "desktop" and spec.headers["x-opencode-session"] == captured[1].headers["x-opencode-session"]) end
+	local result, why = complete(f, record, { messages = { { role = "user", content = "hi" } }, onRetry = function() error("fixture retry callback") end })
+	check("client refusal is not sent to retired proxy", not result and has(why, "unauthorized client") and #captured == 2)
+	check("only quota rejection rotates the key", captured[1].headers.Authorization == "Bearer first-key" and captured[2].headers.Authorization == "Bearer second-key")
+	check("one shared deadline", deadlines[1] == deadlines[2])
+	for _, spec in ipairs(captured) do
+		check("official Responses endpoint retained", spec.url == "https://opencode.ai/inference/v1/responses")
+		check("desktop fingerprint survives recovery", spec.headers["x-opencode-client"] == "desktop" and spec.headers["x-opencode-session"] == captured[1].headers["x-opencode-session"])
+	end
 	f.healthy(); f.close()
 end)
 

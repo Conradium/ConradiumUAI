@@ -1,5 +1,5 @@
--- Public, opt-in community credentials. Importing this module never changes a
--- provider or sends traffic; the setup editor applies a key only after a click.
+-- The intentionally distributed Project UAI Free credential. Importing this
+-- module sends no traffic. Never replace it with a private development key.
 return function(env)
 	local url = env.require("net/url")
 	local M = {}
@@ -12,9 +12,28 @@ return function(env)
 			and parsed.path == "/v1" and (not parsed.query or parsed.query == "")
 	end
 	function M.apply(record)
-		if not M.eligible(record) then return nil, "Select the official HCNSEC endpoint to use its community key." end
+		if not M.eligible(record) then return nil, "Project UAI Free requires the official HCNSEC endpoint. Help: https://discord.gg/9xYyyYuKap" end
 		record.apiKey = key
+		record.authStyle = "bearer"
 		record.keyRotation = nil
+		for name, value in pairs(record.headers or {}) do
+			local lower = type(name) == "string" and name:lower() or ""
+			if (lower == "authorization" and tostring(value) ~= "Bearer " .. key)
+				or ((lower == "x-api-key" or lower == "api-key") and tostring(value) ~= key) then
+				record.headers[name] = nil
+			end
+		end
+		return true
+	end
+	function M.isApplied(record)
+		if not M.eligible(record) or record.apiKey ~= key or (record.authStyle or "bearer") ~= "bearer" then return false end
+		-- Extra headers win over generated authentication. A personal override
+		-- must not keep the included-access badge or its zero-cost estimate.
+		for name, value in pairs(record.headers or {}) do
+			local lower = type(name) == "string" and name:lower() or ""
+			if lower == "authorization" and tostring(value) ~= "Bearer " .. key then return false end
+			if (lower == "x-api-key" or lower == "api-key") and tostring(value) ~= key then return false end
+		end
 		return true
 	end
 	return M

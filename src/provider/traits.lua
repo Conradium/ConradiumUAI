@@ -5,13 +5,12 @@
 -- request must be built live here, in one table, rather than being rediscovered
 -- from a 400 at each call site.
 --
--- Matched by longest substring, the same way `usage.priceFor` resolves a price,
--- because gateways prefix and suffix ids freely -- "anthropic/claude-opus-5",
--- "claude-opus-5-1m", a dated snapshot -- and an exact-match table would miss
--- every one of them. Only families this client has a documented fact about appear;
--- an unknown id resolves to an empty trait set, which means "behave as before".
+-- Current limits come from the reviewed provider catalog. The small hand-written
+-- table retains protocol facts: a generic reasoning flag cannot establish which
+-- wire-level thinking parameters an endpoint accepts.
 return function(env)
 	local config = env.require("runtime/config")
+	local info = env.require("provider/model_info")
 
 	local M = {}
 
@@ -78,7 +77,7 @@ return function(env)
 		}
 	end
 
-	function M.of(model)
+	function M.of(model, record)
 		local id = tostring(model or ""):lower()
 		if id == "" then return EMPTY end
 		local best, bestLength = EMPTY, 0
@@ -87,18 +86,28 @@ return function(env)
 				best, bestLength = traits, #prefix
 			end
 		end
-		return best
+		local documented = info.capabilities(id, record)
+		if not documented then return best end
+		local merged = {}
+		for key, value in pairs(best) do merged[key] = value end
+		merged.context = documented.context or merged.context
+		merged.input = documented.input
+		merged.output = documented.output or merged.output
+		merged.tools = documented.tools
+		merged.reasoning = documented.reasoning
+		return merged
 	end
 
-	function M.contextWindow(model)
+	function M.contextWindow(model, record)
 		local id = tostring(model or ""):lower()
 		local over = tonumber((config.get("agent.forceContext", {}) or {})[id])
 		if over and over >= 1 and over < math.huge then return math.floor(over) end
-		return M.of(model).context
+		local row = M.of(model, record)
+		return row.input and row.context and math.min(row.input, row.context) or row.input or row.context
 	end
 
-	function M.maxOutput(model)
-		return M.of(model).output
+	function M.maxOutput(model, record)
+		return M.of(model, record).output
 	end
 
 	function M.maxTools(model)
@@ -162,8 +171,8 @@ return function(env)
 	-- A short badge for the model pickers: "1M", "200K". Nil when unknown, so a
 	-- row for an id this table has never heard of simply has no badge. A manually
 	-- declared context is a fact the user stated, so it earns the same badge.
-	function M.badge(model)
-		local context = M.contextWindow(model)
+	function M.badge(model, record)
+		local context = M.contextWindow(model, record)
 		if not context then return nil end
 		if context >= 1000000 then
 			local millions = context / 1000000

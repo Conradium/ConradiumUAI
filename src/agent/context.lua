@@ -144,11 +144,11 @@ return function(env)
 		-- manual "Context budget" setting is a hard ceiling; when the model's own
 		-- context window is known, compaction starts at a fraction of it, so a small-
 		-- window model compacts on its own without the user tuning a number for it.
-		function ctx.limitFor(model)
+		function ctx.limitFor(model, record)
 			local configured = tonumber(config.get("agent.contextTokens", 24000)) or 24000
 			if configured ~= configured or configured == math.huge then configured = 24000 end
 			configured = math.max(configured, 1000)
-			local window = model and env.require("provider/traits").contextWindow(model) or nil
+			local window = model and env.require("provider/traits").contextWindow(model, record) or nil
 			if not window then return configured end
 			local fraction = tonumber(config.get("agent.contextFraction", 0.8)) or 0.8
 			if fraction ~= fraction then fraction = 0.8 end
@@ -261,7 +261,7 @@ return function(env)
 		-- cut down in place, and cancellation cannot leave half-compacted history.
 		function ctx.compact(summarise, opts)
 			opts = opts or {}
-			local budget = opts.tokenLimit or ctx.limitFor(opts.model)
+			local budget = opts.tokenLimit or ctx.limitFor(opts.model, opts.record)
 			local force = opts.force == true
 			local msgLimit = math.max(0, budget - overheadFor(opts.record))
 			local before = ctx.tokens()
@@ -312,7 +312,7 @@ return function(env)
 			local summaryBytes = math.min(SUMMARY_BYTES, reserve * 4, math.floor((before - keptTokens) * 4 * 0.75))
 			if summaryBytes < 64 then return nil, "too little older context to compact usefully" end
 			local inputLimit = SUMMARY_INPUT_BYTES
-			local window = opts.model and env.require("provider/traits").contextWindow(opts.model)
+			local window = opts.model and env.require("provider/traits").contextWindow(opts.model, opts.record)
 			if window then inputLimit = math.min(inputLimit, math.max(1000, (window - 1536) * 3)) end
 			local transcript, entries, size = {}, {}, 0
 			local previousSummary = ctx.summary and util.trim(ctx.summary) or ""

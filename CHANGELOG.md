@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.2.0 — October 15, 2026 — Project UAI Free and OpenCode desktop
+
+- Start empty provider setups with Project UAI Free, using included public HCNSEC
+  access and its verified `auto` router. Preserve existing providers and credentials.
+- Improve the welcome with thanks for continued support, variable capacity/speed,
+  possible future free providers and https://discord.gg/9xYyyYuKap.
+- Strengthen the direct OpenCode desktop workaround with the live-verified desktop
+  identity, retaining compatibility tools and Chat/Responses recovery without a bridge.
+  Add an optional desktop bridge path using a separately installed official CLI
+  server, with live model discovery, owned sessions and tool handoff to Roblox.
+  The CLI binary is not packaged.
+- Remove retired OpenCode proxy targeting/recovery, migrate old URLs to Zen and
+  retain only AgentRouter on the proper proxy domain, without a Workers.dev fallback.
+- Add a separate OpenCode Go preset, catalog and model-specific Chat, Responses
+  and Messages routing. Preserve canonical and legacy Go paths, keep paid Go
+  outside the free CLI backend, and distinguish subscription, privacy-region
+  and retired-proxy refusals. Gemini's native Go protocol is not implemented.
+- Clearly mark OpenCode free models unsupported on mobile, including the Android
+  companion. Add Discord help to provider, conversation, tool and bridge errors.
+- Refresh provider-specific model prices and context/reply limits. Account for
+  documented cache rates and long-context tiers, keep unknown prices unknown,
+  and show included Project UAI Free usage at zero cost.
+- Set client, bridge and Windows desktop to 3.2.0. UI LIB and SDK versions remain
+  1.3.0 and 1.0.0. See [focused verification](docs/TESTING_3.2.0.md).
+
+
 ## 3.1.0 — October 14, 2026 — Bridge improvements
 
 - Replace the bridge's UAI logo with a text-only Cowork identity and redesign the

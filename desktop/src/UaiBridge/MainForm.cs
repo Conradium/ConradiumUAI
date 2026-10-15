@@ -7,7 +7,7 @@ internal sealed class MainForm : Form
     private readonly BridgeProcess bridge;
     private readonly DesktopUpdater updater = new();
     private readonly CancellationTokenSource lifetime = new();
-    private readonly Label state = new(), detail = new(), nodeState = new(), nodeDetail = new(), bridgeUpdate = new(), appUpdate = new();
+    private readonly Label state = new(), detail = new(), nodeState = new(), nodeDetail = new(), bridgeUpdate = new(), appUpdate = new(), openCodeDetail = new();
     private readonly ActionButton start = new(), stop = new(), install = new(), recheck = new(), restart = new();
     private readonly ConnectionStrip connection = new();
     private readonly NotifyIcon tray;
@@ -25,16 +25,16 @@ internal sealed class MainForm : Form
         ShowIcon = false;
         BackColor = Palette.Canvas; ForeColor = Palette.Ink;
         Font = new Font("Segoe UI", 10); AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(860, 728); MinimumSize = new Size(790, 738);
+        ClientSize = new Size(860, 836); MinimumSize = new Size(790, 738);
         StartPosition = FormStartPosition.CenterScreen;
 
-        var layout = Column(BackColor, 32); layout.AutoScroll = true; layout.RowCount = 5;
-        foreach (int height in new[] { 40, 114, 254, 208, 48 }) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+        var layout = Column(BackColor, 32); layout.AutoScroll = true; layout.RowCount = 6;
+        foreach (int height in new[] { 40, 114, 254, 208, 108, 48 }) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         Controls.Add(layout);
         var masthead = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
         masthead.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); masthead.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
         masthead.Controls.Add(TextLabel("Cowork", 16, FontStyle.Bold, Palette.Ink), 0, 0);
-        var edition = TextLabel("DESKTOP  /  3.1.0", 9, FontStyle.Regular, Palette.Muted);
+        var edition = TextLabel("DESKTOP  /  3.2.0", 9, FontStyle.Regular, Palette.Muted);
         edition.TextAlign = ContentAlignment.TopRight; edition.Padding = new Padding(0, 7, 0, 0);
         masthead.Controls.Add(edition, 1, 0); layout.Controls.Add(masthead, 0, 0);
         var intro = Column(Palette.Canvas);
@@ -86,6 +86,17 @@ internal sealed class MainForm : Form
         updateContent.Controls.Add(restart, 0, 3); updateCard.Controls.Add(updateContent); lower.Controls.Add(updateCard, 1, 0);
         layout.Controls.Add(lower, 0, 3);
 
+        var openCodeCard = MakeCard(new Padding(0, 0, 0, 12));
+        var openCodeContent = new TableLayoutPanel { BackColor = Color.White, Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
+        openCodeContent.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); openCodeContent.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
+        openCodeContent.RowStyles.Add(new RowStyle(SizeType.Absolute, 24)); openCodeContent.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        openCodeContent.Controls.Add(TextLabel("OpenCode free models", 11, FontStyle.Bold, Palette.Ink), 0, 0);
+        StyleLabel(openCodeDetail, 9, FontStyle.Regular, Palette.Muted); openCodeDetail.AccessibleName = "OpenCode backend status";
+        openCodeContent.Controls.Add(openCodeDetail, 0, 1);
+        openCodeContent.Controls.Add(Link("Install OpenCode Desktop", () => OpenExternal("https://opencode.ai")), 1, 0);
+        openCodeContent.Controls.Add(Link("Discord help and updates", () => OpenExternal(BridgeProcess.Discord)), 1, 1);
+        openCodeCard.Controls.Add(openCodeContent); layout.Controls.Add(openCodeCard, 0, 4);
+
         var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, Margin = Padding.Empty, Padding = new Padding(0, 5, 0, 0) };
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110)); footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 65));
@@ -102,7 +113,7 @@ internal sealed class MainForm : Form
             catch (Exception) { if (!IsDisposed) detail.Text = "The script could not be copied. Use the published UAI loader."; }
         }), 1, 0);
         footer.Controls.Add(Link("Hide to tray", HideToTray), 2, 0); footer.Controls.Add(Link("Exit app", async () => await ExitAsync()), 3, 0);
-        layout.Controls.Add(footer, 0, 4);
+        layout.Controls.Add(footer, 0, 5);
         var menu = new ContextMenuStrip(); menu.Items.Add("Show Cowork", null, (_, _) => RestoreWindow());
         trayOpen = new ToolStripMenuItem("Open Cowork", null, (_, _) => OpenBrowser()); trayStop = new ToolStripMenuItem("Stop bridge", null, async (_, _) => await StopAsync());
         menu.Items.Add(trayOpen); menu.Items.Add(trayStop); menu.Items.Add(new ToolStripSeparator()); menu.Items.Add("Exit", null, async (_, _) => await ExitAsync());
@@ -172,6 +183,7 @@ internal sealed class MainForm : Form
             _ => $"Bridge {bridge.BridgeVersion} · Automatic updates on"
         };
         appUpdate.Text = "Desktop · " + updater.Detail;
+        openCodeDetail.Text = bridge.OpenCodeDetail;
         restart.Enabled = updater.ReadyToRestart && !busy && !running && !installing;
         restart.Text = updater.ReadyToRestart ? running ? "Stop bridge to update app" : "Restart to update app" : "Updates automatically";
         tray.Text = "Cowork · " + bridge.State;

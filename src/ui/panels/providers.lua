@@ -58,6 +58,7 @@ return function(env)
 	-- were kept, and the export path reduced it to exactly that.
 	local function maskedKey(record)
 		local raw = tostring(record.apiKey or "")
+		if util.trim(raw) == "" and registry.opencodeKeyOptional(record) then return "Provided by connected OpenCode CLI", nil end
 		if util.trim(raw) == "" then return "not set", "warn" end
 		local pool = registry.keysOf(record)
 		if #pool > 1 then
@@ -191,6 +192,10 @@ return function(env)
 
 		local function showProblems()
 			local ok, problems = registry.validate(editing)
+			if keyLabel then
+				local shown, tone = maskedKey(editing)
+				keyLabel.Text, keyLabel.TextColor3 = shown, tone and theme.color.warn or theme.color.textSecondary
+			end
 			problemLabel.Text = ok and "" or (problems[1]:gsub("^%l", string.upper) .. ".")
 			problemLabel.Visible = not ok
 			return ok
@@ -276,7 +281,8 @@ return function(env)
 					})
 				end
 				docsNoteRow = R.paragraph(keyColumn,
-					presetRecord.authStyle == "none"
+					presetRecord.free and "Free access is included. Join our Discord for updates, availability notices and help."
+						or presetRecord.authStyle == "none"
 						and "Server setup and API documentation are at the address above."
 						or "Keys for this provider are issued at the address above.",
 					{ layoutOrder = 12 })
@@ -307,6 +313,17 @@ return function(env)
 			editing.query = util.deepCopy(preset.query or {})
 			editing.note = preset.note
 			editing.requires = preset.requires
+			if preset.free then
+				if util.trim(editing.apiKey or "") == "" then communityKey.apply(editing) end
+				if util.trim(editing.model or "") == "" then
+					editing.model, editing.models = preset.defaultModel, { preset.defaultModel }
+				end
+				if keyLabel then
+					local shown, tone = maskedKey(editing)
+					keyLabel.Text, keyLabel.TextColor3 = shown, tone and theme.color.warn or theme.color.textSecondary
+				end
+				if setKeyButton then setKeyButton.setText("Replace") end
+			end
 			if presetButton then presetButton.setText(preset.label) end
 			if urlField then urlField.set(editing.baseUrl) end
 			-- The name follows when it was never hand-edited -- the same rule the label
@@ -494,8 +511,8 @@ return function(env)
 			})
 			setKeyButton.instance.LayoutOrder = 2
 			communityRow = P.column(column, { name = "CommunityKey", size = UDim2.new(1, 0, 0, 0), auto = "Y", gap = theme.space.xs, layoutOrder = 3 })
-			R.paragraph(communityRow, "Free shared key provided by Project UAI. You can also use your own HCNSEC key. Shared availability and limits are controlled by the provider.", { layoutOrder = 1 })
-			P.button(communityRow, { name = "UseCommunityKey", text = "Use free key", variant = "secondary", fill = true, layoutOrder = 2,
+			R.paragraph(communityRow, "Project UAI Free includes shared access powered by HCNSEC. No personal key is required. You may use your own HCNSEC key instead; response times and shared capacity vary. Updates and help: https://discord.gg/9xYyyYuKap", { layoutOrder = 1 })
+			P.button(communityRow, { name = "UseCommunityKey", text = "Use included free access", variant = "secondary", fill = true, layoutOrder = 2,
 				onClick = function()
 					local ok, why = communityKey.apply(editing)
 					if not ok then overlay.toast(why, "warn"); return end
@@ -640,7 +657,7 @@ return function(env)
 			local own = {}
 			for _, id in ipairs(editing.models or {}) do own[id] = true end
 			for _, id in ipairs(knownModels()) do
-				local badge = traits.badge(id)
+				local badge = traits.badge(id, editing)
 				local bits = {}
 				if badge then bits[#bits + 1] = badge end
 				if not own[id] then bits[#bits + 1] = "from /models" end
@@ -857,7 +874,7 @@ return function(env)
 			})
 			P.text(headText, {
 				name = "FeaturedTitle",
-				text = "Featured",
+				text = featured.free and "Free for everyone" or "Recommended",
 				role = "overline",
 				color = theme.color.accent,
 				size = UDim2.new(1, 0, 0, theme.text.overline.height),
@@ -943,7 +960,7 @@ return function(env)
 			})
 			P.button(actions, {
 				name = "FeaturedSetup",
-				text = "Set up " .. tostring(featured.label),
+				text = (featured.free and "Use " or "Set up ") .. tostring(featured.label),
 				variant = "primary",
 				size = "sm",
 				fill = true,
@@ -951,6 +968,11 @@ return function(env)
 				onClick = function()
 					local preset = catalog.get(featured.id)
 					if not preset then return end
+					if preset.free then
+						local record = env.require("provider/free").use()
+						if onSetup then onSetup(record.id) end
+						return
+					end
 					M.editor(registry.blank(preset.id), onSetup)
 				end,
 			})
@@ -1182,7 +1204,7 @@ return function(env)
 			local own = {}
 			for _, id in ipairs(record.models or {}) do own[id] = true end
 			for _, id in ipairs(models.list(record)) do
-				local badge = traits.badge(id)
+				local badge = traits.badge(id, record)
 				local bits = {}
 				if badge then bits[#bits + 1] = badge end
 				if not own[id] then bits[#bits + 1] = "from /models" end
@@ -1327,8 +1349,10 @@ return function(env)
 			-- The preset's own guidance, which the registry copies onto every record and
 			-- nothing has ever rendered: Azure's deployment-path rule, Ollama's loopback
 			-- warning, DeepSeek's reasoning field.
-			if util.trim(record.note or "") ~= "" then
-				R.paragraph(status, record.note, { layoutOrder = 3 })
+			local preset = catalog.get(record.preset)
+			local note = (preset and (preset.free or registry.isOpencode(record)) and preset.note) or record.note
+			if util.trim(note or "") ~= "" then
+				R.paragraph(status, note, { name = "ProviderIntroduction", layoutOrder = 3 })
 			end
 			-- Fallback is a global switch, and the old header claimed the chain was always
 			-- in use. Saying which it is beats asserting one of them.
@@ -1338,6 +1362,10 @@ return function(env)
 				{ layoutOrder = 4 })
 
 			local actions = {}
+			actions[#actions + 1] = {
+				name = "ProviderCommunity", text = "Discord community", variant = "ghost",
+				onClick = function() env.require("ui/community").open() end,
+			}
 			if not isActive then
 				actions[#actions + 1] = {
 					name = "UseProvider",
@@ -1372,8 +1400,9 @@ return function(env)
 			local modelSection = R.section(detail.instance, {
 				name = "Model",
 				title = "Model",
-				description = "Only what the endpoint reported and what you added -- never a guess, "
-					.. "so this can legitimately be empty until one of those has happened.",
+				description = communityKey.isApplied(record)
+					and "The provider's auto router selects available capacity for you. You can also fetch the current models and choose one."
+					or "Models come from the endpoint or your manual entries. Fetch the current list if none are known yet.",
 				layoutOrder = order(),
 			})
 			local known = models.list(record)
@@ -1381,7 +1410,7 @@ return function(env)
 				name = "ActiveModel",
 				label = "Active model",
 				hint = #known == 0 and "Nothing known yet. Fetch the list, or add an id by hand."
-					or (traits.badge(record.model) and ("Context window " .. traits.badge(record.model))
+					or (traits.badge(record.model, record) and ("Context window " .. traits.badge(record.model, record))
 						or "No published context window for this id."),
 				options = (function()
 					local out = {}

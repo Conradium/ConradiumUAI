@@ -153,6 +153,7 @@ return function(env)
 		local toneKey = tone or "info"
 		if toneKey == "danger" then toneKey = "bad" end
 		if toneKey == "success" then toneKey = "good" end
+		if toneKey == "bad" or toneKey == "warn" then text = env.require("runtime/support").error(text) end
 		local toneColor = theme.toneColor(toneKey)
 		local pad = theme.space.md
 		local closeSize = math.max(theme.size.controlSmall, responsive.minTarget())

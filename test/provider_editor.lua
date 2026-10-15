@@ -189,7 +189,7 @@ case("an uncooperative old discovery cannot unlock or overwrite a newer fetch", 
 	f.healthy(); f.close()
 end)
 
-case("the community key is opt-in and confined to the official HCNSEC draft", function()
+case("switching to free access preserves an existing personal key until chosen", function()
 	local f = fixture()
 	preset(f, "hcnsec")
 	check("official setup offers the free key", f.h.byName("CommunityKey").Visible)
@@ -241,8 +241,8 @@ case("choosing the community key replaces an entire key pool and its rotation st
 end)
 
 case("discovery adopts its proxy into the current draft without saving it", function()
-	local f = fixture(); preset(f, "zen")
-	local proxy = "https://puai-proxy.davidzk.tech/opencode/v1"
+	local f = fixture(); preset(f, "agentrouter")
+	local proxy = "https://puai-proxy.davidzk.tech/agentrouter/v1"
 	f.h.http.handler = function(entry)
 		if entry.index == 1 then return { StatusCode = 403, Body = '{"error":{"code":"unauthorized_client","message":"Unauthorized client"}}' } end
 		check("discovery uses the designated proxy", entry.url == proxy .. "/models")
@@ -259,10 +259,10 @@ case("discovery adopts its proxy into the current draft without saving it", func
 end)
 
 case("a completed connection test cannot replace a newer endpoint edit", function()
-	local f = fixture(); preset(f, "zen")
+	local f = fixture(); preset(f, "agentrouter")
 	f.env.require("provider/chat").complete = function(candidate)
 		f.h.sched.wait(3)
-		candidate.baseUrl = "https://puai-proxy.davidzk.tech/opencode/v1"
+		candidate.baseUrl = "https://puai-proxy.davidzk.tech/agentrouter/v1"
 		return { ms = 10 }
 	end
 	click(f, "TestConnection")

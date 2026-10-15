@@ -159,7 +159,7 @@ return function(env)
 						padding = { x = theme.space.sm }, gap = theme.space.sm, layoutOrder = index,
 						onClick = function() providers.setModel(record.id, id); notify() end })
 					local label = button.label(id, 1, selected and theme.color.text or theme.color.textSecondary, "small")
-					local badge = traits.badge(id)
+					local badge = traits.badge(id, record)
 					local meta = P.text(button.row, { text = badge or "", role = "caption", color = theme.color.textTertiary, auto = "X", layoutOrder = 2 })
 					local mark = button.icon("check", 3, theme.color.accentHot)
 					mark.Visible = selected
@@ -172,7 +172,7 @@ return function(env)
 				entry.button.setSelected(selected)
 				entry.label.TextColor3 = selected and theme.color.text or theme.color.textSecondary
 				entry.mark.Visible = selected == true
-				entry.meta.Text = traits.badge(entry.id) or ""
+				entry.meta.Text = traits.badge(entry.id, record) or ""
 			end
 			filterRows()
 			renderEffort()

@@ -58,7 +58,7 @@ test('a foreign Origin is refused and an absent Origin is accepted', async t => 
   const { token, port } = await startBridge(t);
   const bad = await rawReq(port, 'GET', '/api/hello', { Authorization: 'Bearer ' + token, Origin: 'http://evil.example' });
   assert.equal(bad.status, 403);
-  assert.equal(bad.body, 'bad origin');
+  assert.equal(bad.body, 'bad origin Help and updates: https://discord.gg/9xYyyYuKap');
   const ok = await rawReq(port, 'GET', '/api/hello', { Authorization: 'Bearer ' + token });
   assert.equal(ok.status, 200);
   assert.equal(JSON.parse(ok.body).protocol, 2);
@@ -156,7 +156,7 @@ test('static serving resolves junctions before exposing files', async t => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'uai-static-'));
   const app = path.join(temporary, 'app'), outside = path.join(temporary, 'outside');
   fs.mkdirSync(path.join(app, 'web'), { recursive: true }); fs.mkdirSync(outside);
-  for (const name of require('../updater').ROOT_FILES) fs.copyFileSync(path.join(__dirname, '..', name), path.join(app, name));
+  for (const name of require('../updater').ROOT_FILES) fs.writeFileSync(path.join(app, name), require('../../tools/build_bridge').runtimeSource(name));
   fs.writeFileSync(path.join(app, 'web/index.html'), '<html>fixture</html>'); fs.writeFileSync(path.join(outside, 'private.txt'), 'not a web asset');
   fs.symlinkSync(outside, path.join(app, 'web/escape'), process.platform === 'win32' ? 'junction' : 'dir');
   let bridge;

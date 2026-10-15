@@ -7,7 +7,8 @@
 -- know there is a choice.
 --
 -- `record.api` is the switch. It is absent on every record saved before the second
--- adapter existed, and absent means OpenAI, so nothing needs migrating.
+-- adapter existed, and absent means OpenAI. Documented Go model families select
+-- their required adapter without changing the saved choice for other endpoints.
 return function(env)
 	local M = {}
 
@@ -17,6 +18,8 @@ return function(env)
 	}
 
 	function M.styleOf(record)
+		local protocol = env.require("provider/registry").opencodeGoProtocol(record)
+		if protocol then return protocol == "anthropic" and "anthropic" or "openai" end
 		return (tostring(record and record.api or "openai") == "anthropic")
 			and "anthropic" or "openai"
 	end
@@ -29,9 +32,11 @@ return function(env)
 	end
 
 	function M.complete(record, request)
+		local support = env.require("runtime/support")
 		local problem = env.require("provider/registry").protocolProblem(record)
-		if problem then return nil, problem end
-		return M.adapterFor(record).complete(record, request)
+		if problem then return nil, support.error(problem) end
+		local result, err, response = M.adapterFor(record).complete(record, request)
+		return result, err and support.error(err) or nil, response
 	end
 
 	function M.errorText(record, res, err)
@@ -50,6 +55,11 @@ return function(env)
 
 	-- The path a record's completions go to, for the Providers panel to show.
 	function M.endpointOf(record)
+		local responses = env.require("provider/responses")
+		if M.styleOf(record) == "openai" and responses.eligible(record)
+			and (responses.wantsResponses(record) or responses.remembered(record)) then
+			return responses.endpointFor(record)
+		end
 		local adapter = M.adapterFor(record)
 		if adapter.endpoint then return adapter.endpoint(record) end
 		return env.require("provider/registry").endpoint(record, "/chat/completions")

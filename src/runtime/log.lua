@@ -68,6 +68,7 @@ return function(env)
 
 	local function push(level, source, message, detail)
 		if (LEVELS[level] or 2) < M.minLevel then return end
+		if level == "warn" or level == "error" then message = env.require("runtime/support").error(message) end
 		local entry = {
 			at = env.require("runtime/clock").ms(),
 			stamp = env.require("runtime/clock").stamp(),

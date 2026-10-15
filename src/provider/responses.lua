@@ -7,7 +7,7 @@
 -- chat adapter does, so everything above it is unchanged.
 --
 -- The chat adapter delegates for known Responses models, remembered routes,
--- or an explicit protocol/free-tier refusal. Provider/chat does not select it.
+-- or an explicit protocol/free-tier refusal on desktop. Provider/chat does not select it.
 return function(env)
 	local util = env.require("runtime/util")
 	local config = env.require("runtime/config")
@@ -18,7 +18,6 @@ return function(env)
 	local urls = env.require("net/url")
 	local headerMap = env.require("net/headers")
 	local registry = env.require("provider/registry")
-	local proxy = env.require("provider/proxy")
 
 	local M = {}
 
@@ -36,6 +35,7 @@ return function(env)
 	-- would never fire there.
 	function M.wantsResponses(record)
 		if not M.eligible(record) then return false end
+		if registry.isOpencodeGo(record) then return registry.opencodeGoProtocol(record) == "responses" end
 		return tostring(record and record.model or ""):find("muse-spark", 1, true) ~= nil
 	end
 
@@ -78,6 +78,12 @@ return function(env)
 		return false
 	end
 
+	function M.canRetryFreeTier(res)
+		local mobile = false
+		pcall(function() mobile = env.uis.TouchEnabled == true and env.uis.MouseEnabled ~= true end)
+		return not mobile and M.isFreeTierRefusal(res)
+	end
+
 	function M.remembered(record)
 		local scope = registry.compatibilityKey(record)
 		if record.repairScope ~= nil and record.repairScope ~= scope then return false end
@@ -87,14 +93,10 @@ return function(env)
 		return false
 	end
 
-	-- The lane a record's responses go to: the documented Console endpoint.
-	-- Zen answers directly; records pointed at the project proxy stay on it,
-	-- which maps /responses too. (An older /inference/openai/v1 prefix also
-	-- routes, but the documented /inference/v1 form is canonical.)
+	-- Direct Responses endpoint. The desktop bridge recognizes this official URL
+	-- and translates it through the installed CLI; no OpenCode proxy remains.
 	function M.endpointFor(record)
-		if registry.proxyProvider(record) then
-			return registry.endpoint(record, "/responses")
-		end
+		if registry.isOpencodeGo(record) then return registry.endpoint(record, "/responses") end
 		local parsed = urls.parse(record.baseUrl or "")
 		local query = parsed and parsed.query
 		local base = "https://opencode.ai/inference/v1" .. (query and query ~= "" and ("?" .. query) or "")
@@ -203,9 +205,6 @@ return function(env)
 			stream = true,
 		}
 		if instructions ~= "" then body.instructions = instructions end
-		-- The standard declarations travel with the request on this lane too.
-		-- They are what the compatibility check looks for, so they are merged
-		-- in even when the call carries real tools of its own.
 		local tools = M.toolsFor(request.tools) or {}
 		local names = {}
 		for _, tool in ipairs(tools) do names[tool.name] = true end
@@ -226,7 +225,7 @@ return function(env)
 		-- than max_tokens, and no reasoning_effort (the server answers unknown
 		-- parameter). Temperature is only sent when explicitly asked for.
 		local wanted = tonumber(request.maxTokens or config.get("agent.maxTokens", 4096)) or 0
-		local documented = env.require("provider/traits").maxOutput(record.model)
+		local documented = env.require("provider/traits").maxOutput(record.model, record)
 		if documented and documented > 0 and wanted > documented then wanted = documented end
 		local ceiling = tonumber(request.outputCeiling)
 		if ceiling and ceiling >= 1 and ceiling < wanted then wanted = math.floor(ceiling) end
@@ -459,30 +458,18 @@ return function(env)
 		end
 		local body = M.buildBody(record, request)
 		local url = M.endpointFor(record)
-		-- The lane's proven identity: the desktop client's user agent and
-		-- client marker with no project or request headers, and the stable valid
-		-- conversation session id. This is the exact set the live 200 was verified
-		-- with; the chat lane's cli fingerprint is not interchangeable here.
-		local sessionId = registry.opencodeSessionFor(record, request)
+		-- Share the live-verified desktop fingerprint with Chat, including stable
+		-- conversation affinity and explicit saved compatibility overrides.
 		local pool = registry.keysOf(record)
 		local currentKey = handoff.key or registry.nextKey(record)
 		local rotationsLeft = handoff.rotationsLeft or math.max(#pool - 1, 0)
 		local function headersFor()
-			return headerMap.merge(registry.authHeaders(record, currentKey or ""), {
-				["x-opencode-session"] = sessionId,
-				["x-opencode-session-id"] = sessionId,
-				["x-session-affinity"] = sessionId,
-				["X-Session-Id"] = sessionId,
-				["x-opencode-client"] = "desktop",
-				["User-Agent"] = "opencode/latest/2.0.27/desktop",
-				["accept"] = "*/*",
-			}, record.headers)
+			return headerMap.merge(registry.authHeaders(record, currentKey or ""), registry.opencodeHeaders(record, request), record.headers)
 		end
 		local started = clock.ms()
 		local deadline = env.require("net/transport").coworkWeb() and math.huge
 			or handoff.deadlineMs or (started + math.max(1, math.min(300, tonumber(requestTimeout(request)) or 120)) * 1000)
 		local scope = registry.compatibilityKey(record)
-		local recovery = proxy.new(record, { aborted = request.aborted, onRetry = request.onRetry, deadlineMs = deadline })
 		local attemptsAllowed = request.attempts or config.get("agent.retries", 3)
 		local function fire()
 			if registry.compatibilityKey(record) ~= scope then return nil, "aborted" end
@@ -498,9 +485,7 @@ return function(env)
 		end
 		local res, err = fire()
 		while res and not res.terminal and not http.terminal(err) do
-			if recovery.recover(res, err) then
-				scope, url = registry.compatibilityKey(record), M.endpointFor(record)
-			elseif not res.ok and res.status == 429 and rotationsLeft > 0 then
+			if not res.ok and res.status == 429 and rotationsLeft > 0 then
 				rotationsLeft = rotationsLeft - 1
 				registry.cooldownKey(record, currentKey)
 				currentKey = registry.nextKey(record)

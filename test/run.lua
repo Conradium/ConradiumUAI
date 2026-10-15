@@ -147,7 +147,12 @@ local function bootWith(opts)
 	if not handle then error("boot failed: " .. tostring(err), 0) end
 	harness.settle(1)
 
-	if opts.provider ~= false then
+	-- Most scenarios deliberately choose their own endpoint or an empty setup.
+	-- Keep the real first-run default only in tests that request it explicitly.
+	if opts.provider ~= "default" then
+		for _, record in ipairs(handle.providers.list()) do handle.providers.remove(record.id) end
+	end
+	if opts.provider ~= false and opts.provider ~= "default" then
 		local record = handle.providers.blank(opts.preset or "custom")
 		record.label = opts.label or "Harness"
 		record.baseUrl = opts.baseUrl or "https://harness.test/v1"
@@ -2665,14 +2670,16 @@ scenario("what a model accepts is known before a refusal teaches it", function()
 	check("max survives on both", traits.nearestEffort("claude-opus-4-6", "max"), "max")
 	check("a model with no scale takes no level", traits.nearestEffort("harness-model", "high"), nil)
 
-	-- An Opus has cost a third of the 4.5 rate since 4.6, and reporting the old
-	-- number made every turn in this client look three times dearer than it was.
+	-- Catalog generations retain their own prices; unknown retired ids do not
+	-- inherit a newer model's rate merely because they share a family name.
 	local usage = handle.env.require("agent/usage")
 	local opus5 = usage.priceFor("claude-opus-5")
 	check("Opus 5 input is five dollars", opus5 and opus5[1], 5.00)
 	check("and output twenty-five", opus5 and opus5[2], 25.00)
 	check("Sonnet 5 is cheaper still", (usage.priceFor("claude-sonnet-5") or {})[1], 2.00)
-	check("an older Opus keeps its own price", (usage.priceFor("claude-opus-4-1") or {})[1], 15.00)
+	check("current Opus 5.5 has its own price", (usage.priceFor("claude-opus-5-5") or {})[1], 4.00)
+	check("an unlisted direct Opus does not borrow a family price",
+		usage.priceFor("claude-opus-4-1", { baseUrl = "https://api.anthropic.com/v1" }), nil)
 end)
 
 scenario("a Claude request omits what Claude rejects and asks for a depth", function()
@@ -5796,11 +5803,11 @@ scenario("an OpenCode Zen record preserves its request compatibility headers", f
 	local headers = requests[1] and requests[1].headers or {}
 	contains("carrying a session id the relay accepts",
 		tostring(headers["x-opencode-session"] or ""), "ses_")
-	truthy("a per-request id",
-		tostring(headers["x-opencode-request"] or ""):find("^req_") ~= nil)
-	check("uses the upstream default client header", headers["x-opencode-client"], "cli")
-	check("uses the current upstream compatibility version",
-		headers["User-Agent"], "opencode/1.18.31")
+	check("omits the refused CLI request header", headers["x-opencode-request"], nil)
+	check("omits the refused CLI project header", headers["x-opencode-project"], nil)
+	check("uses the verified desktop client header", headers["x-opencode-client"], "desktop")
+	check("uses the verified desktop compatibility version",
+		headers["User-Agent"], "opencode/latest/2.0.27/desktop")
 	-- The preset turns the Claude Code identity off for this record.
 	check("the record carries no claude identity flag", record.claudeUa, false)
 	check("the claude cli marker header is absent", headers["x-app"], nil)
@@ -5832,7 +5839,7 @@ scenario("an OpenCode Zen record preserves its request compatibility headers", f
 	contains("a hand-typed record carries the session header too",
 		tostring(third["x-opencode-session"] or ""), "ses_")
 	check("honours a configured compatibility client", third["x-opencode-client"], "opencode")
-	check("honours a configured compatibility version", third["User-Agent"], "opencode/1.0.118-test")
+	check("honours a configured compatibility version", third["User-Agent"], "opencode/stable/1.0.118-test/opencode")
 	check("preserves ordinary bearer authentication", third["Authorization"], "Bearer sk-hand")
 	check("manual Zen also omits Claude identity", third["x-app"], nil)
 	check("manual Zen also omits Stainless identity", third["X-Stainless-Lang"], nil)
@@ -6119,22 +6126,26 @@ scenario("adding a provider opens the editor directly", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
--- The featured provider and the key links: a first-run client has one recommended
--- road to a working key, and every preset's docs address is visible and copyable
--- rather than hidden behind a "click here".
+-- First run has included free access. Explicit removal exposes recommendations
+-- with readable, copyable community and provider documentation links.
 scenario("a first-run client is pointed at the featured provider", function()
-	local harness, handle = bootWith({ provider = false })
+	local harness, handle = bootWith({ provider = "default" })
+	local active = handle.providers.active()
+	check("included free provider is selected", active and active.label, "Project UAI Free")
+	check("the provider-supported auto router is ready", active and active.model, "auto")
+	truthy("the home introduces free access", harness.byName("FreeIntroduction") ~= nil)
+	handle.providers.remove(active.id)
 	handle.app.show("providers")
 	harness.settle(1)
 
 	local featured = harness.byName("Featured")
 	truthy("the featured card is shown", featured ~= nil, harness.dump())
-	check("naming HCNSEC", harness.byName("FeaturedName").Text, "HCNSEC")
+	check("naming Project UAI Free", harness.byName("FeaturedName").Text, "Project UAI Free")
 	check("all three featured providers get a card", #harness.allByName("Featured"), 3)
 
-	-- The referral link, rendered in full and exactly as the catalog carries it.
+	-- The community invite, rendered in full and exactly as the catalog carries it.
 	local url = harness.byName("FeaturedUrl")
-	check("with the sign-up address", url and url.Text, "https://api.hcnsec.cn/sign-up?aff=drd9")
+	check("with the Discord invite", url and url.Text, "https://discord.gg/9xYyyYuKap")
 	truthy("and a copy control beside it", harness.byName("CopyFeaturedLink") ~= nil)
 	truthy("and a setup button", harness.byName("FeaturedSetup") ~= nil)
 
@@ -6144,13 +6155,17 @@ scenario("a first-run client is pointed at the featured provider", function()
 	local preset = catalog.get("hcnsec")
 	check("the preset exists", preset ~= nil and true or false, true)
 	check("pointing at the api host", preset.baseUrl, "https://api.hcnsec.cn/v1")
-	check("with the sign-up page as its docs", preset.docs, "https://api.hcnsec.cn/sign-up?aff=drd9")
+	check("with the community as its docs", preset.docs, "https://discord.gg/9xYyyYuKap")
 	check("and marked featured", preset.featured, true)
 
 	-- OpenCode Zen remains featured alongside HCNSEC and AgentRouter.
 	local zen = catalog.get("zen")
 	check("OpenCode Zen is featured too", zen and zen.featured, true)
 	check("pointing at the Zen relay", zen.baseUrl, "https://opencode.ai/zen/v1")
+	contains("OpenCode explains direct desktop support", zen.note, "without a bridge")
+	contains("OpenCode highlights its mobile limitation", zen.noteHighlight, "Mobile is unsupported")
+	harness.click(harness.byName("FeaturedSetup"))
+	check("one action restores free access", handle.providers.active().label, "Project UAI Free")
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
@@ -7293,9 +7308,10 @@ scenario("universal model pricing resolves across inference providers", function
 	local orClaude = usage.priceFor("anthropic/claude-sonnet-5")
 	check("anthropic/claude-sonnet-5 resolves identically", orClaude and orClaude[1], 2.00)
 
-	-- Dated snapshot prefix matching
+	-- Published dated snapshots are exact catalog entries.
 	local snapshot = usage.priceFor("gpt-4o-2024-11-20")
-	check("dated snapshot matches base model pricing", snapshot and snapshot[1], 2.50)
+	check("published dated snapshot keeps its own pricing", snapshot and snapshot[1], 2.50)
+	check("invented snapshot remains unknown", usage.priceFor("gpt-4o-2099-11-20"), nil)
 
 	-- Local providers always cost $0.00
 	local ollamaPrice = usage.priceFor("llama-3.3-70b", { preset = "ollama" })

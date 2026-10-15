@@ -19,6 +19,31 @@ return function(env)
 	local CATEGORY_ORDER = { "added", "improved", "fixed" }
 	local ENTRIES = {
 		{
+			version = "3.2.0",
+			revision = "2026-10-15-free-opencode-desktop-and-go",
+			date = "October 15, 2026",
+			title = "Project UAI Free and OpenCode desktop",
+			highlights = "Start with included free access, keep the OpenCode desktop workaround, and add an optional installed CLI bridge path. OpenCode free models are unsupported on mobile.",
+			sections = {
+				{ category = "added", label = "Project UAI Free", items = {
+					"Project UAI Free is ready by default when no provider is configured. Included public HCNSEC access uses its verified auto router; existing providers and credentials stay intact.",
+					"Thank you for your continued use and support. Shared capacity and speed vary, and more free providers may become available soon. Join https://discord.gg/9xYyyYuKap for help and updates.",
+				} },
+				{ category = "improved", label = "OpenCode desktop", items = {
+					"Strengthen the direct desktop workaround with a live-verified desktop identity, retaining required compatibility tool declarations and Chat/Responses fallback without the bridge.",
+					"The desktop bridge can also use a separately installed OpenCode CLI server for verified free models. It discovers models, owns temporary sessions and returns UAI tool calls to Roblox. The CLI binary is not packaged.",
+				} },
+				{ category = "improved", label = "Model pricing and limits", items = {
+					"Refresh provider-specific model prices and context/reply limits, including documented cache rates and long-context tiers. Unknown prices stay unknown; included Project UAI Free access has zero cost.",
+				} },
+				{ category = "fixed", label = "Provider routes and help", items = {
+					"Add a separate OpenCode Go preset with its own catalog and Chat, Responses or Messages routing. Keep Go outside the free CLI backend and explain subscription and Privacy region refusals. Gemini's native Go protocol is not implemented.",
+					"Remove the retired OpenCode proxy and migrate saved URLs back to Zen. Only AgentRouter uses the proper proxy domain; no Workers.dev fallback remains.",
+					"OpenCode free models are unsupported on mobile, including the Android companion. Use Project UAI Free there. Error messages include Discord support.",
+				} },
+			},
+		},
+		{
 			version = "3.1.0",
 			revision = "2026-10-14-bridge-improvements",
 			date = "October 14, 2026",

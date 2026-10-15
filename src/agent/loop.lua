@@ -129,7 +129,7 @@ return function(env)
 				local accounting = session.ctx.observeRequest(payload.request.messages, payload.request.tools, record)
 				local maxTokens = payload.request.maxTokens or config.get("agent.maxTokens", 4096)
 				local outputCeiling
-				local window = env.require("provider/traits").contextWindow(record.model)
+				local window = env.require("provider/traits").contextWindow(record.model, record)
 				if window then
 					local available = math.floor(window - session.ctx.pressure(record))
 					-- A fallback can have a much smaller window than the provider whose
@@ -250,7 +250,7 @@ return function(env)
 				{ role = "user", content = transcript },
 			}
 			local maxTokens = math.min(512, math.max(16, math.floor((maxBytes or 2048) / 4)))
-			local window = env.require("provider/traits").contextWindow(record.model)
+			local window = env.require("provider/traits").contextWindow(record.model, record)
 			if window then
 				local available = math.floor(window - usage.estimateMessages(messages) - 64)
 				if available < 16 then return nil end

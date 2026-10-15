@@ -1,8 +1,8 @@
 # Project UAI — contract
 
-Current client release: **3.1.0 — October 14, 2026**.
+Current client release: **3.2.0 — October 15, 2026**.
 
-Bridge and Windows desktop release 3.1.0 use verified automatic GitHub updates.
+Bridge and Windows desktop release 3.2.0 use verified automatic GitHub updates.
 Bridge worker replacement waits for idle work and retains its session token;
 desktop app updates stage for restart with a retained fallback. Desktop detects
 Node.js 18+ or downloads a verified LTS runtime per user instead of bundling Node.
@@ -250,22 +250,54 @@ or conflicting custom headers. The provider UI explains the requirement instead
 of offering a toggle. The featured preset uses `https://agentrouter.org` with the
 Anthropic Messages adapter, producing `https://agentrouter.org/v1/messages`.
 
-An explicit unauthorized-client refusal from the standard OpenCode Zen or
-AgentRouter endpoint can switch that record to the Project UAI HTTPS proxy at
-`puai-proxy.davidzk.tech/opencode/v1` or `/agentrouter/v1`, respectively. Both
-adapters and model discovery retry once within the original HTTP deadline.
-Only exact supported official hosts/routes qualify; invalid credentials,
-unrelated errors, custom endpoints, timeouts and cancellation never cause this
-switch. Registered records persist the URL, while editor drafts stay local until
-Save. Required vendor identity, query fields and credentials remain intact;
-known proxy routes use HTTP rather than an unrelated WebSocket gateway. The UI
-discloses that requests and keys pass through the proxy and its shared daily cap
-of 90,000 requests. The Base URL remains editable.
+Only AgentRouter can recover an explicit unauthorized-client refusal through
+`https://puai-proxy.davidzk.tech/agentrouter/v1`. Exact official AgentRouter
+hosts/routes qualify; credentials, protocol, custom headers and query parameters
+survive one retry within the original deadline. Invalid keys, custom endpoints,
+timeouts and cancellation never switch. Registered records persist the URL;
+editor drafts remain local until Save. No Workers.dev fallback is supported.
+The proxy receives requests and provider keys and shares a 90,000-request daily cap.
 
-HCNSEC setup offers an explicitly selected community key for its official HTTPS
-endpoint. Applying it replaces the editor draft's key pool and resets rotation;
-it neither replaces saved credentials nor selects a guessed model. Keys remain
-masked in the provider UI, including this intentionally distributed shared key.
+OpenCode proxy routing is retired. Saved or newly entered retired OpenCode proxy
+URLs normalize to `https://opencode.ai/zen/v1`; the old Workers.dev OpenCode URL is
+recognized only for migration away from it. `FreeTierError` never switches to a
+proxy. Direct desktop requests use the verified desktop User-Agent/client headers,
+timestamp-based session identity and wildcard Accept header, while retaining required
+compatibility tool declarations and the Chat/Responses protocol fallback. Explicit
+custom header overrides remain effective. Generated project/request headers are
+omitted because the live Chat probe rejected the previous CLI fingerprint. Mobile
+OpenCode free models are unsupported, including the Android companion; mobile
+free-tier refusals do not retry the alternate lane. Errors explain the optional
+installed CLI desktop path and point mobile users to Project UAI Free.
+
+OpenCode Go is a separate keyed preset at `https://opencode.ai/inference/go/v1`.
+Its legacy `/zen/go/v1` alias remains a Go route. Go model discovery and every
+inference protocol retain that route and cannot use the native free-model catalog.
+Documented model families select Chat (DeepSeek), Responses (GPT/Grok/Muse), or
+Messages (Claude/Minimax/Qwen); Gemini's native Go protocol is explicitly unsupported.
+Go uses an identifiable Project UAI User-Agent and stable session header, with
+explicit custom headers preserved. Ambiguous retired OpenCode proxy records still
+migrate to Zen; selecting Go is explicit. Errors distinguish retired-route 410,
+Go subscription refusal and the model's Global-region requirement. The client never
+changes OpenCode privacy or subscription settings.
+
+A connected desktop bridge can additionally serve supported free OpenCode models
+through a separately installed official CLI binary. The binary is never packaged.
+The bridge advertises authenticated `capabilities.opencode` (schema 1, availability,
+state), lists verified CLI models at `/api/opencode/models`, and routes supported
+models through its existing inference job protocol. Missing CLI and models outside
+its verified public catalog retain direct HTTP behavior. The native server binds
+loopback, uses private authentication and isolated owned sessions, and leaves UAI
+tools to Roblox. Capability and catalog data cannot survive a changed connection.
+
+Project UAI Free uses the existing intentionally distributed HCNSEC community key
+and the provider-supported `auto` router, verified through live discovery and tool
+inference. Empty startup/import/reset configurations receive this ready provider;
+configured providers and credentials remain intact. Explicit removal stays removed
+for the current session. Public credentials remain masked in the UI. The welcome
+thanks users for continued support, explains variable shared availability and speed,
+mentions possible future free providers, and advertises the Discord community.
+No session-only development credential belongs in source or generated artifacts.
 
 Provider key pools select ready credentials round-robin, advancing the shared
 cursor before network work can yield. Quota refusals bench their rejected key;
@@ -273,13 +305,25 @@ proxy recovery and transport retries retain the selected request key. Intentiona
 request snapshots share the originating record's cursor, while independent
 provider-editor drafts remain isolated. Cached model discovery uses no key slot.
 
-**Models are never guessed.** Presets carry no model list. `provider/models`
+**Models are never guessed.** General presets carry no model list; the managed
+Project UAI Free default uses the live-verified `auto` router. `provider/models`
 resolves a provider's models from exactly two sources — ids the user added by
 hand (which rank first, and persist on the record) and whatever `GET /v1/models`
 reported (cached for ten minutes, not persisted). Nothing is filtered out of the
 endpoint's answer, because deciding which of its ids are chat models would be a
 guess. An endpoint with no `/models` route is a normal case: the Providers editor
 takes a typed id, and saving requires one.
+
+Model metadata is independent of discovery: the reviewed catalog enriches known
+ids but never adds models to a provider. `tools/data/model_metadata.json` records
+the source URLs, hashes and refresh date; `tools/sync_pricing.js` generates
+`provider/model_data`. Refresh uses verified TLS and fails on missing sources;
+offline generation and `--check` are deterministic. Prices match exact ids within
+their provider, never a paid id inferred from a free alias. Rates include documented
+cache categories and context tiers. Unknown gateway prices stay unknown. Included
+Project UAI Free access costs zero; personal HCNSEC rates are not assumed. Context
+and reply limits use the same catalog, while protocol-specific request traits
+remain explicit. User-declared context overrides remain effective.
 
 Rolling compaction feeds the previous summary back to the summarizer with newly
 removed turns and complete older assistant/tool exchanges from long turns. It
@@ -1282,8 +1326,8 @@ checks justified by the change. Review each fix before rebuilding affected
 outputs and rerunning affected checks. Use native static checks, deterministic
 freshness checks and the official Luau compiler where applicable.
 
-The 3.1.0 plan and actual outcomes belong in
-[docs/TESTING_3.1.0.md](docs/TESTING_3.1.0.md). The entire native suite is not part
+The 3.2.0 plan and actual outcomes belong in
+[docs/TESTING_3.2.0.md](docs/TESTING_3.2.0.md). The entire native suite is not part
 of that release pass. `tools/test_native.js --verify-only` is a separate full-suite
 workflow, not a substitute for selected checks. The broader command reference
 below includes independent product/site workflows; it does not require running

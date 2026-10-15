@@ -4,6 +4,7 @@ const http = require('node:http');
 const https = require('node:https');
 const crypto = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
+const { help } = require('./support');
 
 // Per-job normalized frame ring bounds. The ring is a browser projection only;
 // the raw body accumulator (job.body) is kept separately for the Roblox poll and
@@ -19,7 +20,7 @@ const DELIVERABLE_MAX = 8 * 1024 * 1024;
 function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
   deliverableMax = DELIVERABLE_MAX, retentionMs = 300000, maxJobs = 10000,
   maxActive = 16, maxTotalBytes = 64 * 1024 * 1024, legacy = false,
-  prepareBody = body => body, maxRequestBytes = 32 * 1024 * 1024, maxActiveRequestBytes = 64 * 1024 * 1024 } = {}) {
+  prepareBody = body => body, maxRequestBytes = 32 * 1024 * 1024, maxActiveRequestBytes = 64 * 1024 * 1024, opencode } = {}) {
   const jobs = new Map();
   // A previously seen ID must never become resubmittable, even after its job is
   // evicted for capacity. The horizon remembers evicted IDs so a late resubmit
@@ -42,15 +43,15 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
   function finish(job, state, error) {
     if (job.state !== 'running') return;
     job.state = state;
-    job.error = error;
+    job.error = error && state !== 'cancelled' ? help(error) : error;
     job.finishedAt = Date.now();
     releaseRequest(job);
     if (state !== 'completed') {
       retainedBytes -= job.bodyBytes || 0;
       job.body = ''; job.bodyBytes = 0;
     }
-    const providerError = job.status >= 400 ? 'Provider returned HTTP ' + job.status : undefined;
-    publish({ kind: 'inference:done', id: job.id, sessionId: job.sessionId, state, error,
+    const providerError = job.status >= 400 ? help('Provider returned HTTP ' + job.status) : undefined;
+    publish({ kind: 'inference:done', id: job.id, sessionId: job.sessionId, state, error: job.error,
       status: job.status, providerError, streamed: !!job.streaming, sawText: !!job.sawText, overflow: !!job.ringDropped });
     job.request = undefined;
   }
@@ -221,6 +222,25 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
       startedAt: Date.now(), seq: 0, frameCount: 0, ring: [], ringBytes: 0, ringDropped: false,
       firstFrameAt: null, sawText: false, model, requestBytes };
     jobs.set(job.id, job);
+    if (opencode?.capability().available && opencode.accepts(url.href, providerBody)) {
+      const controller = new AbortController();
+      job.request = { destroy: () => controller.abort() };
+      activeRequestBytes += requestBytes;
+      if (job.sessionId) publish({ kind: 'inference:start', id: job.id, sessionId: job.sessionId, model: job.model, startedAt: job.startedAt });
+      opencode.request({ body: providerBody, url: url.href, signal: controller.signal,
+        onFrame: frame => { if (job.state === 'running') onFrame(job, frame); } }).then(result => {
+        if (job.state !== 'running') return;
+        job.status = result.status; job.headers = result.headers;
+        const bytes = Buffer.byteLength(result.body);
+        if (bytes > effectiveMax || retainedBytes + bytes > maxTotalBytes ||
+          Buffer.byteLength(JSON.stringify({ ...view(job), state: 'completed', body: result.body })) > deliverableMax) {
+          finish(job, 'failed', 'OpenCode response exceeds the deliverable limit; it will not be resubmitted'); return;
+        }
+        job.body = result.body; job.bodyBytes = bytes; retainedBytes += bytes;
+        finish(job, 'completed');
+      }, error => { if (job.state === 'running') finish(job, 'failed', String(error?.message || 'OpenCode request failed')); });
+      return view(job);
+    }
     const decoder = new StringDecoder('utf8');
     let buffer = '', eventName = '', dataLines = [], firstText = true;
     const secrets = Object.entries(headers).filter(([name]) => /authorization|api[-_]?key|token|secret/i.test(name))
@@ -388,7 +408,7 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
         // cancel (no frames) is not surfaced as an error.
         if (j.state !== 'running') {
           out.push({ kind: 'inference:done', id: j.id, sessionId, state: j.state, error: j.error,
-            providerError: j.status >= 400 ? 'Provider returned HTTP ' + j.status : undefined,
+            providerError: j.status >= 400 ? help('Provider returned HTTP ' + j.status) : undefined,
             status: j.status, streamed: !!j.streaming, sawText: !!j.sawText, overflow: !!j.ringDropped });
         }
       }

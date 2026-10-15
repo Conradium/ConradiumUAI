@@ -4,7 +4,8 @@
 -- carry a model list: the only authority on which models an endpoint serves is the
 -- endpoint, so models come from GET /v1/models or from the user typing one in. A
 -- hardcoded list goes stale, and offering a model the provider does not have wastes
--- a turn on a 404 that looks like a bug.
+-- a turn on a 404 that looks like a bug. Project UAI Free is the managed exception:
+-- its provider-supported `auto` router was verified with discovery and tool calls.
 return function(env)
 	local M = {}
 
@@ -16,16 +17,18 @@ return function(env)
 	M.presets = {
 		{
 			id = "hcnsec",
-			label = "HCNSEC",
+			label = "Project UAI Free",
 			baseUrl = "https://api.hcnsec.cn/v1",
 			authStyle = "bearer",
-			keyHint = "sk-...",
-			-- The sign-up address, referral parameter included exactly as provided.
-			docs = "https://api.hcnsec.cn/sign-up?aff=drd9",
+			keyHint = "Free access is included; your own HCNSEC key is optional",
+			docs = "https://discord.gg/9xYyyYuKap",
+			free = true,
+			defaultModel = "auto",
 			-- Featured: shown at the top of the providers panel as the recommended
 			-- place to start, so a first-run user has one obvious road.
 			featured = true,
-			note = "An OpenAI-compatible relay. Use the optional free community key in setup, or create an account and use your own key. Fetch the current models before choosing one.",
+			note = "Free AI for the Project UAI community, powered by HCNSEC. No account, payment or personal API key is needed. Thank you for your continued use and support of Project UAI. The auto model routes to available capacity; replies can be fast or slow, and shared availability or limits can change. More free providers may become available soon. Join us for updates and help: https://discord.gg/9xYyyYuKap",
+			noteHighlight = "No account, payment or personal API key is needed.",
 		},
 		{
 			id = "agentrouter",
@@ -78,10 +81,22 @@ return function(env)
 			-- Keep the existing OpenCode request compatibility headers, scoped to the
 			-- official host, without mixing in the Claude Code identity.
 			claudeUa = false,
-			-- Featured alongside HCNSEC: OpenCode's own relay, with free-tier models
-			-- and the compatibility headers the official client sends.
+			-- Desktop retains direct request compatibility; the installed CLI is an
+			-- additional route through the desktop bridge, never a bundled binary.
 			featured = true,
-			note = "OpenCode's relay with OpenCode-compatible request headers. Use your Zen key, fetch current models, and select a model supported by the configured API protocol. Free-tier `-free` models only answer inside OpenCode's official app, and models without tool support refuse streaming tool calls (retried here without tools). Models that only speak the Responses protocol (muse-spark) switch lanes automatically.",
+			note = "Desktop supports the direct OpenCode workaround without a bridge. Project UAI Bridge also supports a separately installed OpenCode CLI for free models; models fetched from the connected CLI need no personal key. Mobile is unsupported for OpenCode free models, including the Android companion. The retired OpenCode proxy cannot restore mobile access. Direct and paid Zen API access use your own key. Help and updates: https://discord.gg/9xYyyYuKap",
+			noteHighlight = "Mobile is unsupported for OpenCode free models",
+		},
+		{
+			id = "opencode-go",
+			label = "OpenCode Go",
+			baseUrl = "https://opencode.ai/inference/go/v1",
+			authStyle = "bearer",
+			keyHint = "API key from the workspace with your active OpenCode Go subscription",
+			docs = "https://opencode.ai/docs/go/",
+			claudeUa = false,
+			featured = true,
+			note = "Paid OpenCode Go access uses your own subscribed workspace key and the separate Go endpoint. Review the workspace Privacy region setting if Go requires Global regions. Fetch models from Go; DeepSeek uses Chat, GPT/Grok/Muse use Responses, and Claude/Minimax/Qwen use Messages automatically. Gemini's native API is not supported. Go uses keyed requests; the desktop-only free CLI catalog is separate. A successful model list does not verify your subscription.",
 		},
 		{
 			id = "azure-foundry",

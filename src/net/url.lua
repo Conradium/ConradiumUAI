@@ -80,14 +80,14 @@ return function(env)
 	function M.isFullEndpoint(raw)
 		local parsed = M.parse(raw)
 		local path = parsed and parsed.path:gsub("/+$", "") or ""
-		return path:match("/chat/completions$") ~= nil or path:match("/messages$") ~= nil
+		return path:match("/chat/completions$") ~= nil or path:match("/messages$") ~= nil or path:match("/responses$") ~= nil
 	end
 
 	function M.endpoint(raw, suffix, extra)
 		local base = M.normaliseBase(raw)
 		local parsed = M.parse(base)
 		if not parsed then return base end
-		local path = parsed.path:gsub("/+$", ""):gsub("/chat/completions$", ""):gsub("/messages$", ""):gsub("/models$", "")
+		local path = parsed.path:gsub("/+$", ""):gsub("/chat/completions$", ""):gsub("/messages$", ""):gsub("/responses$", ""):gsub("/models$", "")
 		local query = {}
 		for part in tostring(parsed.query or ""):gmatch("[^&]+") do
 			local name = util.urlDecode(part:match("^([^=]*)") or "")

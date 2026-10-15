@@ -384,7 +384,7 @@ return function(env)
 		}
 		local cost = usage.formatCost(window.cost)
 		if cost ~= "" then
-			facts[#facts + 1] = { key = "Cost", value = cost .. (window.estimated and " (some estimated)" or "") }
+			facts[#facts + 1] = { key = "Known cost estimate", value = cost }
 		end
 		if window.tokensFrom then
 			facts[#facts + 1] = { key = "Tokens since", value = clock.describeDay(clock.dayKey(window.tokensFrom)) }

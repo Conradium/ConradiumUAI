@@ -17,9 +17,10 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'
 
 # Bridge and client files are embedded in the executable, not shipped beside it.
-# Node is detected/downloaded at runtime and is never added to this payload.
+# Node is detected/downloaded at runtime. OpenCode is detected from an existing
+# installation. Neither executable is added to this payload.
 New-Item -ItemType Directory -Path (Join-Path $payload 'bridge'),(Join-Path $payload 'client'),(Join-Path $payload 'licenses') -Force | Out-Null
-foreach ($file in @('server.js','inference.js','picture-store.js','launcher.js','release.js','updater.js','supervisor.js')) {
+foreach ($file in @('server.js','inference.js','opencode.js','support.js','picture-store.js','launcher.js','release.js','updater.js','supervisor.js')) {
     Copy-Item -LiteralPath (Join-Path $repoRoot "bridge/$file") -Destination (Join-Path $payload "bridge/$file")
 }
 Copy-Item -LiteralPath (Join-Path $repoRoot 'bridge/web') -Destination (Join-Path $payload 'bridge/web') -Recurse
@@ -34,7 +35,7 @@ foreach ($name in @('LICENSE.txt','ThirdPartyNotices.txt')) {
 $files = @(Get-ChildItem -LiteralPath $payload -File -Recurse | Sort-Object FullName | ForEach-Object {
     [ordered]@{ path = $_.FullName.Substring($payload.Length + 1).Replace('\','/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 })
-$inventory = [ordered]@{ product = 'UAI Bridge'; version = $version; platform = 'win-x64'; node = 'detected-or-downloaded'; files = $files }
+$inventory = [ordered]@{ product = 'UAI Bridge'; version = $version; platform = 'win-x64'; node = 'detected-or-downloaded'; opencode = 'external-installation-only'; files = $files }
 [IO.File]::WriteAllText((Join-Path $payload 'manifest.json'), ($inventory | ConvertTo-Json -Depth 5), $utf8)
 Add-Type -AssemblyName System.IO.Compression
 $payloadArchive = Join-Path $stage 'payload.zip'
@@ -69,5 +70,5 @@ $manifest = [ordered]@{ format = 'project-uai-desktop-release'; schema = 1; vers
     package = [ordered]@{ name = [IO.Path]::GetFileName($asset); bytes = (Get-Item -LiteralPath $asset).Length; sha256 = $digest } }
 [IO.File]::WriteAllText((Join-Path $release 'desktop-release.json'), ($manifest | ConvertTo-Json -Depth 5), $utf8)
 Write-Output "Built standalone $asset"
-Write-Output "Embedded $($files.Count) bridge/client/license files; Node.js is not bundled."
+Write-Output "Embedded $($files.Count) bridge/client/license files; Node.js and OpenCode CLI are not bundled."
 Write-Output "Inspect $payload and desktop-release.json before running desktop/verify.ps1."

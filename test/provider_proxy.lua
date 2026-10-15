@@ -8,7 +8,7 @@ local PROXY = "https://puai-proxy.davidzk.tech/"
 local function fixture(preset, protocol)
 	local f = F.new()
 	f.registry = f.env.require("provider/registry")
-	f.record = f.registry.blank(preset or "zen")
+	f.record = f.registry.blank(preset or "agentrouter")
 	f.record.id, f.record.label = "proxy-fixture", "Proxy fixture"
 	f.record.model, f.record.models = "fixture-model", { "fixture-model" }
 	f.record.apiKey = "fixture-key"
@@ -32,7 +32,7 @@ local function fixture(preset, protocol)
 	return f
 end
 
-for _, preset in ipairs({ "zen", "agentrouter" }) do
+for _, preset in ipairs({ "agentrouter" }) do
 	for _, protocol in ipairs({ "openai", "anthropic" }) do
 		case(preset .. " " .. protocol .. " switches once and persists the provider", function()
 			local f = fixture(preset, protocol); local record = f.record
@@ -75,8 +75,8 @@ case("only explicit client refusals qualify", function()
 	for _, value in ipairs({ "Unauthorized client", "unauthorized_client", "UnauthorizedClientError", "Unauthorised client", "Client is not authorized" }) do
 		check(value, proxy.isClientRefusal({ status = 403, body = f.h.json.encode({ error = { message = value } }) }))
 	end
-	check("FreeTierError type", proxy.isClientRefusal({ status = 403, body = '{"error":{"type":"FreeTierError","message":"OpenCode\'s free tier can only be used from within OpenCode."}}' }))
-	check("FreeTierError name", proxy.isClientRefusal({ status = 403, body = '{"error":{"name":"FreeTierError","message":"OpenCode\'s free tier can only be used from within OpenCode."}}' }))
+	check("FreeTierError type never qualifies", not proxy.isClientRefusal({ status = 403, body = '{"error":{"type":"FreeTierError","message":"OpenCode\'s free tier can only be used from within OpenCode."}}' }))
+	check("FreeTierError name never qualifies", not proxy.isClientRefusal({ status = 403, body = '{"error":{"name":"FreeTierError","message":"OpenCode\'s free tier can only be used from within OpenCode."}}' }))
 	check("short plain text", proxy.isClientRefusal({ status = 401, body = "Unauthorized client" }))
 	check("structured 200 error", proxy.isClientRefusal({ status = 200, body = f.h.json.encode({ error = "Unauthorized client" }) }))
 	for _, response in ipairs({
@@ -99,13 +99,11 @@ end)
 case("fallback eligibility follows exact official hosts and routes", function()
 	local f = fixture(); local registry = f.registry
 	local accepted = {
-		{ "https://opencode.ai/zen/v1/chat/completions", "opencode" },
-		{ "HTTPS://OPENCODE.AI.:443/zen/v1/", "opencode" },
 		{ "https://agentrouter.org", "agentrouter" },
 		{ "https://api.agentrouter.org/v1/messages", "agentrouter" },
 	}
 	for _, item in ipairs(accepted) do check(item[1], registry.proxyTarget({ baseUrl = item[1] }) == PROXY .. item[2] .. "/v1") end
-	for _, url in ipairs({ "https://opencode.ai.evil.test/zen/v1", "https://evil.test/opencode.ai/zen/v1",
+	for _, url in ipairs({ "https://opencode.ai/zen/v1/chat/completions", "HTTPS://OPENCODE.AI.:443/zen/v1/", "https://opencode.ai.evil.test/zen/v1", "https://evil.test/opencode.ai/zen/v1",
 		"https://opencode.ai@evil.test/zen/v1", "https://opencode.ai:8443/zen/v1", "https://opencode.ai/custom/v1",
 		"https://opencode.ai/zen/v1/models/messages",
 		"https://agentrouter.org.evil.test/v1", "https://agentrouter.org/custom/v1", "https://custom.test/v1",
@@ -118,7 +116,7 @@ case("fallback eligibility follows exact official hosts and routes", function()
 	f.healthy(); f.close()
 end)
 
-for _, preset in ipairs({ "zen", "agentrouter" }) do
+for _, preset in ipairs({ "agentrouter" }) do
 	case(preset .. " proxy rejection cannot cause a loop", function()
 		local f = fixture(preset); f.h.http.handler = function() return f.refusal() end
 		local result, why = f.complete()
@@ -144,41 +142,45 @@ case("invalid keys and custom endpoints never send credentials to the proxy", fu
 	end
 end)
 
-case("OpenCode FreeTierError switches to the Project UAI proxy", function()
-	local f = fixture("zen", "openai")
-	local record = f.record
+case("OpenCode desktop keeps its direct workaround without the retired proxy", function()
+	local f = fixture("zen", "openai"); local record = f.record
 	f.registry.save(record)
-	local retries = 0
 	f.h.http.handler = function(entry)
-		if not entry.url:find(PROXY .. "opencode/v1", 1, true) then
-			return { StatusCode = 403, Body = f.h.json.encode({ error = { name = "FreeTierError", message = "OpenCode's free tier can only be used from within OpenCode." } }) }
-		end
-		if entry.url:find("/responses", 1, true) then
-			return { StatusCode = 400, Body = f.h.json.encode({ error = { message = "protocol unsupported" } }) }
-		end
-		check("retried on proxy chat route", entry.url == PROXY .. "opencode/v1/chat/completions")
-		return f.reply()
+		check("only official desktop endpoints", entry.url:find("https://opencode.ai/", 1, true) == 1)
+		return { StatusCode = 403, Body = f.h.json.encode({ error = { name = "FreeTierError", message = "OpenCode's free tier can only be used from within OpenCode." } }) }
 	end
-	local result, why = f.complete({ onRetry = function(info) retries = retries + 1; check("proxy retry reported", info.proxy) end })
-	check("completion recovered via proxy: " .. tostring(why), result and result.content == "recovered" and f.h.http.requestCount >= 2 and retries >= 1)
-	check("saved record changed to proxy", f.registry.get(record.id).baseUrl == PROXY .. "opencode/v1")
+	local result, why = f.complete()
+	check("direct Chat and Responses retained", not result and f.h.http.requestCount == 2)
+	check("desktop and mobile guidance", has(why, "direct desktop workaround") and has(why, "Mobile is unsupported") and has(why, "https://discord.gg/9xYyyYuKap"))
+	check("saved URL stays official", f.registry.get(record.id).baseUrl == "https://opencode.ai/zen/v1")
+	f.healthy(); f.close()
+end)
+
+case("OpenCode mobile refuses once with the supported alternative", function()
+	local f = fixture("zen", "openai")
+	f.env.uis.TouchEnabled, f.env.uis.MouseEnabled = true, false
+	f.h.http.handler = function() return { StatusCode = 403, Body = '{"error":{"type":"FreeTierError"}}' } end
+	local result, why = f.complete()
+	check("no mobile retry or proxy", not result and f.h.http.requestCount == 1)
+	check("alternative and help are visible", has(why, "Mobile is unsupported") and has(why, "Project UAI Free") and has(why, "https://discord.gg/9xYyyYuKap"))
 	f.healthy(); f.close()
 end)
 
 case("draft discovery switches locally without creating or changing saved providers", function()
 	for _, editingSaved in ipairs({ false, true }) do
-		local f = fixture(); local saved = f.record; local direct = saved.baseUrl
+		local f = fixture(); local saved = f.record
 		if editingSaved then f.registry.save(saved) end
+		local direct = saved.baseUrl
 		local draft = f.env.require("runtime/util").deepCopy(saved); if not editingSaved then draft.id = "" end
 		local models = f.env.require("provider/models")
 		f.h.http.handler = function(entry)
 			if entry.index == 1 then return { StatusCode = 403, Body = "Unauthorized client" } end
-			check("discovery retries correct proxy route", entry.url == PROXY .. "opencode/v1/models")
+			check("discovery retries correct proxy route", entry.url == PROXY .. "agentrouter/v1/models")
 			return { StatusCode = 200, Body = '{"data":[{"id":"discovered-model"}]}' }
 		end
 		local ids, why = f.run(function() return models.discover(draft) end)
 		check("models recovered: " .. tostring(why), ids[1] == "discovered-model" and f.h.http.requestCount == 2)
-		check("new connection owns cache", models.cached(draft)[1] == "discovered-model" and draft.baseUrl == PROXY .. "opencode/v1")
+		check("new connection owns cache", models.cached(draft)[1] == "discovered-model" and draft.baseUrl == PROXY .. "agentrouter/v1")
 		check("draft did not create or overwrite saved entry", f.registry.count() == (editingSaved and 1 or 0) and saved.baseUrl == direct)
 		f.healthy(); f.close()
 	end
@@ -204,7 +206,7 @@ end)
 case("cancelled and timed out inference never switch or dispatch again", function()
 	for _, protocol in ipairs({ "openai", "anthropic" }) do
 		for _, mode in ipairs({ "cancel", "timeout" }) do
-			local f = fixture("zen", protocol); local original = f.record.baseUrl; local stopped = false
+			local f = fixture("agentrouter", protocol); local original = f.record.baseUrl; local stopped = false
 			f.h.http.handler = function() local res = f.refusal(); res.delay = mode == "cancel" and 0.2 or 2; return res end
 			if mode == "cancel" then f.h.sched.delay(0.05, function() stopped = true end) end
 			local result, why = f.complete({ timeout = 1, aborted = function() return stopped end }, 1.2)
@@ -217,7 +219,7 @@ end)
 
 case("proxy retry shares the HTTP request deadline", function()
 	for _, protocol in ipairs({ "openai", "anthropic" }) do
-		local f = fixture("zen", protocol)
+		local f = fixture("agentrouter", protocol)
 		f.h.http.handler = function(entry)
 			local res = entry.index == 1 and f.refusal() or f.reply(); res.delay = 0.65; return res
 		end
@@ -260,7 +262,7 @@ case("recovery callbacks cannot force another send after cancellation or changes
 end)
 
 case("known proxy inference bypasses a gateway with its own upstream origin", function()
-	local f = fixture(); f.record.baseUrl = PROXY .. "opencode/v1"; f.record.wsUrl = "wss://custom-gateway.test/stream"
+	local f = fixture("agentrouter", "openai"); f.record.baseUrl = PROXY .. "agentrouter/v1"; f.record.wsUrl = "wss://custom-gateway.test/stream"
 	local caps = f.env.require("runtime/caps"); caps.ws = true
 	local connects = 0; caps.fn.websocket = function() connects = connects + 1; error("must use proxy HTTP") end
 	f.h.http.handler = function() return f.reply() end

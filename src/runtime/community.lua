@@ -2,7 +2,7 @@
 return function(env)
 	local config = env.require("runtime/config")
 	local clock = env.require("runtime/clock")
-	local M = { invite = "https://discord.gg/9xYyyYuKap" }
+	local M = { invite = env.require("runtime/support").invite }
 	local COOLDOWN = 14 * 24 * 60 * 60 * 1000
 	local shown = false
 

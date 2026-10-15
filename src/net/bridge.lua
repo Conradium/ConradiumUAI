@@ -26,6 +26,8 @@ return function(env)
 	local M = { running = false, online = false, lastError = nil, changed = signal.new("bridge") }
 	local clientId = env.services.HttpService:GenerateGUID(false)
 	local alive, generation = false, 0
+	local opencode, nextHello = nil, 0
+	local opencodeModels = {}
 	local uploadFailed, pollFailed = false, false
 	local function syncRuntime()
 		local value = M.online and "web" or "game"
@@ -151,14 +153,44 @@ return function(env)
 	-- out of the Requests view.
 	local function call(spec)
 		local mine = generation
+		local callerAborted = spec.aborted
 		local supplied = spec.headers or {}
 		spec.headers = headers()
 		if supplied["X-UAI-Poll-Wait-Ms"] then spec.headers["X-UAI-Poll-Wait-Ms"] = supplied["X-UAI-Poll-Wait-Ms"] end
-		spec.aborted = function() return not alive or mine ~= generation end
+		spec.aborted = function() return not alive or mine ~= generation or callerAborted and callerAborted() end
 		spec.identity = "none"
 		spec.silent = true
 		spec.tag = "bridge"
 		return http.request(spec)
+	end
+
+	function M.opencodeStatus()
+		if not M.online or not opencode then return { available = false, state = "disconnected" } end
+		return util.copy(opencode)
+	end
+
+	function M.opencodeHasModel(id)
+		return M.opencodeStatus().available and opencodeModels[tostring(id)] == true
+	end
+
+	function M.opencodeModels(opts)
+		opts = opts or {}
+		local support = env.require("runtime/support")
+		if not M.opencodeStatus().available then return nil, support.error(support.opencode()) end
+		local res, err = call({ url = base() .. "/api/opencode/models", method = "GET",
+			timeout = opts.timeout or 10, aborted = opts.aborted })
+		if not res or not res.ok then return nil, env.require("provider/openai").errorText(res, err) end
+		local value = #res.body <= 2097152 and util.decode(res.body)
+		if type(value) ~= "table" or type(value.data) ~= "table" or value.error then
+			return nil, support.error("OpenCode CLI returned an invalid model list.")
+		end
+		if not M.opencodeStatus().available then return nil, support.error("OpenCode CLI availability changed; fetch models again.") end
+		local known = {}
+		for _, row in ipairs(value.data) do
+			if type(row) == "table" and type(row.id) == "string" then known[row.id] = true end
+		end
+		opencodeModels = known
+		return value
 	end
 
 	local function runCommand(command)
@@ -234,6 +266,8 @@ return function(env)
 		local moved = M.online or M.lastError == nil
 		local changed = M.online or M.lastError ~= reason
 		M.online = false
+		opencode, nextHello = nil, 0
+		opencodeModels = {}
 		M.lastError = reason
 		syncRuntime()
 		if moved then
@@ -490,14 +524,25 @@ return function(env)
 		local mobile = false
 		pcall(function() mobile = env.uis.TouchEnabled == true and env.uis.MouseEnabled ~= true end)
 		local timeout = POLL_TIMEOUT
-		if mobile then
-			local hello = call({ url = base() .. "/api/hello", method = "GET", timeout = 2 })
-			if not alive or mine ~= generation then return end
-			local info = hello and hello.ok and #hello.body <= 16384 and util.decode(hello.body)
-			local inbox = type(info) == "table" and type(info.capabilities) == "table" and info.capabilities.agentInbox
-			if type(inbox) == "table" and inbox.waitHeader == "X-UAI-Poll-Wait-Ms" then timeout = 5 end
-		end
 		while alive and mine == generation do
+			if clock.ms() >= nextHello then
+				local hello = call({ url = base() .. "/api/hello", method = "GET", timeout = 2 })
+				if not alive or mine ~= generation then return end
+				local info = hello and hello.ok and #hello.body <= 16384 and util.decode(hello.body)
+				local capabilities = type(info) == "table" and info.protocol == 2 and info.capabilities
+				local inbox = type(capabilities) == "table" and capabilities.agentInbox
+				if mobile and type(inbox) == "table" and inbox.waitHeader == "X-UAI-Poll-Wait-Ms" then timeout = 5 end
+				local backend = type(capabilities) == "table" and capabilities.opencode
+				local previous = opencode
+				opencode = nil
+				if type(backend) == "table" and backend.schema == 1 then
+					opencode = { available = backend.available == true, state = tostring(backend.state or "unavailable"),
+						version = type(backend.version) == "string" and backend.version or nil }
+				end
+				nextHello = clock.ms() + 4000
+				if not opencode or not opencode.available then opencodeModels = {} end
+				if util.encode(previous) ~= util.encode(opencode) then M.changed:fire() end
+			end
 			-- After a failed poll, prove the inbox is back without waiting through
 			-- another idle long poll before Web runtime can recover.
 			local waitMs = attempt > 0 and "0" or (mobile and "1000" or nil)
@@ -568,6 +613,8 @@ return function(env)
 		alive = false
 		M.running = false
 		M.online = false
+		opencode, nextHello = nil, 0
+		opencodeModels = {}
 		syncRuntime()
 		if detach then pcall(detach) end
 		detach, attachedId = nil, nil
@@ -637,6 +684,7 @@ return function(env)
 			url = base(),
 			source = connection.get().source,
 			searching = connection.searching(),
+			opencode = M.opencodeStatus(),
 			queued = #queue,
 			runtime = M.online and "web" or "game",
 			error = M.lastError,

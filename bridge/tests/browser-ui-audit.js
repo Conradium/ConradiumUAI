@@ -243,6 +243,40 @@ function contrast(foreground, background) {
     assert.equal(await page.locator('[data-focus-key="provider:p1:use"]').textContent(), 'Use');
     assert.equal(await activeKey(), 'provider:p2:use');
 
+    // Provider disclosure must match the registry's exact active proxy routes.
+    await page.getByRole('button', { name: 'Add provider', exact: true }).click();
+    const endpoint = page.getByLabel('Base URL', { exact: true }), disclosure = page.locator('.provider-disclosure');
+    for (const value of ['agentrouter.org', 'http://api.agentrouter.org:80/v1/messages?region=1',
+      'https://agentrouter.org:443/v1/chat/completions/', 'https://puai-proxy.davidzk.tech/agentrouter/v1/models']) {
+      await endpoint.fill(value);
+      assert.equal(await disclosure.isVisible(), true, value);
+      assert.match(await disclosure.textContent(), /AgentRouter.*Project UAI proxy.*90,000/s);
+    }
+    for (const value of ['https://agentrouter.org/custom/v1', 'https://agentrouter.org:444/v1',
+      'https://agentrouter.org.evil.invalid/v1', 'https://user@agentrouter.org/v1', 'https://agentrouter.org/invalid path',
+      'http://puai-proxy.davidzk.tech/agentrouter/v1', 'https://puai-proxy.davidzk.tech/other/v1',
+      'https://puai-proxy.davidzk.tech:444/agentrouter/v1', 'https://opencode.ai.evil.invalid/zen/v1']) {
+      await endpoint.fill(value); assert.equal(await disclosure.isVisible(), false, value);
+    }
+    for (const value of ['https://opencode.ai/zen/v1', 'https://opencode.ai/inference/v1/responses',
+      'https://puai-proxy.davidzk.tech/opencode/v1', 'https://puai-free-gateway.renern.workers.dev/opencode/v1']) {
+      await endpoint.fill(value);
+      assert.match(await disclosure.textContent(), /direct desktop workaround.*installed OpenCode CLI.*Mobile free models are unsupported/s);
+      assert.doesNotMatch(await disclosure.textContent(), /can retry|90,000|API keys pass/);
+      assert.equal(await disclosure.locator('a').getAttribute('href'), 'https://discord.gg/9xYyyYuKap');
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await disclosure.scrollIntoViewIfNeeded(); await screenshot('bridge-320-opencode-disclosure');
+    for (const value of ['https://opencode.ai/inference/go/v1', 'https://opencode.ai/zen/go/v1',
+      'https://opencode.ai/inference/go/v1/responses']) {
+      await endpoint.fill(value);
+      assert.match(await disclosure.textContent(), /Go subscription endpoint.*Go API key.*directly/s);
+      assert.doesNotMatch(await disclosure.textContent(), /proxy|Mobile.*unsupported|installed OpenCode CLI/i);
+      assert.equal(await disclosure.locator('a').getAttribute('href'), 'https://discord.gg/9xYyyYuKap');
+    }
+    await disclosure.scrollIntoViewIfNeeded(); await screenshot('bridge-320-opencode-go-disclosure');
+    await closeModal();
+
     await navigate('chat'); await page.locator('#modelButton').click();
     await page.getByLabel('Provider', { exact: true }).selectOption('p1');
     await page.getByLabel('Search models', { exact: true }).fill('model');
@@ -424,8 +458,8 @@ function contrast(foreground, background) {
     const timeoutText = 'deadline exceeded: the transport timed out';
     await push({ sessionId: 'audit', snapshot: [{ kind: 'error', sessionId: 'audit', message: timeoutText }, { kind: 'error', sessionId: 'audit', message: 'HTTP 429: request rate limited' }] });
     await navigate('chat');
-    assert.equal(await page.locator('#transcript > .error .deadline-help').count(), 1);
-    assert.equal(await page.locator('#transcript > .error .deadline-help').getAttribute('href'), 'https://discord.gg/9xYyyYuKap');
+    assert.equal(await page.locator('#transcript > .error .deadline-help').count(), 2, 'all error codes include Discord help');
+    assert.equal(await page.locator('#transcript > .error .deadline-help').first().getAttribute('href'), 'https://discord.gg/9xYyyYuKap');
     assert.equal(await page.locator('#transcript > .error .error-message').first().textContent(), timeoutText);
     await page.evaluate(() => {
       renderer.start({ id: 'deadline-preview', sessionId: 'audit' });

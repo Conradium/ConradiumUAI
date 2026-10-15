@@ -15,10 +15,6 @@ return function(env)
 			or text:find("%f[%a]unauthori[sz]edclienterror%f[%A]") ~= nil
 			or text:find("%f[%a]client is not authorized%f[%A]") ~= nil
 			or text:find("%f[%a]client is not authorised%f[%A]") ~= nil
-			or text:find("freetiererror", 1, true) ~= nil
-			or text:find("free tier error", 1, true) ~= nil
-			or text:find("can only be used from within opencode", 1, true) ~= nil
-			or text:find("free tier can only be used from within", 1, true) ~= nil
 	end
 
 	local function credentialOrAccountRefusal(value)

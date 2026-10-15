@@ -262,10 +262,8 @@ function insert(text){show('chat');$('input').value+=($('input').value?'\n\n':''
 function metric(value,label){const n=el('div');n.append(el('strong',null,typeof value==='number'?value.toLocaleString():value),el('small',null,label));return n;}
 function thinking(text){const node=el('details','thinking');node.append(el('summary',null,'Thinking'));const body=el('div','body');body.innerHTML=md(text);node.append(body);append(node);return body;}
 function deadlineHelp(root,message,status){
-  const text=String(message||'');
-  if([400,401,403,404,409,422,429].includes(Number(status))||/\bHTTP\s*(?:400|401|403|404|409|422|429)\b/i.test(text))return;
-  if(!/(?:deadline\s*[:_-]|deadline (?:exceeded|reached|expired)|\btimed out\b|\bE(?:SOCKET)?TIMEDOUT\b|(?:transport|request|connection|socket|gateway)[ _-]+timeout|^timeout$)/i.test(text))return;
-  const link=el('a','deadline-help','Join our Discord for a tutorial on fixing this');link.href='https://discord.gg/9xYyyYuKap';link.target='_blank';link.rel='noopener noreferrer';root.append(link);
+  if(root.querySelector('.deadline-help'))return;
+  const link=el('a','deadline-help','Get help and updates on Discord');link.href='https://discord.gg/9xYyyYuKap';link.target='_blank';link.rel='noopener noreferrer';root.append(link);
 }
 function toolKey(e){return (e.kind?.startsWith('subagent:')?'child:'+e.id+':':'main:')+(e.callId||e.id||'')+':'+(e.name||'');}
 function codeListing(text,label){
@@ -299,7 +297,7 @@ function finishTool(e){
   row.verdict.textContent=stopped?'Stopped':timeout?'Timed out':e.denied?'Declined':failed?'Failed':'Done';
   if(Number.isFinite(e.ms))row.verdict.textContent+=' · '+(e.ms<1000?Math.round(e.ms)+' ms':(e.ms/1000).toFixed(1)+' s');
   row.body.append(codeListing(e.text||e.summary||'(No output)',failed?'Execution details':'Result'));
-  if(failed)row.node.open=true;
+  if(failed){row.node.open=true;deadlineHelp(row.body,e.error||e.text,e.status);}
   tools.delete(key);
 }
 function renderEvent(e){
@@ -603,9 +601,21 @@ function providerEditor(provider){modal(provider?'Edit provider':'Add provider',
   const model=field(credentials,'Model',provider?.model||'');model.spellcheck=false;model.placeholder='Exact model ID from your provider';
   credentials.append(el('small','field-help','Use an exact model ID. Saved providers can discover their available models in the model picker.'));
   const disclosure=el('p','provider-disclosure');form.append(disclosure);
-  function describeEndpoint(){let host='';try{host=new URL(url.value).hostname.toLowerCase();}catch{}
-    const proxy=host==='puai-proxy.davidzk.tech',vendor=['opencode.ai','zen.opencode.ai','agentrouter.org'].some(name=>host===name||host.endsWith('.'+name));
-    disclosure.hidden=!proxy&&!vendor;disclosure.textContent=proxy?'This endpoint uses the Project UAI proxy. Requests and API keys pass through it, with a shared limit of 90,000 requests per day. The Base URL remains editable.':'If this provider explicitly refuses the client identity, UAI can retry through the Project UAI proxy. Requests and API keys then pass through that proxy, which has a shared daily limit of 90,000 requests.';
+  function describeEndpoint(){
+    // Match the registry's normalized routes without URL path canonicalization.
+    const raw=url.value.trim().replace(/^\/\//,''),input=/^[a-z][\w+.-]*:\/\//i.test(raw)?raw:'https://'+raw;
+    const parsed=/\s/.test(input)?null:input.match(/^(https?):\/\/([a-z\d_.-]+)(?::(\d+))?(\/[^?#]*)?(?:\?[^#]*)?(?:#.*)?$/i);
+    const scheme=parsed?.[1].toLowerCase(),host=parsed?.[2].toLowerCase().replace(/\.$/,''),port=parsed?.[3];
+    const path=(parsed?.[4]||'').replace(/\/+$/,'')||'/v1',base=path.replace(/\/(?:chat\/completions|messages|models|responses)$/,'');
+    const standard=!!parsed&&(!port||port===(scheme==='https'?'443':'80'));
+    const proxy=standard&&scheme==='https'&&host==='puai-proxy.davidzk.tech'&&base==='/agentrouter/v1';
+    const vendor=standard&&/^(?:[a-z\d.-]+\.)?agentrouter\.org$/.test(host)&&base==='/v1';
+    const retired=standard&&['puai-proxy.davidzk.tech','puai-free-gateway.renern.workers.dev'].includes(host)&&/^\/opencode(?:\/|$)/i.test(path);
+    const openCode=host==='opencode.ai'||retired;
+    const go=standard&&scheme==='https'&&host==='opencode.ai'&&['/inference/go/v1','/zen/go/v1'].includes(base);
+    disclosure.hidden=!proxy&&!vendor&&!openCode;
+    disclosure.textContent=go?'This is the OpenCode Go subscription endpoint. Use your Go API key here. Go requests use this endpoint directly, including in Cowork.':openCode?(retired?'This OpenCode proxy route has retired. ':'')+'OpenCode free models use the direct desktop workaround. Free models can also use an installed OpenCode CLI through Cowork. Mobile free models are unsupported.':proxy?'This AgentRouter endpoint uses the Project UAI proxy. Requests and API keys pass through it, with a shared limit of 90,000 requests per day. The Base URL remains editable.':vendor?'If AgentRouter explicitly refuses the client identity, UAI can retry through the Project UAI proxy. Requests and API keys then pass through that proxy, which has a shared daily limit of 90,000 requests.':'';
+    if(!disclosure.hidden)deadlineHelp(disclosure);
   }
   preset.onchange=()=>{const p=state.presets?.find(p=>p.id===preset.value);if(p){label.value=p.label||'';url.value=p.baseUrl||'';apiStyle.value=p.api||'openai';auth.value=p.authStyle||'bearer';}describeEndpoint();};url.oninput=describeEndpoint;describeEndpoint();
   form.onsubmit=event=>{event.preventDefault();const value={id:provider?.id,preset:preset.value,label:label.value.trim(),baseUrl:url.value.trim(),api:apiStyle.value,authStyle:auth.value,model:model.value.trim()};if(key.value)value.apiKey=key.value;modalCommand('provider:save',{provider:value});};

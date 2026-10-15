@@ -237,7 +237,7 @@ return function(env)
 			local facts = { util.formatCompact(row.tokens) .. " tokens",
 				util.pluralise(row.requests, "request") }
 			local cost = env.require("agent/usage").formatCost(row.cost)
-			if cost ~= "" then facts[#facts + 1] = cost end
+			if cost ~= "" then facts[#facts + 1] = cost .. " known est." end
 			local detail = P.text(entry, {
 				name = "Detail",
 				text = table.concat(facts, "  ") .. (window.estimated and "  (some estimated)" or ""),
@@ -413,6 +413,23 @@ return function(env)
 			fitStarters()
 		end
 
+		local freeRecord = env.require("provider/registry").active()
+		if env.require("provider/community_key").isApplied(freeRecord) then
+			local intro = P.column(holder, { name = "FreeIntroduction", size = UDim2.new(1, 0, 0, 0),
+				maxSize = Vector2.new(theme.size.statCard, math.huge), auto = "Y", gap = theme.space.xs,
+				padding = theme.space.md, bg = theme.color.surface, radius = theme.radius.lg, layoutOrder = 3 })
+			P.text(intro, { name = "FreeIntroductionTitle", text = "Project UAI Free is ready", role = "label",
+				size = UDim2.new(1, 0, 0, 0), auto = "Y", wrap = true, layoutOrder = 1 })
+			P.text(intro, { name = "FreeIntroductionText",
+				text = "Thank you for your continued use and support of Project UAI. Free access powered by HCNSEC is included, with no account or personal key needed. Speed and availability vary with shared capacity. More free providers may be available soon.",
+				role = "caption", color = theme.color.textSecondary, size = UDim2.new(1, 0, 0, 0),
+				auto = "Y", wrap = true, layoutOrder = 2 })
+			P.text(intro, { name = "FreeCommunityInvite", text = "Updates and help: https://discord.gg/9xYyyYuKap",
+				role = "caption", color = theme.color.accent, size = UDim2.new(1, 0, 0, 0), auto = "Y", wrap = true, layoutOrder = 3 })
+			P.button(intro, { name = "FreeCommunity", text = "Join our Discord", variant = "ghost", size = "sm", layoutOrder = 4,
+				onClick = function() env.require("ui/community").open() end })
+		end
+
 		if config.get("ui.showActivity", true) ~= true then return holder end
 
 		local card = P.column(holder, {
@@ -426,13 +443,13 @@ return function(env)
 			radius = theme.radius.xl,
 			gap = theme.space.md,
 			padding = theme.space.lg,
-			layoutOrder = 4,
+			layoutOrder = 5,
 		})
 		P.stroke(card, theme.color.borderSubtle)
 		card.Visible = false
 		P.button(holder, {
 			name = "ToggleActivity", text = "Your activity", icon = "chevron", iconDirection = "down",
-			variant = "ghost", size = "sm", layoutOrder = 3,
+			variant = "ghost", size = "sm", layoutOrder = 4,
 			onClick = function(button)
 				card.Visible = not card.Visible
 				button.setText(card.Visible and "Hide activity" or "Your activity")

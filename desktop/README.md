@@ -5,8 +5,8 @@ updated Roblox script automatically. The desktop project is separate from the
 existing bridge and uses its server in `--desktop` mode on **127.0.0.1:28791**.
 Manual terminal startup keeps port 8790 and its existing token workflow.
 
-Download and open **UAI-Bridge-3.1.0-win-x64.exe**, then click
-**Start Cowork**. The redesigned window separates connection, Node.js setup and
+Download and open **UAI-Bridge-3.2.0-win-x64.exe**, then click
+**Start Cowork**. The window shows connection, Node.js setup, OpenCode and
 update status. It detects Node.js 18+ on your computer. If none is available,
 choose **Download Node.js** or **Install Node manually**, then **Check again**.
 The app downloads the current Windows x64 LTS executable from nodejs.org, checks
@@ -18,6 +18,31 @@ client and license notices. It verifies and prepares its embedded files in a
 private user cache automatically. There is no ZIP to extract or supporting
 folder to keep beside the executable. Node.js is installed separately through
 the app or detected on your computer. Roblox and the UAI script must remain running.
+
+## Optional OpenCode native workaround
+
+Install [OpenCode Desktop](https://opencode.ai) separately, then restart Cowork.
+The OpenCode card reports when its free models are ready. The bridge detects the
+installed native CLI, starts its authenticated loopback server privately, and
+routes models in its public catalog through the native connection. OpenCode is
+**not bundled, downloaded or copied into the desktop distribution**. The app uses
+its existing Windows Job Object to own the bridge and its CLI descendant; Stop
+and Exit shut them down. The bridge also supports an absolute
+`UAI_OPENCODE_BINARY` override; see the [bridge guide](../bridge/README.md).
+
+The existing direct desktop workaround still works without this app. This native
+route provides an additional desktop option; OpenCode free models remain unsupported on mobile.
+UAI tools are returned to Roblox for execution. The CLI never receives permission
+to run local desktop tools. Provider keys and existing OpenCode credentials are not
+copied into its isolated session. OpenCode's retired HTTPS proxy is not used.
+
+OpenCode Go subscriptions use `https://opencode.ai/inference/go/v1` and your Go API
+key directly. They do not use this native free-model route. The mobile restriction
+above applies to OpenCode free models, not Go subscriptions.
+
+Project UAI Free is available by default when no provider is configured. Thank you
+for your continued use and support. Join [our Discord](https://discord.gg/9xYyyYuKap)
+for help, availability updates and news about more free providers.
 
 The window reports bridge startup separately from Roblox connection. Closing a
 running window hides it in the tray; **Exit** stops the owned bridge and exits.
@@ -34,7 +59,7 @@ Disable **Find desktop app automatically** to opt out. `bridge.stop()` suspends
 discovery until `bridge.sync()` or a connection-setting change. Unloading releases
 the discovery worker and ignores pending results.
 
-With client 3.1.0, authenticated bridge contact selects Web runtime automatically;
+With client 3.2.0, authenticated bridge contact selects Web runtime automatically;
 disconnecting restores Game for subsequent requests. Stopping or restarting the
 launcher does not resend an inference request. Update the packaged client and
 bridge together when building a desktop distribution.
@@ -58,7 +83,7 @@ cannot start. The original shortcut continues to work. Bridge cache identity
 stays stable across desktop updates. Failed network or integrity checks leave
 the current app usable and retry later.
 
-Desktop 1.0 has no updater, so its users need one manual download of 3.1.0 first.
+Desktop 1.0 has no updater, so its users need one manual download of 3.2.0 first.
 For each future release, publish `desktop-release.json`,
 `UAI-Bridge-<version>-win-x64.exe`, and its adjacent `.sha256` on the same official
 `v<version>` or `desktop-v<version>` GitHub release. The manifest includes the
@@ -81,7 +106,7 @@ than resending it to a new process.
 ## Build and verification
 
 Install the .NET 10 SDK for Windows and Node.js 18+ for verification. The package
-build does not download Node. There are no NuGet library dependencies.
+build does not download Node or OpenCode. There are no NuGet library dependencies.
 `desktop/make-icon.ps1` draws the native connection glyph; the app has no UAI logo
 image. Manually audit all changed source, documentation and tests first, then build:
 
@@ -94,7 +119,7 @@ powershell -ExecutionPolicy Bypass -File desktop/build.ps1
 Inspect generated client and desktop outputs, then verify:
 
 ```powershell
-node --test bridge/tests/desktop.test.js bridge/tests/updater.test.js
+node --test bridge/tests/desktop.test.js bridge/tests/opencode-native.test.js bridge/tests/updater.test.js
 luajit test/desktop_bridge.lua
 luajit test/web_runtime.lua
 luajit test/bridge_install.lua
@@ -104,7 +129,7 @@ powershell -ExecutionPolicy Bypass -File desktop/verify.ps1
 ```
 
 The desktop verification checks the release executable and embedded file hashes,
-single-file startup, and the absence of a bundled Node runtime. It exercises
+single-file startup, and the absence of bundled Node/OpenCode runtimes. It exercises
 detected Node, repeated startup, discovery, simulated game status, graceful stop
 and restart with a new token. It also renders a native WinForms window preview in
 `.build/verification/launcher.png`; inspect it. These checks do not claim a live

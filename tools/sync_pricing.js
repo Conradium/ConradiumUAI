@@ -1,216 +1,190 @@
-// tools/sync_pricing.js
-// Fetches model pricing from OpenRouter & LiteLLM, normalizes model IDs for all providers,
-// and generates src/agent/pricing.lua.
+// Refresh a reviewable source snapshot, then generate model data offline.
+// --refresh writes the snapshot only; default / --check generate / verify Lua.
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
 
-const fs = require('fs');
-const path = require('path');
+const root = path.resolve(__dirname, '..');
+const snapshotPath = path.join(__dirname, 'data', 'model_metadata.json');
+const outputPath = path.join(root, 'src', 'provider', 'model_data.lua');
+const SOURCES = {
+	modelsdev: 'https://models.dev/api.json',
+	litellm: 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json',
+	openrouter: 'https://openrouter.ai/api/v1/models',
+};
+const PROVIDERS = {
+	openai: ['openai', 'openai'], anthropic: ['anthropic', 'anthropic'],
+	google: ['google', 'gemini'], deepseek: ['deepseek', 'deepseek'],
+	opencode: ['opencode', null], 'opencode-go': ['opencode-go', null], groq: ['groq', 'groq'],
+	together: ['togetherai', 'together_ai'], mistral: ['mistral', 'mistral'],
+	xai: ['xai', 'xai'], fireworks: ['fireworks-ai', 'fireworks_ai'],
+	cerebras: ['cerebras', 'cerebras'],
+};
 
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-
-async function fetchJson(url) {
-  try {
-    const res = await fetch(url, { headers: { 'User-Agent': 'ProjectUAI-Sync/1.0' } });
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-    return await res.json();
-  } catch (err) {
-    console.warn(`Failed to fetch ${url}:`, err.message);
-    return null;
-  }
+function number(value, scale = 1) {
+	if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
+	return Math.round(value * scale * 1e9) / 1e9;
 }
-
-function roundPrice(num) {
-  if (num == null || isNaN(num)) return 0;
-  return Math.round(num * 1000000) / 1000000;
+function positive(value) { return number(value) > 0 ? Math.floor(value) : undefined; }
+function id(value) { return typeof value === 'string' ? value.trim().toLowerCase() : ''; }
+function clean(value) { return JSON.parse(JSON.stringify(value)); }
+function price(cost, scale = 1) {
+	if (!cost || number(cost.input) === undefined || number(cost.output) === undefined) return undefined;
+	return clean({ input: number(cost.input, scale), output: number(cost.output, scale),
+		cacheRead: number(cost.cache_read, scale), cacheWrite: number(cost.cache_write, scale) });
 }
-
-async function main() {
-  console.log('Fetching OpenRouter models...');
-  const openRouterData = await fetchJson('https://openrouter.ai/api/v1/models');
-
-  console.log('Fetching LiteLLM models database...');
-  const liteLlmData = await fetchJson('https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json');
-
-  const prices = new Map();
-
-  function recordPrice(key, prompt1M, completion1M) {
-    if (!key || typeof key !== 'string') return;
-    const k = key.trim().toLowerCase();
-    if (!k || k.length < 2) return;
-    if (prices.has(k)) return; // First source has priority
-    prices.set(k, [roundPrice(prompt1M), roundPrice(completion1M)]);
-  }
-
-  function addVariants(rawKey, prompt1M, completion1M) {
-    recordPrice(rawKey, prompt1M, completion1M);
-
-    // Strip :free, :beta, :nitro, :online, :extended
-    const untagged = rawKey.replace(/:[a-z0-9_-]+$/i, '');
-    if (untagged !== rawKey) recordPrice(untagged, prompt1M, completion1M);
-
-    // Strip namespace e.g. "openai/gpt-4o" -> "gpt-4o"
-    const parts = untagged.split('/');
-    if (parts.length > 1) {
-      const bare = parts.slice(1).join('/');
-      recordPrice(bare, prompt1M, completion1M);
-
-      // Dash/dot replacements: "claude-3.5-sonnet" <-> "claude-3-5-sonnet"
-      if (bare.includes('.')) {
-        recordPrice(bare.replace(/\./g, '-'), prompt1M, completion1M);
-      }
-    }
-
-    if (untagged.includes('.')) {
-      recordPrice(untagged.replace(/\./g, '-'), prompt1M, completion1M);
-    }
-  }
-
-  // 1. LiteLLM models (official upstream direct provider prices)
-  if (liteLlmData && typeof liteLlmData === 'object') {
-    for (const [rawKey, info] of Object.entries(liteLlmData)) {
-      if (!info || typeof info !== 'object') continue;
-      const inToken = info.input_cost_per_token;
-      const outToken = info.output_cost_per_token;
-      if (typeof inToken === 'number' && typeof outToken === 'number') {
-        addVariants(rawKey, inToken * 1e6, outToken * 1e6);
-      }
-    }
-  }
-
-  // 2. OpenRouter models (broad multi-provider coverage)
-  if (openRouterData && Array.isArray(openRouterData.data)) {
-    for (const model of openRouterData.data) {
-      const p = model.pricing;
-      if (!p) continue;
-      const prompt1M = parseFloat(p.prompt || 0) * 1e6;
-      const completion1M = parseFloat(p.completion || 0) * 1e6;
-      addVariants(model.id, prompt1M, completion1M);
-    }
-  }
-
-  // 3. Essential manual baselines & Free models
-  const baselines = {
-    'big-pickle': [0, 0],
-    'minipickle': [0, 0],
-    'gpt-4o': [2.50, 10.00],
-    'gpt-4o-mini': [0.15, 0.60],
-    'gpt-4.1': [2.00, 8.00],
-    'gpt-4.1-mini': [0.40, 1.60],
-    'o1': [15.00, 60.00],
-    'o1-mini': [1.10, 4.40],
-    'o3-mini': [1.10, 4.40],
-    'claude-haiku': [1.00, 5.00],
-    'claude-sonnet': [3.00, 15.00],
-    'claude-sonnet-5': [2.00, 10.00],
-    'claude-opus': [15.00, 75.00],
-    'claude-opus-4-6': [5.00, 25.00],
-    'claude-opus-4-7': [5.00, 25.00],
-    'claude-opus-4-8': [5.00, 25.00],
-    'claude-opus-5': [5.00, 25.00],
-    'claude-fable-5': [10.00, 50.00],
-    'claude-mythos-5': [10.00, 50.00],
-    'deepseek-chat': [0.27, 1.10],
-    'deepseek-reasoner': [0.55, 2.19],
-    'gemini-2.5-flash': [0.30, 2.50],
-    'gemini-3.7-flash': [0.75, 3.75],
-    'gemini-3.8-flash': [0.75, 3.75],
-    'llama-3.3-70b': [0.59, 0.79],
-    'llama-3.1-8b': [0.05, 0.08],
-    'mistral-large': [2.00, 6.00],
-    'mistral-small': [0.20, 0.60],
-    'grok-4': [3.00, 15.00],
-    'grok-3-mini': [0.30, 0.50],
-    'qwen': [0.40, 0.80],
-  };
-
-  for (const [k, v] of Object.entries(baselines)) {
-    addVariants(k, v[0], v[1]);
-  }
-
-  console.log(`Compiled ${prices.size} unique model pricing entries.`);
-
-  // Sort keys for deterministic output
-  const sortedKeys = Array.from(prices.keys()).sort();
-
-  const lines = [
-    '-- Model pricing directory for in/out tokens per 1,000,000 tokens.',
-    '-- Format: { promptCostPer1M, completionCostPer1M }',
-    '-- Generated by tools/sync_pricing.js from OpenRouter & LiteLLM datasets.',
-    'return function(env)',
-    '\tlocal M = {}',
-    '',
-    '\tlocal PRICES = {',
-  ];
-
-  for (const k of sortedKeys) {
-    const [prompt, completion] = prices.get(k);
-    // Sanitize key string for Lua
-    const safeKey = k.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    lines.push(`\t\t["${safeKey}"] = { ${prompt}, ${completion} },`);
-  }
-
-  lines.push('\t}');
-  lines.push('');
-  lines.push('\tfunction M.priceFor(model, record)');
-  lines.push('\t\tlocal id = tostring(model or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")');
-  lines.push('\t\tif id == "" then return nil end');
-  lines.push('');
-  lines.push('\t\t-- 1. Free/local providers always cost $0.00');
-  lines.push('\t\tif record then');
-  lines.push('\t\t\tif record.preset == "ollama" or record.preset == "lmstudio" then');
-  lines.push('\t\t\t\treturn { 0, 0 }');
-  lines.push('\t\t\tend');
-  lines.push('\t\t\tlocal base = tostring(record.baseUrl or ""):lower()');
-  lines.push('\t\t\tif base:find("localhost", 1, true) or base:find("127.0.0.1", 1, true) then');
-  lines.push('\t\t\t\treturn { 0, 0 }');
-  lines.push('\t\t\tend');
-  lines.push('\t\t\tlocal registry = env.require("provider/registry")');
-  lines.push('\t\t\tif registry and registry.isOpencode and registry.isOpencode(record) then');
-  lines.push('\t\t\t\tif id == "big-pickle" or id == "minipickle" or id:find(":free", 1, true) then');
-  lines.push('\t\t\t\t\treturn { 0, 0 }');
-  lines.push('\t\t\t\tend');
-  lines.push('\t\t\tend');
-  lines.push('\t\tend');
-  lines.push('');
-  lines.push('\t\t-- 2. Exact match on raw ID');
-  lines.push('\t\tif PRICES[id] then return PRICES[id] end');
-  lines.push('');
-  lines.push('\t\t-- 3. Normalized match without provider prefix (e.g. openai/gpt-4o -> gpt-4o)');
-  lines.push('\t\tlocal bare = id:gsub("^[^/]+/", "")');
-  lines.push('\t\tif PRICES[bare] then return PRICES[bare] end');
-  lines.push('');
-  lines.push('\t\t-- 4. Dot-to-dash variations (e.g. claude-3.5-sonnet -> claude-3-5-sonnet)');
-  lines.push('\t\tlocal dashed = id:gsub("%.", "-")');
-  lines.push('\t\tif PRICES[dashed] then return PRICES[dashed] end');
-  lines.push('\t\tlocal bareDashed = bare:gsub("%.", "-")');
-  lines.push('\t\tif PRICES[bareDashed] then return PRICES[bareDashed] end');
-  lines.push('');
-  lines.push('\t\t-- 5. Longest prefix matching for dated snapshots (e.g. gpt-4o-2024-11-20 -> gpt-4o)');
-  lines.push('\t\tlocal best, bestLen = nil, 0');
-  lines.push('\t\tfor prefix, price in pairs(PRICES) do');
-  lines.push('\t\t\tif #prefix >= 4 and id:find(prefix, 1, true) and #prefix > bestLen then');
-  lines.push('\t\t\t\tbest, bestLen = price, #prefix');
-  lines.push('\t\t\tend');
-  lines.push('\t\tend');
-  lines.push('\t\tif best then return best end');
-  lines.push('');
-  lines.push('\t\tfor prefix, price in pairs(PRICES) do');
-  lines.push('\t\t\tif #prefix >= 4 and bare:find(prefix, 1, true) and #prefix > bestLen then');
-  lines.push('\t\t\t\tbest, bestLen = price, #prefix');
-  lines.push('\t\t\tend');
-  lines.push('\t\tend');
-  lines.push('\t\treturn best');
-  lines.push('\tend');
-  lines.push('');
-  lines.push('\tM.PRICES = PRICES');
-  lines.push('\treturn M');
-  lines.push('end\n');
-
-  const outPath = path.join(__dirname, '..', 'src', 'agent', 'pricing.lua');
-  fs.writeFileSync(outPath, lines.join('\n'), 'utf8');
-  console.log(`Saved ${outPath} successfully.`);
+function modelsdevRow(model) {
+	const cost = model.cost || {}, limit = model.limit || {};
+	const row = { source: 'modelsdev', price: price(cost), context: positive(limit.context),
+		input: positive(limit.input), output: positive(limit.output),
+		tools: typeof model.tool_call === 'boolean' ? model.tool_call : undefined,
+		reasoning: typeof model.reasoning === 'boolean' ? model.reasoning : undefined };
+	const tiers = (cost.tiers || []).filter(t => t.tier && t.tier.type === 'context' && positive(t.tier.size) && price(t))
+		.map(t => ({ above: positive(t.tier.size), ...price(t) })).sort((a, b) => a.above - b.above);
+	if (!tiers.length && price(cost.context_over_200k)) tiers.push({ above: 200000, ...price(cost.context_over_200k) });
+	if (row.price && tiers.length) row.price.tiers = tiers;
+	return clean(row);
 }
-
-main().catch(err => {
-  console.error('Sync failed:', err);
-  process.exit(1);
-});
+function litellmRow(model) {
+	return clean({ source: 'litellm', price: price({ input: model.input_cost_per_token,
+		output: model.output_cost_per_token, cache_read: model.cache_read_input_token_cost,
+		cache_write: model.cache_creation_input_token_cost }, 1e6),
+		context: positive(model.max_input_tokens), output: positive(model.max_output_tokens),
+		tools: typeof model.supports_function_calling === 'boolean' ? model.supports_function_calling : undefined,
+		reasoning: typeof model.supports_reasoning === 'boolean' ? model.supports_reasoning : undefined });
+}
+function openrouterRow(model) {
+	const cost = model.pricing || {};
+	const decimal = value => typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : undefined;
+	return clean({ source: 'openrouter', price: price({ input: decimal(cost.prompt), output: decimal(cost.completion),
+		cache_read: decimal(cost.input_cache_read), cache_write: decimal(cost.input_cache_write) }, 1e6),
+		context: positive(model.context_length), output: positive((model.top_provider || {}).max_completion_tokens),
+		tools: Array.isArray(model.supported_parameters) ? model.supported_parameters.includes('tools') : undefined,
+		reasoning: Array.isArray(model.supported_parameters) ? model.supported_parameters.includes('reasoning') : undefined });
+}
+function normalize(raw, cliModels) {
+	if (!raw.modelsdev || !raw.litellm || !raw.openrouter || !Array.isArray(raw.openrouter.data)) throw Error('Incomplete catalog sources');
+	const providers = {};
+	for (const [provider, [modelsdevId, litellmId]] of Object.entries(PROVIDERS)) {
+		const catalog = raw.modelsdev[modelsdevId];
+		if (!catalog || !catalog.models || !Object.keys(catalog.models).length) throw Error('Missing models.dev provider: ' + modelsdevId);
+		const rows = providers[provider] = {};
+		for (const [key, model] of Object.entries(raw.litellm)) {
+			if (!litellmId || !model || model.litellm_provider !== litellmId || model.mode !== 'chat') continue;
+			const prefix = litellmId + '/';
+			const keyId = id(key.startsWith(prefix) ? key.slice(prefix.length) : key);
+			const row = litellmRow(model);
+			if (keyId && row.price) rows[keyId] = row;
+		}
+		for (const [key, model] of Object.entries(catalog.models)) {
+			if (model.modalities && Array.isArray(model.modalities.output) && !model.modalities.output.includes('text')) continue;
+			const keyId = id(key), row = modelsdevRow(model);
+			// Go uses subscription billing; token catalog rates alone do not establish
+			// an additional per-request charge. Keep its independently documented limits.
+			if (provider === 'opencode-go') delete row.price;
+			if (keyId && (row.price || row.context)) rows[keyId] = row;
+		}
+	}
+	providers.openrouter = {};
+	for (const model of raw.openrouter.data) {
+		const row = openrouterRow(model), keyId = id(model.id);
+		if (keyId && row.price) providers.openrouter[keyId] = row;
+	}
+	if (Object.keys(providers.openrouter).length < 100) throw Error('OpenRouter returned an incomplete model list');
+	if (cliModels !== undefined) {
+		if (!Array.isArray(cliModels) || !cliModels.length) throw Error('OpenCode catalog must be a nonempty array');
+		for (const model of cliModels) {
+			const keyId = id(model.modelID || model.id), costs = model.cost;
+			if (!keyId || !(keyId === 'big-pickle' || keyId.endsWith('-free') || keyId.endsWith(':free'))
+				|| !Array.isArray(costs) || !costs.length || costs.some(c => c.input !== 0 || c.output !== 0
+					|| !c.cache || c.cache.read !== 0 || c.cache.write !== 0)) throw Error('OpenCode snapshot contains a model without verified free rates');
+			const limit = model.limit || {};
+			if (!positive(limit.context) || !positive(limit.output)) throw Error('OpenCode model has no limits: ' + keyId);
+			providers.opencode[keyId] = clean({ source: 'opencode-cli', price: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				context: positive(limit.context), input: positive(limit.input), output: positive(limit.output),
+				tools: model.capabilities && model.capabilities.tools === true,
+				reasoning: providers.opencode[keyId] && providers.opencode[keyId].reasoning });
+		}
+	}
+	return providers;
+}
+function snapshotText(snapshot) {
+	const lines = ['{', '\t"schema": 1,', '\t"updated": ' + JSON.stringify(snapshot.updated) + ',',
+		'\t"sources": ' + JSON.stringify(snapshot.sources) + ',', '\t"providers": {'];
+	const providers = Object.keys(snapshot.providers).sort();
+	providers.forEach((provider, pi) => {
+		lines.push('\t\t' + JSON.stringify(provider) + ': {');
+		const rows = snapshot.providers[provider], keys = Object.keys(rows).sort();
+		keys.forEach((key, i) => lines.push('\t\t\t' + JSON.stringify(key) + ': ' + JSON.stringify(rows[key]) + (i + 1 < keys.length ? ',' : '')));
+		lines.push('\t\t}' + (pi + 1 < providers.length ? ',' : ''));
+	});
+	return lines.concat(['\t}', '}', '']).join('\n');
+}
+function lua(value) {
+	if (typeof value === 'string') {
+		if (/[\u0000-\u001f\u007f]/.test(value)) throw Error('Unexpected control character in model metadata');
+		return JSON.stringify(value);
+	}
+	if (typeof value === 'boolean' || typeof value === 'number') return String(value);
+	if (Array.isArray(value)) return '{ ' + value.map(lua).join(', ') + ' }';
+	return '{ ' + Object.keys(value).sort().map(key => '[' + lua(key) + '] = ' + lua(value[key])).join(', ') + ' }';
+}
+function render(snapshot) {
+	if (snapshot.schema !== 1 || !snapshot.updated || !snapshot.providers) throw Error('Unsupported model metadata snapshot');
+	const lines = ['-- Generated by tools/sync_pricing.js; edit the source snapshot, then regenerate.',
+		'-- Text-token USD rates per million; catalog snapshot ' + snapshot.updated + '.', 'return function(env)',
+		'\treturn {', '\t\tupdated = ' + lua(snapshot.updated) + ',', '\t\tproviders = {'];
+	for (const provider of Object.keys(snapshot.providers).sort()) {
+		lines.push('\t\t\t[' + lua(provider) + '] = {');
+		for (const key of Object.keys(snapshot.providers[provider]).sort()) lines.push('\t\t\t\t[' + lua(key) + '] = ' + lua(snapshot.providers[provider][key]) + ',');
+		lines.push('\t\t\t},');
+	}
+	return lines.concat(['\t\t},', '\t}', 'end', '']).join('\n');
+}
+async function fetchSource(url) {
+	const response = await fetch(url, { headers: { 'User-Agent': 'ProjectUAI-Metadata/3.2' }, signal: AbortSignal.timeout(30000) });
+	if (!response.ok) throw Error(url + ': HTTP ' + response.status);
+	const bytes = Buffer.from(await response.arrayBuffer());
+	return { data: JSON.parse(bytes.toString('utf8')), sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+}
+async function main(args) {
+	const flags = new Set(['--refresh', '--check']);
+	let cliPath, cliVersion;
+	for (let i = 0; i < args.length; i++) {
+		if (args[i] === '--opencode-catalog') cliPath = args[++i];
+		else if (args[i] === '--opencode-version') cliVersion = args[++i];
+		else if (!flags.has(args[i])) throw Error('Unknown argument: ' + args[i]);
+	}
+	if (args.includes('--refresh')) {
+		if (args.includes('--check')) throw Error('--refresh and --check are separate review steps');
+		if (Boolean(cliPath) !== Boolean(cliVersion)) throw Error('Supply both --opencode-catalog and --opencode-version');
+		const raw = {}, sources = {};
+		await Promise.all(Object.entries(SOURCES).map(async ([key, url]) => {
+			const source = await fetchSource(url); raw[key] = source.data; sources[key] = { url, sha256: source.sha256 };
+		}));
+		let cliModels;
+		if (cliPath) {
+			cliModels = JSON.parse(fs.readFileSync(cliPath, 'utf8'));
+			sources['opencode-cli'] = { url: 'https://opencode.ai', version: cliVersion,
+				description: 'Public plugin GET /api/model; only normalized free prices and limits retained' };
+		}
+		const snapshot = { schema: 1, updated: new Date().toISOString(), sources: Object.fromEntries(Object.keys(sources).sort().map(key => [key, sources[key]])),
+			providers: normalize(raw, cliModels) };
+		fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+		fs.writeFileSync(snapshotPath, snapshotText(snapshot));
+		console.log('Updated tools/data/model_metadata.json. Review it before generating Lua.');
+		return;
+	}
+	if (cliPath || cliVersion) throw Error('OpenCode catalog options require --refresh');
+	const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+	const output = render(snapshot);
+	if (args.includes('--check')) {
+		if (!fs.existsSync(outputPath) || fs.readFileSync(outputPath, 'utf8') !== output) throw Error('Model data is stale; run node tools/sync_pricing.js after reviewing the snapshot');
+		console.log('Model metadata matches its reviewed snapshot.');
+	} else {
+		fs.writeFileSync(outputPath, output);
+		console.log('Generated src/provider/model_data.lua (' + Object.values(snapshot.providers).reduce((n, p) => n + Object.keys(p).length, 0) + ' provider/model entries).');
+	}
+}
+module.exports = { normalize, render, snapshotText };
+if (require.main === module) main(process.argv.slice(2)).catch(error => { console.error(error.message); process.exitCode = 1; });

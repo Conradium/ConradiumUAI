@@ -3,11 +3,12 @@
 -- Providers report usage inconsistently -- some only in a streamed final chunk,
 -- some not at all -- so counts are taken from the response when present and
 -- estimated when not, and an estimated figure is always labelled as one. Prices
--- are a convenience, not an invoice: they are per million tokens, they date from
--- when this was written, and the panel says so.
+-- are a convenience, not an invoice: the reviewed catalog uses per-million
+-- text-token rates; provider-specific surcharges and discounts may differ.
 return function(env)
 	local util = env.require("runtime/util")
 	local signal = env.require("runtime/signal")
+	local pricing = env.require("agent/pricing")
 
 	local M = {
 		session = { prompt = 0, completion = 0, total = 0, cost = 0, requests = 0, estimated = false },
@@ -20,51 +21,8 @@ return function(env)
 		recorded = signal.new("usage:recorded"),
 	}
 
-	-- input, output per million tokens. Matched longest-prefix, so a dated model
-	-- id still resolves.
-	--
-	-- The current Claude generations are listed individually because the family
-	-- names no longer predict the price: an Opus has cost $5/$25 since 4.6, a third
-	-- of what the 4.5-and-earlier line did, and reporting the old number made every
-	-- turn in this client look three times more expensive than it was.
-	local PRICES = {
-		["gpt-4o-mini"] = { 0.15, 0.60 },
-		["gpt-4o"] = { 2.50, 10.00 },
-		["gpt-4.1-mini"] = { 0.40, 1.60 },
-		["gpt-4.1"] = { 2.00, 8.00 },
-		["o4-mini"] = { 1.10, 4.40 },
-		["claude-haiku"] = { 1.00, 5.00 },
-		["claude-sonnet"] = { 3.00, 15.00 },
-		["claude-sonnet-5"] = { 2.00, 10.00 },
-		["claude-opus"] = { 15.00, 75.00 },
-		["claude-opus-4-6"] = { 5.00, 25.00 },
-		["claude-opus-4-7"] = { 5.00, 25.00 },
-		["claude-opus-4-8"] = { 5.00, 25.00 },
-		["claude-opus-5"] = { 5.00, 25.00 },
-		-- Covers the .1 revisions too: the id is a superstring of this prefix.
-		["claude-fable-5"] = { 10.00, 50.00 },
-		["claude-mythos-5"] = { 10.00, 50.00 },
-		["deepseek-reasoner"] = { 0.55, 2.19 },
-		["deepseek-chat"] = { 0.27, 1.10 },
-		["llama-3.3-70b"] = { 0.59, 0.79 },
-		["llama-3.1-8b"] = { 0.05, 0.08 },
-		["mistral-large"] = { 2.00, 6.00 },
-		["mistral-small"] = { 0.20, 0.60 },
-		["grok-4"] = { 3.00, 15.00 },
-		["grok-3-mini"] = { 0.30, 0.50 },
-		["qwen"] = { 0.40, 0.80 },
-		["gemini-2.5-flash"] = { 0.30, 2.50 },
-	}
-
-	function M.priceFor(model, record) local ok, pricing = pcall(env.require, "agent/pricing"); if ok and pricing and pricing.priceFor then local price = pricing.priceFor(model, record); if price then return price end end
-		local id = tostring(model or ""):lower()
-		local best, bestLength = nil, 0
-		for prefix, price in pairs(PRICES) do
-			if id:find(prefix, 1, true) and #prefix > bestLength then
-				best, bestLength = price, #prefix
-			end
-		end
-		return best
+	function M.priceFor(model, record, promptTokens)
+		return pricing.priceFor(model, record, promptTokens)
 	end
 
 	-- A byte-based heuristic, not a tokenizer. Code and Unicode vary by model;
@@ -109,9 +67,9 @@ return function(env)
 	-- so a provider that reports nothing still moves the counters.
 	function M.record(usage, model, fallback, record)
 		local prompt, completion, estimated
-		if type(usage) == "table" and (usage.prompt_tokens or usage.completion_tokens) then
-			prompt = tonumber(usage.prompt_tokens) or 0
-			completion = tonumber(usage.completion_tokens) or 0
+		if type(usage) == "table" and (usage.prompt_tokens or usage.completion_tokens or usage.input_tokens or usage.output_tokens) then
+			prompt = tonumber(usage.prompt_tokens or usage.input_tokens) or 0
+			completion = tonumber(usage.completion_tokens or usage.output_tokens) or 0
 			estimated = false
 		else
 			prompt = (fallback and fallback.prompt) or 0
@@ -119,11 +77,14 @@ return function(env)
 			estimated = true
 		end
 
-		local price = M.priceFor(model, record)
-		local cost = 0
-		if price then
-			cost = (prompt / 1000000) * price[1] + (completion / 1000000) * price[2]
-		end
+		local cached = tonumber(util.get(usage or {}, "prompt_tokens_details.cached_tokens",
+			util.get(usage or {}, "input_tokens_details.cached_tokens", 0))) or 0
+		local created = tonumber(util.get(usage or {}, "cache_creation_input_tokens",
+			util.get(usage or {}, "prompt_tokens_details.cache_creation_tokens", 0))) or 0
+		local reasoning = tonumber(util.get(usage or {}, "completion_tokens_details.reasoning_tokens",
+			util.get(usage or {}, "output_tokens_details.reasoning_tokens", 0))) or 0
+		local pricedCost = pricing.costFor(model, record, prompt, completion, cached, created)
+		local cost = pricedCost or 0
 
 		if not (fallback and fallback.background) then
 			M.turn.prompt = M.turn.prompt + prompt
@@ -137,25 +98,25 @@ return function(env)
 		M.session.total = M.session.prompt + M.session.completion
 		M.session.cost = M.session.cost + cost
 		M.session.requests = M.session.requests + 1
+		if pricedCost == nil then M.session.unpriced = (M.session.unpriced or 0) + 1 end
 		if estimated then M.session.estimated = true end
 
-		local cached = util.get(usage or {}, "prompt_tokens_details.cached_tokens", 0)
-		local reasoning = util.get(usage or {}, "completion_tokens_details.reasoning_tokens", 0)
-		M.session.cached = (M.session.cached or 0) + (tonumber(cached) or 0)
-		M.session.reasoning = (M.session.reasoning or 0) + (tonumber(reasoning) or 0)
+		M.session.cached = (M.session.cached or 0) + cached
+		M.session.reasoning = (M.session.reasoning or 0) + reasoning
 
 		local delta = {
 			model = model,
 			prompt = prompt,
 			completion = completion,
 			cost = cost,
+			costKnown = pricedCost ~= nil,
 			estimated = estimated,
 			cached = tonumber(cached) or 0,
 			reasoning = tonumber(reasoning) or 0,
 		}
 		M.recorded:fire(delta)
 		M.changed:fire(M.session, M.turn)
-		return { prompt = prompt, completion = completion, cost = cost, estimated = estimated }
+		return { prompt = prompt, completion = completion, cost = cost, costKnown = pricedCost ~= nil, estimated = estimated }
 	end
 
 	function M.reset()
@@ -177,7 +138,8 @@ return function(env)
 			util.formatNumber(M.session.completion) .. " out",
 		}
 		local cost = M.formatCost(M.session.cost)
-		if cost ~= "" then parts[#parts + 1] = cost .. (M.session.estimated and " est." or "") end
+		if cost ~= "" then parts[#parts + 1] = cost .. " est." end
+		if (M.session.unpriced or 0) > 0 then parts[#parts + 1] = "some costs unknown" end
 		return table.concat(parts, "  ")
 	end
 

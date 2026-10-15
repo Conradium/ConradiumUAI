@@ -19,7 +19,7 @@ end
 
 local hostContext = ...
 
-local VERSION = "3.1.0"
+local VERSION = "3.2.0"
 local FOLDER = "UAI"
 local BUILD = type(__UAI_BUILD) == "string" and __UAI_BUILD or VERSION
 
@@ -273,6 +273,7 @@ local function start()
 	-- headers they were created with, so the repository move has to be carried into
 	-- existing installs here rather than only into records created from now on.
 	env.require("provider/registry").migrate()
+	env.require("provider/free").start()
 
 	-- The workspace migration, before anything that reads files/: the file tools,
 	-- the paste fallbacks, the attach menu. For a returning user with older files

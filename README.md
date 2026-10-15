@@ -4,17 +4,29 @@ A universal AI agent that runs inside a Roblox client. It works in any game,
 with Chat Completions and Anthropic Messages endpoints, including compatible
 local servers and relays.
 
-**Version 3.1.0 — October 14, 2026: Bridge improvements.** Cowork gets a complete
-visual redesign, rebuilt dialogs, automatic bridge updates, and automatic Web
-runtime on connection with Game runtime on disconnect. Bridged model requests
-wait without a configurable time limit. The Roblox mobile sidebar uses smaller
-navigation text. Mobile relay discovery
-stays quiet during routine checks, and the OpenCode Responses path works through
-the bridge. The redesigned Windows app is a single executable that detects or
-downloads Node.js and fetches its own GitHub release updates. Deadline errors
-link to Discord help.
-Client animations are always enabled. UI LIB remains 1.3.0 and the
-embedding SDK 1.0.0.
+**Version 3.2.0 — October 15, 2026: Project UAI Free and OpenCode desktop.**
+Start chatting with **Project UAI Free** without supplying an API key. It is the
+default when no provider is configured and uses HCNSEC's shared `auto` router.
+Thank you for continuing to use and support Project UAI. Capacity and response
+speed vary; more free providers may become available soon. Join
+[our Discord](https://discord.gg/9xYyyYuKap) for help, provider news and updates.
+
+OpenCode's direct desktop workaround uses the verified desktop identity and keeps
+its required compatibility tool declarations, without requiring the bridge. The Windows
+bridge adds an optional path through an installed OpenCode CLI server; the CLI
+binary is not packaged. **OpenCode free models are unsupported on mobile**, including
+the Android companion. The retired OpenCode proxy is removed; only AgentRouter
+uses the proxy's proper domain. Saved OpenCode proxy URLs migrate back to Zen.
+
+Go subscribers choose the separate **OpenCode Go** preset at
+`https://opencode.ai/inference/go/v1` and a key from their subscribed OpenCode
+workspace. Go keeps its own catalog and routes; the optional free CLI backend
+does not intercept it. Subscription and workspace region refusals identify the
+setting to check. See [provider setup](docs/PROVIDER_COMPATIBILITY.md).
+
+Client, bridge and desktop are 3.2.0; UI LIB remains 1.3.0 and SDK 1.0.0.
+Model pricing and context/reply limits use a refreshed provider-specific catalog;
+included Project UAI Free access is counted at zero cost.
 See the [release notes](CHANGELOG.md), [script development manual](docs/SCRIPT_DEVELOPMENT.md)
 and [UI library guide](docs/UI_LIBRARY.md). The client exposes the scripting
 manual through `scripting_docs`: start with `quickstart`, then read only the
@@ -27,7 +39,7 @@ it. The model modal edits the same global effort setting, including for other
 models when **Options → Reasoning support** is enabled. The Thinking row estimates
 visible text only. A long retained trace is labelled
 **Excerpt**, not a 5,999-token model limit. See [provider behavior](docs/PROVIDER_COMPATIBILITY.md).
-Use the [3.1.0 verification record](docs/TESTING_3.1.0.md) for focused bridge checks
+Use the [3.2.0 verification record](docs/TESTING_3.2.0.md) for focused bridge checks
 and native follow-up. The earlier [3.0.0 audit ledger](docs/AUDIT_3.0.0.md) retains
 its module and tool coverage.
 
@@ -121,10 +133,10 @@ that speaks `/v1/chat/completions` -- a relay, a self-hosted vLLM, Ollama on
 localhost. Model lists are never guessed: they come from `GET /v1/models` or from
 you typing one in.
 
-For the shared HCNSEC key, open **Providers → Add → HCNSEC → Use free key**,
-fetch the current models or enter a model ID, then save. Your other providers and
-personal keys stay as configured. OpenCode and AgentRouter automatically recover
-from explicit unauthorized-client errors using the
+**Project UAI Free** is ready when no provider is configured. Choose
+**Use Project UAI Free** in Providers to add it later; existing providers and
+personal keys stay as configured. AgentRouter can recover from explicit
+unauthorized-client errors using the
 [Project UAI proxy](docs/PROVIDER_COMPATIBILITY.md#automatic-unauthorized-client-recovery).
 The proxy receives the provider key and request and has a shared limit of 90,000
 requests per day; the resulting Base URL remains editable.
@@ -656,7 +668,7 @@ first two entirely.
 
 Cowork gives your Roblox conversation more room in the browser. Keep Roblox and
 its local bridge running on the same computer. The [Windows desktop launcher](desktop/README.md)
-is a single **UAI-Bridge-3.1.0-win-x64.exe** download. Open it directly,
+is a single **UAI-Bridge-3.2.0-win-x64.exe** download. Open it directly,
 complete Node setup if needed using **Download Node.js** or an existing
 installation, click **Start Cowork**, and load the updated UAI script. It discovers the app on dedicated port
 **28791** and reconnects automatically after app restarts. The executable includes
@@ -693,7 +705,7 @@ Stop cancels the original request without submitting it again.
 Bridge releases download automatically from GitHub and apply when work is idle.
 The desktop app also downloads its own updates and applies them on restart.
 Both verify package hashes and keep a working fallback. Existing desktop 1.0
-users need one manual download of the 3.1.0 executable to gain the updater.
+users need one manual download of the 3.2.0 executable to gain the updater.
 
 The browser includes conversations, provider/model controls, code attachments,
 permissions, tool forms, subagents, chat loops, memory, logs, exports and settings.

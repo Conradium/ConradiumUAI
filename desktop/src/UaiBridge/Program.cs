@@ -17,7 +17,11 @@ internal static class Program
         if (helper >= 0 && helper + 1 < args.Length)
             return DesktopUpdater.RunHelperAsync(args[helper + 1]).GetAwaiter().GetResult();
         bool offline = args.Any(argument => argument is "--smoke-test" or "--render-preview" or "--self-test");
-        if (offline) Environment.SetEnvironmentVariable("UAI_BRIDGE_TEST_NO_UPDATES", "1");
+        if (offline)
+        {
+            Environment.SetEnvironmentVariable("UAI_BRIDGE_TEST_NO_UPDATES", "1");
+            Environment.SetEnvironmentVariable("UAI_OPENCODE_DISABLED", "1");
+        }
         if (args.Length == 2 && args[0] == "--self-test")
             return DesktopSelfTest.RunAsync(args[1]).GetAwaiter().GetResult();
         if (args.Length == 2 && args[0] == "--smoke-test")

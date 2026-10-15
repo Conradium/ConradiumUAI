@@ -19,7 +19,18 @@ internal sealed class BridgeProcess : IAsyncDisposable
     public string State { get; private set; } = "Stopped";
     public string Detail { get; private set; } = "Ready when you are.";
     public string UpdateState { get; private set; } = "current";
-    public string BridgeVersion { get; private set; } = "3.1.0";
+    public string BridgeVersion { get; private set; } = "3.2.0";
+    public string OpenCodeState { get; private set; } = "stopped";
+    public string OpenCodeDetail => OpenCodeState switch
+    {
+        "ready" => "OpenCode free models are ready through your installed CLI.",
+        "starting" => "Starting your installed OpenCode CLI...",
+        "missing" => "For the native route, install OpenCode Desktop and restart Cowork.",
+        "failed" => "OpenCode could not start. Update OpenCode Desktop, then restart Cowork.",
+        _ => "OpenCode Desktop is optional. Cowork detects its installed CLI when started."
+    };
+    public const string Discord = "https://discord.gg/9xYyyYuKap";
+    private static string Help(string text) => text.Contains(Discord, StringComparison.Ordinal) ? text : text + " Help: " + Discord;
     public string? AvailableVersion { get; private set; }
     public string? UpdateError { get; private set; }
     public string? BrowserUrl => token is { } secret ? Origin + "/#t=" + secret : null;
@@ -89,7 +100,7 @@ internal sealed class BridgeProcess : IAsyncDisposable
             string detail = error is TimeoutException
                 ? "The bridge took too long to start. Try again or download a fresh copy of the app."
                 : error.Message;
-            SetState("Could not start", detail);
+            SetState("Could not start", Help(detail));
             throw new IOException(detail);
         }
         finally { gate.Release(); }
@@ -145,6 +156,8 @@ internal sealed class BridgeProcess : IAsyncDisposable
             using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             bool connected = doc.RootElement.GetProperty("connected").GetBoolean();
             if (secret != token || stopping) return;
+            if (doc.RootElement.TryGetProperty("capabilities", out var capabilities) && capabilities.TryGetProperty("opencode", out var openCode))
+                OpenCodeState = openCode.TryGetProperty("state", out var backendState) ? backendState.GetString() ?? "missing" : "missing";
             if (doc.RootElement.TryGetProperty("update", out var update))
             {
                 UpdateState = update.TryGetProperty("state", out var s) ? s.GetString() ?? "current" : "current";
@@ -179,6 +192,7 @@ internal sealed class BridgeProcess : IAsyncDisposable
     {
         stopping = true;
         token = null;
+        OpenCodeState = "stopped";
         var process = child;
         try
         {

@@ -16,6 +16,8 @@ const MANIFEST_NAME = 'bridge-release.json';
 const PACKAGE_NAME = 'uai-bridge-package.json';
 const MAX_PACKAGE = 32 * 1024 * 1024;
 const MAX_FILES_BYTES = 20 * 1024 * 1024;
+// Keep the published root inventory compatible with the 3.1 updater. The
+// release builder embeds new helper modules into these existing entry files.
 const ROOT_FILES = ['server.js', 'inference.js', 'picture-store.js', 'launcher.js', 'release.js', 'updater.js', 'supervisor.js'];
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const json = value => Buffer.from(JSON.stringify(value) + '\n');

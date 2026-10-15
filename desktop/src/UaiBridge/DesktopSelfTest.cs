@@ -49,18 +49,18 @@ internal static class DesktopSelfTest
             string cache = Path.Combine(root, "cache");
             var updater = new DesktopUpdater(original, cacheDirectory: cache);
             byte[] binary = Encoding.UTF8.GetBytes("MZ synthetic release: never execute");
-            byte[] manifest = Manifest("3.2.0", binary);
+            byte[] manifest = Manifest("3.3.0", binary);
             string key = updater.Stage(manifest, binary);
             var staged = updater.Verify(key);
-            Check("Verified single executable stages in a private version cache", staged.Version == "3.2.0" && File.ReadAllBytes(staged.Entry).SequenceEqual(binary));
+            Check("Verified single executable stages in a private version cache", staged.Version == "3.3.0" && File.ReadAllBytes(staged.Entry).SequenceEqual(binary));
             Check("Staging preserves the exact original download", File.ReadAllText(originalFile) == "original app stays intact" && Directory.GetFiles(original).Length == 1);
             Reject("A tampered executable never stages", () => updater.Stage(manifest, Encoding.UTF8.GetBytes("different")));
-            Reject("Manifest cannot select another asset path", () => updater.Stage(Manifest("3.2.0", binary, "../app.exe"), binary));
-            Reject("Preview version metadata is not accepted", () => DesktopUpdater.ParseManifest(Manifest("3.2.0-rc.1", binary)));
+            Reject("Manifest cannot select another asset path", () => updater.Stage(Manifest("3.3.0", binary, "../app.exe"), binary));
+            Reject("Preview version metadata is not accepted", () => DesktopUpdater.ParseManifest(Manifest("3.3.0-rc.1", binary)));
             Reject("Invalid cache keys never resolve outside the cache", () => updater.Verify("../../original/My Cowork.exe"));
             File.WriteAllText(staged.Entry, "corrupted");
             Reject("Cached executable is checked again before launch", () => updater.Verify(key));
-            Check("A fresh verified download repairs corrupt cached bytes", updater.Stage(manifest, binary) == key && updater.Verify(key).Version == "3.2.0");
+            Check("A fresh verified download repairs corrupt cached bytes", updater.Stage(manifest, binary) == key && updater.Verify(key).Version == "3.3.0");
             string extra = Path.Combine(Path.GetDirectoryName(staged.Entry)!, "unexpected.dll"); File.WriteAllText(extra, "unlisted");
             Reject("Unlisted cached DLLs cannot affect an app launch", () => updater.Verify(key)); File.Delete(extra);
 
@@ -75,25 +75,25 @@ internal static class DesktopSelfTest
             Check("Ready app activates atomically and consumes its pending marker", accepted && File.Exists(Path.Combine(cache, "active.json")) && !File.Exists(Path.Combine(cache, "pending.json")) && rollbacks == 1);
             string activeBefore = File.ReadAllText(Path.Combine(cache, "active.json"));
             byte[] later = Encoding.UTF8.GetBytes("MZ next synthetic release");
-            string next = updater.Stage(Manifest("3.3.0", later), later);
+            string next = updater.Stage(Manifest("3.4.0", later), later);
             bool rollback = await updater.CompleteRestartAsync(next, _ => throw new IOException("simulated launch failure"), () => rollbacks++);
             Check("A failed newer app keeps the previous active release", !rollback && rollbacks == 2 && File.ReadAllText(Path.Combine(cache, "active.json")) == activeBefore);
             bool tamperedDuringLaunch = await updater.CompleteRestartAsync(next, candidate => { File.WriteAllText(candidate.Entry, "changed after start"); return Task.FromResult(true); }, () => rollbacks++);
             Check("Hash changes during readiness cannot activate", !tamperedDuringLaunch && rollbacks == 3 && File.ReadAllText(Path.Combine(cache, "active.json")) == activeBefore);
 
-            using var releaseList = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(new[] { Release("3.2.0"), Release("9.0.0", true), Release("4.0.0", false, true) }));
-            Check("Selection accepts only stable official executable assets", DesktopUpdater.SelectRelease(releaseList.RootElement, "3.1.0")?.Version == "3.2.0");
+            using var releaseList = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(new[] { Release("3.3.0"), Release("9.0.0", true), Release("4.0.0", false, true) }));
+            Check("Selection accepts only stable official executable assets", DesktopUpdater.SelectRelease(releaseList.RootElement, "3.2.0")?.Version == "3.3.0");
             int downloads = 0;
-            byte[] releases = JsonSerializer.SerializeToUtf8Bytes(new[] { Release("3.2.0") });
+            byte[] releases = JsonSerializer.SerializeToUtf8Bytes(new[] { Release("3.3.0") });
             var downloaded = new DesktopUpdater(original, (uri, limit, node, token) =>
             {
                 downloads++;
                 return Task.FromResult(uri.Host == "api.github.com" ? releases : uri.AbsolutePath.EndsWith("desktop-release.json", StringComparison.Ordinal) ? manifest : binary);
             }, Path.Combine(root, "downloaded"));
             await downloaded.CheckAsync();
-            Check("Offline release check downloads and stages without launching", downloads == 3 && downloaded.ReadyToRestart && downloaded.AvailableVersion == "3.2.0");
+            Check("Offline release check downloads and stages without launching", downloads == 3 && downloaded.ReadyToRestart && downloaded.AvailableVersion == "3.3.0");
             var reopened = new DesktopUpdater(original, cacheDirectory: Path.Combine(root, "downloaded"));
-            Check("Pending update survives a fresh app instance", reopened.ReadyToRestart && reopened.AvailableVersion == "3.2.0");
+            Check("Pending update survives a fresh app instance", reopened.ReadyToRestart && reopened.AvailableVersion == "3.3.0");
             Check("Installation cache identity ignores trailing separator and casing", DesktopUpdater.CacheFor(original) == DesktopUpdater.CacheFor(original.ToUpperInvariant() + Path.DirectorySeparatorChar));
             await File.WriteAllTextAsync(output, JsonSerializer.Serialize(new { ok = true, checks }, new JsonSerializerOptions { WriteIndented = true }));
             return 0;

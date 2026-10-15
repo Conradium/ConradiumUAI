@@ -196,6 +196,11 @@ return function(env)
 		function session.emit(kind, payload)
 			if session.removed or not alive then return end
 			payload = util.copy(payload or {})
+			if kind == "error" then payload.message = env.require("runtime/support").error(payload.message) end
+			if kind == "tool:error" or kind == "tool:result" and payload.ok == false then
+				payload.text = env.require("runtime/support").error(payload.text or payload.error)
+			end
+			if kind == "request:done" and payload.error then payload.error = env.require("runtime/support").error(payload.error) end
 			payload.kind = kind
 			payload.at = clock.ms()
 			session.updatedAt = payload.at

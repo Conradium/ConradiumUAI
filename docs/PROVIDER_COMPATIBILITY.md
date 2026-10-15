@@ -1,6 +1,6 @@
 # Provider compatibility and WebSockets
 
-Applies to **3.1.0**, October 14, 2026.
+Applies to **3.2.0**, October 15, 2026.
 
 UAI implements **Chat Completions** and **Anthropic Messages**, plus a dedicated
 **Responses** path for supported OpenCode models. Local servers and other custom
@@ -44,6 +44,28 @@ Stream failures preserve the provider's error code and message when supplied,
 including plain-text `event: error` responses. Details are redacted and bounded.
 An error after partial text still fails the request; it cannot cause a duplicate
 socket/HTTP dispatch or execute a partially delivered tool call.
+
+## Model prices and limits
+
+The October 15, 2026 catalog contains provider-specific text-token prices and
+context/reply limits. Models.dev supplies the main catalog, LiteLLM fills exact
+provider gaps, OpenRouter supplies its own route prices, and the installed
+OpenCode CLI supplies verified free-model limits. Metadata enriches discovered
+or manually entered models; it does not offer models the endpoint has not listed.
+
+Prices are estimates in USD per million text tokens. Documented cache rates and
+long-context tiers apply to usage estimates. Special service tiers, request fees,
+image/audio charges, taxes and account discounts are outside these estimates.
+Unknown endpoint prices remain unknown, and a free route never sets the price of
+its paid counterpart. Included Project UAI Free access is zero cost; a personal
+HCNSEC key does not establish a known price.
+
+Maintainers refresh with `node tools/sync_pricing.js --refresh`, review
+`tools/data/model_metadata.json`, then generate with `node tools/sync_pricing.js`.
+The refresh may include a sanitized CLI catalog using `--opencode-catalog <file>`
+and `--opencode-version <version>`. Inspect `src/provider/model_data.lua` before
+verification; `node tools/sync_pricing.js --check` checks freshness offline.
+Rebuild the client after any catalog change.
 
 ## Image input
 
@@ -100,11 +122,12 @@ the key cannot list models, manual ids remain usable.
 
 | Preset | Base path / host | Protocol | Default auth |
 | --- | --- | --- | --- |
-| HCNSEC | `api.hcnsec.cn/v1` | Chat Completions | Bearer |
+| Project UAI Free (HCNSEC) | `api.hcnsec.cn/v1` | Chat Completions | Bearer |
 | AgentRouter | `agentrouter.org/v1` | Messages | x-api-key |
 | OpenAI | `api.openai.com/v1` | Chat Completions | Bearer |
 | OpenRouter | `openrouter.ai/api/v1` | Chat Completions | Bearer |
 | OpenCode Zen | `opencode.ai/zen/v1` | Chat Completions; dedicated Responses lane when required | Bearer |
+| OpenCode Go | `opencode.ai/inference/go/v1` | Model-specific Chat, Responses or Messages; native Gemini unsupported | Bearer |
 | Azure AI Foundry | `<resource>.openai.azure.com/openai/v1` | Chat Completions | api-key |
 | Anthropic Messages | `api.anthropic.com/v1` | Messages | x-api-key |
 | Anthropic OpenAI compatibility | `api.anthropic.com/v1` | Chat Completions | x-api-key |
@@ -125,34 +148,83 @@ does not remove. Discovery is not authorization to use every listed model.
 
 ## Connection and response behavior
 
-### OpenCode protocol compatibility
+### Project UAI Free
 
-The four October 13 OpenCode fixes remain in 3.1.0: timestamp-based session
-identity with legacy-session migration, connection tests with the current
-conversation identity, the required tool declarations and 128-tool ceiling, and
-the model-specific Chat/Responses selection. The dedicated Responses lane is
-used for `muse-spark` models and remembered successful protocol recovery.
+New users and configurations with no provider start with **Project UAI Free**,
+using included public HCNSEC access and its verified `auto` router. No personal API
+key or model entry is required. Existing providers and private credentials stay
+intact. Choose **Use Project UAI Free** to add it later. Thank you for your continued
+use and support of Project UAI; more free providers may become available soon.
+Shared capacity changes, so requests may be fast, slow, rate limited or unavailable.
+Help, availability updates and community news: https://discord.gg/9xYyyYuKap.
 
-Responses requests use the same transport decision as ordinary chat, including
-the Cowork bridge and companion. The bridge projects text, reasoning and tool
-events, recognizes Responses completion, and treats failed or incomplete streams
-as errors. Protocol recovery retains the original selected key. Direct and
-companion requests retain their remaining deadline; Cowork requests have no
-overall duration limit. A lost status poll cannot cause another provider dispatch.
+### OpenCode desktop and mobile
 
-These are compatibility behaviors covered with synthetic providers. The
-historical [OpenCode investigation](../REPORT_OPENCODE_ZEN_LOCKOUT_SOLVED.md)
-records the earlier live observations; upstream availability can change.
+The direct desktop workaround uses the live-verified desktop User-Agent/client
+identity, timestamp-based session headers and wildcard Accept header, without a
+bridge. Required compatibility tool declarations and the Chat/Responses fallback
+are retained. Explicit custom headers stay effective. A free-tier refusal on desktop
+can still try Responses once. An
+explicit protocol refusal also retains that fallback. Required declarations remain
+present on direct and older bridge routes.
+
+The desktop bridge adds an optional installed OpenCode CLI server path for its
+verified free-model catalog. Install OpenCode separately; Project UAI does not
+package its binary. See [desktop setup](../desktop/README.md) and
+[live model verification](OPENCODE_3.2_VALIDATION.md). The bridge owns authenticated
+loopback access, temporary sessions and tool handoff to Roblox. CLI model discovery
+uses its authenticated bridge capability; without that capability normal direct
+model discovery remains available. Missing CLI and models outside its public catalog
+retain the existing direct HTTP route.
+
+**OpenCode free models are unsupported on mobile**, including the Android companion.
+Select Project UAI Free or another mobile-compatible provider. A mobile free-tier
+refusal does not retry Responses or a proxy. Share errors and get updates in
+[Discord](https://discord.gg/9xYyyYuKap).
+
+The OpenCode proxy is retired. Saved or entered old proxy URLs migrate to the
+official Zen URL. Historical successful direct requests are observations for their
+host and date, not a guarantee that every executor or future upstream version works.
+
+### OpenCode Go subscriptions
+
+Choose **OpenCode Go** and use a key from the subscribed OpenCode workspace. Its
+canonical base is `https://opencode.ai/inference/go/v1`; the legacy
+`https://opencode.ai/zen/go/v1` alias retains Go routing. An old ambiguous proxy
+record still migrates to Zen, so select Go explicitly. Go uses its own model list
+and remains a keyed upstream request even when the desktop free CLI backend is ready.
+The mobile free-model restriction does not apply to paid Go; native mobile Go
+behavior has not been verified.
+
+| Go model family | API route |
+| --- | --- |
+| DeepSeek | `/chat/completions` |
+| GPT, Grok, Muse | `/responses` |
+| Claude, Minimax, Qwen | `/messages` |
+| Gemini | Native API not implemented; select another model |
+
+The supported families route automatically without changing the saved API choice.
+Requests retain the Go base, selected key, query parameters, identifiable
+`ProjectUAI/<version>` User-Agent and stable `x-opencode-session`; custom headers
+remain explicit overrides. The separate metadata catalog supplies known limits;
+Go subscription cost is not inferred from Zen token prices.
+
+A successful public `/models` fetch does not validate the key or subscription.
+An **active Go subscription required** refusal means OpenCode rejected subscription
+access for that request: check the key's workspace and its subscription, and contact
+OpenCode support if already active. A **Global regions required** refusal identifies
+the workspace Privacy setting required by that model; review that choice in OpenCode.
+A retired-proxy **410** says nothing about Go subscription validity. Actual live
+results and their limits are in [OpenCode validation](OPENCODE_3.2_VALIDATION.md).
 
 ### Automatic unauthorized-client recovery
 
-When an official OpenCode Zen or AgentRouter endpoint explicitly returns an
+When an official AgentRouter endpoint explicitly returns an
 **unauthorized client** error, UAI switches its Base URL and retries through the
-Project UAI proxy:
+Project UAI proxy on its proper domain (no Workers.dev fallback):
 
 | Provider | Recovery Base URL |
 | --- | --- |
-| OpenCode Zen | `https://puai-proxy.davidzk.tech/opencode/v1` |
 | AgentRouter | `https://puai-proxy.davidzk.tech/agentrouter/v1` |
 
 The proxy receives the same provider key, request and model. The selected protocol,
@@ -161,7 +233,7 @@ identity headers. A live provider's new Base URL is saved and remains editable i
 Providers. A connection test or model fetch in an unsaved editor changes only that
 draft until it is saved. The retry status identifies the switch.
 
-These paths share the proxy operator's stated **90,000 requests per day** limit;
+This route shares the proxy operator's stated **90,000 requests per day** limit;
 availability depends on the proxy and its upstream provider. The proxy does not
 change account permissions, model access or provider billing. Invalid keys,
 ordinary 401/403 responses, free-tier/account restrictions, HTML challenges and
@@ -169,8 +241,8 @@ transport failures do not trigger this recovery. Only explicit structured error
 fields or a short plain-text client refusal qualify; successful content and stream
 errors cannot redirect a request.
 
-Automatic switching is limited to OpenCode's official `/zen/v1` route and
-AgentRouter's official `/v1` route, including full inference URLs. Custom hosts,
+Automatic proxy switching is limited to AgentRouter's official `/v1` route,
+including full inference URLs. Custom hosts,
 custom paths and nonstandard ports remain unchanged. An operation switches at
 most once, and proxy retries share the HTTP deadline and cancellation state.
 In-flight edits, removed providers and stale model fetches cannot overwrite a new

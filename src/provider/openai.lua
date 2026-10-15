@@ -243,7 +243,8 @@ return function(env)
 			end
 		end
 
-		-- OpenCode free-tier workaround: Console requires stream and standard tool declarations
+		-- Keep compatibility declarations for desktop direct and older bridges.
+		-- The native CLI adapter supplies real schemas and removes these placeholders.
 		if registry.isOpencode(record) then
 			body.stream = true
 			body.stream_options = { include_usage = true }
@@ -312,6 +313,7 @@ return function(env)
 		[402] = "the account is out of credit",
 		[403] = "the provider refused the request -- the key may lack access to it",
 		[404] = "endpoint or model not found -- check the base URL and model name",
+		[410] = "the endpoint has been retired",
 		[413] = "the request was too large",
 		[422] = "the provider could not process the request",
 		[429] = "rate limited",
@@ -348,7 +350,7 @@ return function(env)
 		return #bits > 0 and table.concat(bits, ", ") or "an edge in front of the API"
 	end
 
-	function M.errorText(res, err)
+	local function errorText(res, err)
 		if err and not res then return tostring(err) end
 		local status = res and res.status or 0
 		-- Checked before the status table, because the status is the least informative
@@ -366,11 +368,14 @@ return function(env)
 		local message
 		if type(decoded) == "table" then
 			if type(decoded.error) == "table" then
-				local errType = tostring(decoded.error.type or "")
+				local errType = tostring(decoded.error.type or decoded.error.name or decoded.error.code or "")
 				local errMsg = tostring(decoded.error.message or "")
-				if errType == "FreeTierError" or errMsg:find("free tier can only be used from within OpenCode", 1, true) then
+				if env.require("runtime/support").opencodeProblem(errMsg) then
+					message = errMsg
+				elseif tostring(decoded.error.type):lower() == "freetiererror" or tostring(decoded.error.name):lower() == "freetiererror"
+					or tostring(decoded.error.code):lower() == "freetiererror" or errMsg:lower():find("can only be used from within opencode", 1, true) then
 					message = (errMsg ~= "" and errMsg or "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode")
-						.. " -- the OpenCode server restricts free-tier models (like big-pickle) to its official app; use paid credits or an OpenCode Go subscription."
+						.. " -- " .. env.require("runtime/support").opencode()
 				elseif errType == "ModelProtocolUnsupported" or errMsg:find("does not support this protocol", 1, true) then
 					message = (errMsg ~= "" and errMsg or "Model does not support this protocol")
 						.. " -- the model does not answer on this route"
@@ -407,6 +412,9 @@ return function(env)
 			end
 		end
 		local prefix = STATUS_TEXT[status]
+		local problem = env.require("runtime/support").opencodeProblem(message)
+		if problem == "subscription" then prefix = "OpenCode Go subscription access was refused"
+		elseif problem == "region" then prefix = "OpenCode Go requires a different workspace region" end
 		-- A refusal that carries no body at all is worth naming as such. It usually
 		-- means the call never reached the API, so nothing about the key or the model
 		-- accounts for it, and the answer is in the response headers the Requests view
@@ -419,6 +427,10 @@ return function(env)
 		if message then return string.format("%s (%d)", message, status) end
 		if prefix then return string.format("%s (%d)", prefix, status) end
 		return string.format("request failed with status %d", status)
+	end
+
+	function M.errorText(res, err)
+		return env.require("runtime/support").error(errorText(res, err))
 	end
 
 	-- The output ceiling a refusal names, or nil when it names nothing usable.
@@ -474,7 +486,7 @@ return function(env)
 		-- ceiling costs nothing to discover. What a refusal actually taught this
 		-- record still applies after it, because the gateway is the final word on
 		-- what it will accept.
-		local documented = traits.maxOutput(record.model)
+		local documented = traits.maxOutput(record.model, record)
 		if documented and wanted > documented then wanted = documented end
 		local cap = record.maxTokensCap
 		if type(cap) ~= "table" or cap.model ~= record.model then return wanted end
@@ -1062,8 +1074,10 @@ return function(env)
 			for index, key in ipairs(pool) do
 				if key == currentKey then currentKeyIndex = index end
 			end
+			local accept = body.stream and "text/event-stream" or "application/json"
+			if registry.isOpencode(record) then accept = headerMap.get(record.headers, "Accept") or "*/*" end
 			return headerMap.merge(registry.authHeaders(record, currentKey), registry.opencodeHeaders(record, request),
-				record.headers, { Accept = body.stream and "text/event-stream" or "application/json" })
+				record.headers, { Accept = accept })
 		end
 
 		local headers = rebuildHeaders()
@@ -1136,8 +1150,7 @@ return function(env)
 			})
 			lastRequestMs = clock.since(requestStarted)
 			if request.aborted and request.aborted() then return nil, "aborted" end
-			local deferProxy = responses.eligible(record) and responses.isFreeTierRefusal(res)
-			if not deferProxy and recovery.recover(res, err) then
+			if recovery.recover(res, err) then
 				requestScope = registry.compatibilityKey(record)
 				url = registry.endpoint(record, "/chat/completions")
 				headers = rebuildHeaders()
@@ -1167,13 +1180,10 @@ return function(env)
 		local res, err = fireWithRotation(body)
 		-- Some Zen models only speak the Responses protocol: /chat/completions
 		-- answers ModelProtocolUnsupported for them. Switch lanes and retry there.
-		-- On the direct route the free-tier gate can answer 403 before protocol
-		-- validation runs, so that refusal tries the lane too. The lane is only
-		-- remembered after it answers, so a failed attempt never pins the record;
-		-- when it also fails, the original refusal falls through below to the
-		-- normal repair and failure path.
+		-- Preserve the direct desktop workaround when the bridge is absent.
+		-- Mobile free-tier refusals are terminal; the retired proxy is never tried.
 		if res and registry.compatibilityKey(record) == requestScope and responses.eligible(record)
-			and (responses.isProtocolRefusal(res) or responses.isFreeTierRefusal(res)) then
+			and (responses.isProtocolRefusal(res) or (not registry.isOpencodeGo(record) and responses.canRetryFreeTier(res))) then
 			log.info("provider", record.label .. ": chat route refused, retrying on the Responses lane")
 			if request.onRetry then
 				request.onRetry({ attempt = 1, attempts = 2, wait = 0, reason = "model may need the Responses protocol", status = res.status })
@@ -1187,12 +1197,6 @@ return function(env)
 			-- The original refusal does not erase an unknown outcome or a failed
 			-- stream on the fallback lane. Keep those terminal across providers.
 			if http.terminal(switchErr) or (switchRes and switchRes.terminal) then return nil, switchErr, switchRes end
-			if registry.proxyProvider(record) or recovery.recover(res, err) then
-				requestScope = registry.compatibilityKey(record)
-				url = registry.endpoint(record, "/chat/completions")
-				headers = rebuildHeaders()
-				res, err = fireWithRotation(body)
-			end
 		end
 		-- A gateway names a bad field in a 400, and a NewAPI gateway names a bad
 		-- content variant in a 422. Both are repairable, and both can chain: a
