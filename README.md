@@ -127,9 +127,9 @@ too, so a delegated job runs until it answers instead of coming back with "I rea
 this session's step limit before finishing".
 
 **Any provider.** A provider is a base URL, an auth style, a key and a model.
-Presets exist for the common hosts -- with HCNSEC, AgentRouter, and OpenCode Zen featured as
-starting points in the providers panel -- and "Custom endpoint" takes anything
-that speaks `/v1/chat/completions` -- a relay, a self-hosted vLLM, Ollama on
+Presets exist for the common hosts -- with AgentRouter, OpenCode Zen, and OpenRouter
+featured first, in that order, even with Project UAI Free configured -- and
+"Custom endpoint" takes anything that speaks `/v1/chat/completions` -- a relay, a self-hosted vLLM, Ollama on
 localhost. Model lists are never guessed: they come from `GET /v1/models` or from
 you typing one in.
 

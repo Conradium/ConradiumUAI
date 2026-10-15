@@ -24,9 +24,9 @@ return function(env)
 			docs = "https://discord.gg/9xYyyYuKap",
 			free = true,
 			defaultModel = "auto",
-			-- Featured: shown at the top of the providers panel as the recommended
-			-- place to start, so a first-run user has one obvious road.
+			-- Keep included access available after the recommended providers.
 			featured = true,
+			featuredOrder = 4,
 			note = "Free AI for the Project UAI community, powered by HCNSEC. No account, payment or personal API key is needed. Thank you for your continued use and support of Project UAI. The auto model routes to available capacity; replies can be fast or slow, and shared availability or limits can change. More free providers may become available soon. Join us for updates and help: https://discord.gg/9xYyyYuKap",
 			noteHighlight = "No account, payment or personal API key is needed.",
 		},
@@ -41,6 +41,7 @@ return function(env)
 			api = "anthropic",
 			headers = { ["anthropic-version"] = "2023-06-01" },
 			featured = true,
+			featuredOrder = 1,
 			requiresClaude = true,
 			note = "An Anthropic Messages gateway that routes to Claude, DeepSeek and more, and requires the Claude Code identity on every request -- which this client always sends here. Registration needs a GitHub account at least 1 year old. Recommended model: deepseek-v4-flash.",
 			noteHighlight = "a GitHub account at least 1 year old",
@@ -60,6 +61,8 @@ return function(env)
 			authStyle = "bearer",
 			keyHint = "sk-or-...",
 			docs = "https://openrouter.ai/keys",
+			featured = true,
+			featuredOrder = 3,
 			-- OpenRouter reads both of these for attribution, and sending only one of
 			-- them is a shape no real client produces.
 			headers = {
@@ -84,6 +87,7 @@ return function(env)
 			-- Desktop retains direct request compatibility; the installed CLI is an
 			-- additional route through the desktop bridge, never a bundled binary.
 			featured = true,
+			featuredOrder = 2,
 			note = "Desktop supports the direct OpenCode workaround without a bridge. Project UAI Bridge also supports a separately installed OpenCode CLI for free models; models fetched from the connected CLI need no personal key. Mobile is unsupported for OpenCode free models, including the Android companion. The retired OpenCode proxy cannot restore mobile access. Direct and paid Zen API access use your own key. Help and updates: https://discord.gg/9xYyyYuKap",
 			noteHighlight = "Mobile is unsupported for OpenCode free models",
 		},
@@ -96,6 +100,7 @@ return function(env)
 			docs = "https://opencode.ai/docs/go/",
 			claudeUa = false,
 			featured = true,
+			featuredOrder = 5,
 			note = "Paid OpenCode Go access uses your own subscribed workspace key and the separate Go endpoint. Review the workspace Privacy region setting if Go requires Global regions. Fetch models from Go; DeepSeek uses Chat, GPT/Grok/Muse use Responses, and Claude/Minimax/Qwen use Messages automatically. Gemini's native API is not supported. Go uses keyed requests; the desktop-only free CLI catalog is separate. A successful model list does not verify your subscription.",
 		},
 		{

@@ -836,12 +836,12 @@ return function(env)
 
 	-- The featured provider cards.
 	--
-	-- Recommended places to start, shown to a client with no provider configured:
+	-- Recommended places to start, shown with no setup beyond included free access:
 	-- the name, the sign-up address (selectable and copyable -- a client GUI cannot
 	-- open a browser, so the address has to be readable text, not a hidden
 	-- destination), and one button that opens the editor seeded from the preset.
 	-- The link keeps its referral parameter exactly as the catalog carries it.
-	-- Every preset marked featured gets its own card, in catalog order.
+	-- Featured order is independent of the preset picker and saved provider order.
 	function M.featuredCard(parent, onSetup, nextOrder)
 		local built = nil
 
@@ -980,11 +980,18 @@ return function(env)
 			return card
 		end
 
+		local featured = {}
 		for _, preset in ipairs(catalog.presets) do
-			if preset.featured then
-				local card = build(preset)
-				if not built then built = card end
-			end
+			if preset.featured then featured[#featured + 1] = preset end
+		end
+		table.sort(featured, function(a, b)
+			local aOrder, bOrder = a.featuredOrder or math.huge, b.featuredOrder or math.huge
+			if aOrder ~= bOrder then return aOrder < bOrder end
+			return a.id < b.id
+		end)
+		for _, preset in ipairs(featured) do
+			local card = build(preset)
+			if not built then built = card end
 		end
 		return built
 	end
@@ -1268,17 +1275,14 @@ return function(env)
 			healthError = nil
 			panel.__order = 0
 			local record = selected and registry.get(selected) or nil
+			-- Included free access must not hide the recommended providers.
+			local list = registry.list()
+			if #list == 0 or (#list == 1 and communityKey.isApplied(list[1])) then
+				M.featuredCard(detail.instance, function(id)
+					panel.select(id)
+				end, order)
+			end
 			if not record then
-				-- The featured cards, shown only on a client with nothing configured:
-				-- the recommended providers, each with its sign-up address and one
-				-- button that starts the setup. After the first provider exists the
-				-- rail is the interface and this stops being the loudest thing on the
-				-- panel.
-				if registry.count() == 0 then
-					M.featuredCard(detail.instance, function(id)
-						panel.select(id)
-					end, order)
-				end
 				C.emptyState(detail.instance, {
 					title = registry.count() == 0 and "No provider configured"
 						or "Pick a provider from the list",

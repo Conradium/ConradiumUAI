@@ -6126,28 +6126,37 @@ scenario("adding a provider opens the editor directly", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
--- First run has included free access. Explicit removal exposes recommendations
--- with readable, copyable community and provider documentation links.
+-- Included free access must not hide the recommended providers or their setup.
 scenario("a first-run client is pointed at the featured provider", function()
 	local harness, handle = bootWith({ provider = "default" })
 	local active = handle.providers.active()
 	check("included free provider is selected", active and active.label, "Project UAI Free")
 	check("the provider-supported auto router is ready", active and active.model, "auto")
 	truthy("the home introduces free access", harness.byName("FreeIntroduction") ~= nil)
-	handle.providers.remove(active.id)
 	handle.app.show("providers")
 	harness.settle(1)
 
-	local featured = harness.byName("Featured")
-	truthy("the featured card is shown", featured ~= nil, harness.dump())
-	check("naming Project UAI Free", harness.byName("FeaturedName").Text, "Project UAI Free")
-	check("all three featured providers get a card", #harness.allByName("Featured"), 3)
+	local cards = harness.allByName("Featured")
+	table.sort(cards, function(a, b) return a.LayoutOrder < b.LayoutOrder end)
+	check("all featured providers remain available", #cards, 5)
+	for index, label in ipairs({ "AgentRouter", "OpenCode Zen", "OpenRouter", "Project UAI Free", "OpenCode Go" }) do
+		local name = cards[index] and harness.byName("FeaturedName", cards[index])
+		check("featured position " .. index, name and name.Text, label)
+	end
+	check("viewing recommendations keeps Free active", handle.providers.active(), active)
+	check("viewing recommendations adds no providers", handle.providers.count(), 1)
 
-	-- The community invite, rendered in full and exactly as the catalog carries it.
+	-- The first recommendation retains its exact, copyable registration address.
 	local url = harness.byName("FeaturedUrl")
-	check("with the Discord invite", url and url.Text, "https://discord.gg/9xYyyYuKap")
+	check("with the AgentRouter registration link", url and url.Text, "https://agentrouter.org/register?aff=4pqF")
 	truthy("and a copy control beside it", harness.byName("CopyFeaturedLink") ~= nil)
 	truthy("and a setup button", harness.byName("FeaturedSetup") ~= nil)
+	harness.click(harness.byName("FeaturedSetup", cards[1]))
+	harness.settle(1)
+	contains("the first setup action opens AgentRouter", harness.textOf(harness.byName("Preset")), "AgentRouter")
+	check("opening setup preserves the active provider", handle.providers.active(), active)
+	harness.press("Escape")
+	harness.settle(1)
 
 	-- The preset behind it resolves and carries its own docs address, which the
 	-- editor renders the same way.
@@ -6158,14 +6167,30 @@ scenario("a first-run client is pointed at the featured provider", function()
 	check("with the community as its docs", preset.docs, "https://discord.gg/9xYyyYuKap")
 	check("and marked featured", preset.featured, true)
 
-	-- OpenCode Zen remains featured alongside HCNSEC and AgentRouter.
+	-- OpenCode Zen retains its existing endpoint and access guidance.
 	local zen = catalog.get("zen")
 	check("OpenCode Zen is featured too", zen and zen.featured, true)
 	check("pointing at the Zen relay", zen.baseUrl, "https://opencode.ai/zen/v1")
 	contains("OpenCode explains direct desktop support", zen.note, "without a bridge")
 	contains("OpenCode highlights its mobile limitation", zen.noteHighlight, "Mobile is unsupported")
-	harness.click(harness.byName("FeaturedSetup"))
+	handle.providers.remove(active.id)
+	harness.settle(1)
+	local freeCard
+	for _, card in ipairs(harness.allByName("Featured")) do
+		if harness.byName("FeaturedName", card).Text == "Project UAI Free" then freeCard = card end
+	end
+	harness.click(harness.byName("FeaturedSetup", freeCard))
 	check("one action restores free access", handle.providers.active().label, "Project UAI Free")
+	check("restoring Free keeps recommendations visible", #harness.allByName("Featured"), 5)
+
+	local custom = handle.providers.blank("custom")
+	custom.label, custom.baseUrl = "My provider", "https://harness.test/v1"
+	custom.apiKey, custom.model = "fixture-key", "fixture-model"
+	assert(handle.providers.save(custom))
+	harness.click(harness.byName("Provider_" .. custom.id))
+	harness.settle(1)
+	check("configured providers retain direct access to their details", harness.byName("ProviderTitle").Text, "My provider")
+	check("recommendations do not precede a personal setup", #harness.allByName("Featured"), 0)
 
 	check("no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
