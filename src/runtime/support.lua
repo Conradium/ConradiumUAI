@@ -33,6 +33,12 @@ return function(env)
 		return text .. "\nHelp and updates: " .. M.invite
 	end
 
+	function M.claudeCode()
+		return "Claude Code (local CLI) needs Project UAI Bridge on this computer and your own installed Claude Code. "
+			.. "Run `claude` in a terminal and sign in, then restart Cowork. It is for personal, local use only and is "
+			.. "unavailable on mobile, through the Android companion and through relays."
+	end
+
 	function M.opencode()
 		return "If the direct desktop workaround is refused, use the installed OpenCode CLI with Project UAI Desktop Bridge. "
 			.. "Mobile is unsupported for OpenCode free models, including the Android companion. The OpenCode proxy is retired. "

@@ -39,6 +39,9 @@ return function(env)
 		if registry.isOpencodeZen(record) then
 			scope.opencode = env.require("net/bridge").opencodeStatus()
 			scope.bridge = env.require("net/bridge_connection").get()
+		elseif registry.isClaudeCode(record) then
+			scope.claudeCode = env.require("net/bridge").claudeCodeStatus()
+			scope.bridge = env.require("net/bridge_connection").get()
 		end
 		return util.deepCopy(scope)
 	end
@@ -167,8 +170,13 @@ return function(env)
 			})
 		end
 		local res, err, decoded, decodeError
-		local cli = scope.opencode and scope.opencode.available == true
-		if cli then
+		-- The Claude Code sentinel host never resolves; only the bridge lists it.
+		local claude = registry.isClaudeCode(record)
+		local cli = claude or scope.opencode and scope.opencode.available == true
+		if claude then
+			decoded, err = env.require("net/bridge").claudeCodeModels(opts)
+			if decoded then res = { ok = true, status = 200 } end
+		elseif cli then
 			decoded, err = env.require("net/bridge").opencodeModels(opts)
 			if decoded then res = { ok = true, status = 200 } end
 		else
@@ -189,6 +197,7 @@ return function(env)
 		end
 		pending[key] = nil
 		if not res or not res.ok or type(decoded) ~= "table" or decoded.error ~= nil then
+			if claude then return {}, support.error(err or "Could not read the Claude Code model list.") end
 			if cli then return {}, support.error(err or "Could not read the OpenCode CLI model list.") end
 			local note = "could not read the model list"
 			if res and res.status == 404 then note = "this endpoint has no /models route -- add a model by hand" end
@@ -230,7 +239,9 @@ return function(env)
 		if #found == 0 then
 			return {}, support.error("the endpoint returned an empty list -- add a model by hand")
 		end
-		local note = string.format("%d model%s from %s", #found, #found == 1 and "" or "s", cli and "OpenCode CLI through Project UAI Bridge" or urls.display(url))
+		local source = claude and "your Claude Code through Project UAI Bridge; full claude- model IDs also work"
+			or cli and "OpenCode CLI through Project UAI Bridge" or urls.display(url)
+		local note = string.format("%d model%s from %s", #found, #found == 1 and "" or "s", source)
 		if registry.isOpencodeGo(record) then note = note .. "; public list -- subscription access is checked when you send" end
 		return found, note
 	end

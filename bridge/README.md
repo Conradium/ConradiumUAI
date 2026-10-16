@@ -54,6 +54,64 @@ their original bridge ID across polling retries. No inference deadline is added.
 Usage totals include cached input and reasoning output; cache reads, cache writes,
 and reasoning counts remain available separately for UAI's usage accounting.
 
+## Claude Code on desktop (personal use)
+
+If **Claude Code is installed and signed in on this computer**, choose the
+**Claude Code (local CLI)** provider in Roblox. It needs no API key: for each
+request the bridge runs your own, unmodified `claude` binary, so usage counts
+toward your own Claude plan. This is personal, local use with your own sign-in,
+as described in Anthropic's
+[legal and compliance terms](https://code.claude.com/docs/en/legal-and-compliance).
+It is **unavailable on mobile, through the Android companion and through any
+relay**, and it is never placed behind Project UAI Free, the proxy or a shared key.
+
+The preset's base URL is `https://claude-code.invalid/v1`. The reserved `.invalid`
+host never resolves, so a request that misses the bridge fails at DNS on this
+machine. The bridge serves it only to the Roblox game on the same computer: a
+loopback peer using the exact `127.0.0.1:<port>` host, with no browser `Origin`,
+Fetch Metadata, forwarding header or companion relay marker. Anything else is
+refused with an explanation. One Claude Code request runs at a time per bridge;
+a second request is refused with a clear message.
+
+The bridge never reads, copies or logs `~/.claude/.credentials.json`, the OS
+keychain or `CLAUDE_CODE_OAUTH_TOKEN`, and never offers a sign-in flow. If
+`claude auth status` reports you signed out, the provider shows: *Run `claude` in
+a terminal and sign in, then restart Cowork.* Only the reported sign-in method and
+API provider are kept, for display. The child keeps your own `HOME`,
+`USERPROFILE`, `APPDATA` and `CLAUDE_CONFIG_DIR`; only `ANTHROPIC_BASE_URL` and
+`ANTHROPIC_CUSTOM_HEADERS` are removed so a stray variable cannot redirect it.
+
+Discovery uses `UAI_CLAUDE_BINARY` (an absolute native binary), then
+`~/.local/bin/claude[.exe]` (the native installer), `~/.claude/local/claude`, and
+native `claude`/`claude.exe` binaries on PATH. An npm `.cmd`/`.ps1`/shell shim is
+never run: the bridge runs the official package's native binary, or its JavaScript
+entry with the bridge's Node.js. `UAI_CLAUDE_DISABLED=1` disables this route. At
+startup the bridge checks `claude --version`, the required `--help` flags and
+`claude auth status --json`; an older version reports that Claude Code needs an
+update.
+
+Each request is stateless, like the OpenCode route: Roblox's compacted history is
+the conversation of record. The bridge starts `claude -p` with stream-json input
+and output, partial messages, `--tools ""` (no host tools), only its private UAI
+MCP server (`--strict-mcp-config`, `--allowedTools "mcp__uai__*"`), `dontAsk`
+permissions with prompts denied, no slash commands or skills, no session files and
+hooks disabled. `--bare` is never used because it ignores subscription sign-in.
+The system prompt and MCP configuration are passed as files in an empty per-job
+temporary folder, which keeps them within Windows command-line limits and keeps
+the MCP bearer secret out of the process list. Text and thinking stream as
+previews. Tool calls are returned to Roblox when the model turn stops; the child
+is ended before a second turn can start and the MCP calls are never answered. A
+request for any non-UAI tool fails and nothing runs. Stop or shutdown ends the
+child and removes its folder. Model discovery uses authenticated
+`GET /api/claudecode/models` (`sonnet`, `opus`, `haiku`, `fable`; full `claude-`
+model IDs also work). `/api/hello` exposes `capabilities.claudeCode = {schema:1,
+available, state, models, aliases, version, authMethod, apiProvider, message}`,
+where `state` is `missing`, `starting`, `signed-out`, `ready` or `failed`.
+
+Your own Claude Code may still apply your user-level settings and memory files,
+such as `~/.claude/CLAUDE.md`. The bridge disables hooks, other MCP servers and
+host tools, but it does not move or hide your own configuration.
+
 ## Start in three steps
 
 1. **Download and start.** In Roblox, open **UAI → Cowork → Download bridge files**.
@@ -155,6 +213,9 @@ guarantee; executor scheduling and the provider's response time also matter.
 | A picture is expired or unavailable | Attach it again. Pictures expire after 15 minutes of inactivity and disappear when the bridge stops. |
 | The bridge is reconnecting | Keep your draft in the tab and restart/reconnect the bridge. Review the conversation if a delivery receipt was lost. |
 | A deadline error appears | Use the highlighted Discord tutorial link. Cowork imposes no overall deadline, but an upstream provider or transport can still fail. |
+| Claude Code says to sign in | Run `claude` in a terminal, sign in with Anthropic's own flow, then restart Cowork. The bridge never handles your credentials. |
+| Claude Code needs an update | Run `claude update`, then restart Cowork. |
+| Claude Code answers one request at a time | Wait for the current reply, or choose another provider for subagents and parallel work. |
 | OpenCode reports `FreeTierError` | Keep the direct desktop workaround enabled, or install/update OpenCode Desktop and restart Cowork for the native route. Mobile is unsupported. [Discord help](https://discord.gg/9xYyyYuKap). |
 
 ## Development and tests
@@ -163,6 +224,8 @@ guarantee; executor scheduling and the provider's response time also matter.
 `inference.js` owns provider requests and bounded preview replay. `picture-store.js`
 keeps validated image bytes in memory. `launcher.js` restores executor downloads.
 `opencode.js` owns the external native server, temporary sessions and MCP handoff;
+`claudecode.js` runs the user's own signed-in Claude Code per request with the same
+MCP handoff; `native-response.js` shapes both into OpenAI-compatible replies;
 `support.js` supplies consistent Discord error help.
 `supervisor.js` owns the worker process, token and idle replacement;
 `updater.js` validates releases and maintains the isolated cache.
@@ -178,9 +241,10 @@ Finish implementation, documentation and test edits before running verification:
 ```powershell
 luajit tools/bundle.lua --native
 node tools/build_site.js
-node --test bridge/tests/opencode-native.test.js bridge/tests/opencode.test.js bridge/tests/desktop.test.js bridge/tests/security.test.js bridge/tests/streaming.test.js bridge/tests/updater.test.js
+node --test bridge/tests/opencode-native.test.js bridge/tests/opencode.test.js bridge/tests/claudecode.test.js bridge/tests/desktop.test.js bridge/tests/security.test.js bridge/tests/streaming.test.js bridge/tests/updater.test.js
 luajit test/web_runtime.lua
 luajit test/bridge_install.lua
+luajit test/claude_code_bridge.lua
 ```
 
 For real browser checks, install Playwright **outside this repository**, including

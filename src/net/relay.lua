@@ -21,6 +21,12 @@ return function(env)
 		if not endpoint then return noRelay() end
 		local base, token, target = endpoint.base, endpoint.token, endpoint.target
 		local via = target == "companion" and "relay" or "web"
+		-- Claude Code runs only through the desktop bridge for the game on the same
+		-- computer. The companion never receives that request.
+		if target == "companion" and env.require("net/url").host(spec.url) == "claude-code.invalid" then
+			return { status = 599, body = util.encode({ error = { message = env.require("runtime/support").claudeCode() } }),
+				headers = {}, via = via, terminal = true }, nil
+		end
 		local timeout = math.max(1, math.min(300, tonumber(spec.timeout) or 180))
 		local id = "inference_" .. env.services.HttpService:GenerateGUID(false)
 		local deadline = math.min(tonumber(spec.deadlineMs) or math.huge,

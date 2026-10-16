@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — Claude Code (local CLI)
+
+- Add a **Claude Code (local CLI)** provider for personal, local use with your own
+  Claude Code sign-in. When Claude Code is installed and signed in on the same
+  computer, the desktop bridge runs your own unmodified `claude` binary for each
+  request and returns its text, thinking and UAI tool calls to Roblox, like the
+  OpenCode route. No API key is needed and usage counts toward your own Claude plan.
+  See Anthropic's [legal and compliance terms](https://code.claude.com/docs/en/legal-and-compliance).
+- Serve it only to the Roblox game on the same computer. It is unavailable on
+  mobile, through the Android companion and through relays, and is never offered
+  through Project UAI Free, the proxy or a shared key. One request runs at a time.
+- Never read or move Claude credentials and never offer a sign-in flow: a signed-out
+  CLI shows "Run `claude` in a terminal and sign in, then restart Cowork." Runs use
+  no host tools, only the private UAI MCP tools, no hooks and no session files.
+- Share the native response shaping between the OpenCode and Claude Code backends
+  without changing OpenCode behaviour.
+
 ## 3.2.0 — October 15, 2026 — Project UAI Free and OpenCode desktop
 
 - Start empty provider setups with Project UAI Free, using included public HCNSEC

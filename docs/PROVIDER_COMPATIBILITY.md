@@ -128,6 +128,7 @@ the key cannot list models, manual ids remain usable.
 | OpenRouter | `openrouter.ai/api/v1` | Chat Completions | Bearer |
 | OpenCode Zen | `opencode.ai/zen/v1` | Chat Completions; dedicated Responses lane when required | Bearer |
 | OpenCode Go | `opencode.ai/inference/go/v1` | Model-specific Chat, Responses or Messages; native Gemini unsupported | Bearer |
+| Claude Code (local CLI) | `claude-code.invalid/v1` (served only by the desktop bridge) | Chat Completions | None needed; your own Claude Code sign-in |
 | Azure AI Foundry | `<resource>.openai.azure.com/openai/v1` | Chat Completions | api-key |
 | Anthropic Messages | `api.anthropic.com/v1` | Messages | x-api-key |
 | Anthropic OpenAI compatibility | `api.anthropic.com/v1` | Chat Completions | x-api-key |
@@ -185,6 +186,32 @@ refusal does not retry Responses or a proxy. Share errors and get updates in
 The OpenCode proxy is retired. Saved or entered old proxy URLs migrate to the
 official Zen URL. Historical successful direct requests are observations for their
 host and date, not a guarantee that every executor or future upstream version works.
+
+### Claude Code (local CLI), personal use
+
+Choose **Claude Code (local CLI)** when Claude Code is installed and signed in on
+the same computer as Roblox and Project UAI Bridge. This is personal, local use
+with your own Claude Code sign-in, under Anthropic's
+[legal and compliance terms](https://code.claude.com/docs/en/legal-and-compliance):
+the bridge runs your own unmodified `claude` binary for each request, and usage
+counts toward your own Claude plan. UAI shows its cost as zero because UAI does not
+bill it. No API key is needed; the key row reads *Provided by your signed-in Claude
+Code* once the bridge reports Claude Code ready.
+
+The base URL `https://claude-code.invalid/v1` uses a reserved host that never
+resolves. Without a connected bridge, discovery and requests explain the
+requirement and send nothing; a request that still went out directly would fail
+at DNS on this machine. This client never sends the Claude Code identity headers
+for this preset.
+
+**Claude Code (local CLI) is unavailable on mobile, through the Android companion
+and through relays.** The bridge serves it only to the local game, refuses other
+callers, and never offers it through Project UAI Free, the proxy or a shared key.
+It runs one request at a time, so subagents and parallel work need another
+provider. If Claude Code is signed out, run `claude` in a terminal and sign in,
+then restart Cowork. Models: `sonnet`, `opus`, `haiku`, `fable`, or a full
+`claude-` model ID. Effort levels pass through to Claude Code. Details, discovery
+and isolation are in the [bridge guide](../bridge/README.md#claude-code-on-desktop-personal-use).
 
 ### OpenCode Go subscriptions
 

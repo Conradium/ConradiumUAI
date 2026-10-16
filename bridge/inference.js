@@ -20,8 +20,11 @@ const DELIVERABLE_MAX = 8 * 1024 * 1024;
 function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
   deliverableMax = DELIVERABLE_MAX, retentionMs = 300000, maxJobs = 10000,
   maxActive = 16, maxTotalBytes = 64 * 1024 * 1024, legacy = false,
-  prepareBody = body => body, maxRequestBytes = 32 * 1024 * 1024, maxActiveRequestBytes = 64 * 1024 * 1024, opencode } = {}) {
+  prepareBody = body => body, maxRequestBytes = 32 * 1024 * 1024, maxActiveRequestBytes = 64 * 1024 * 1024, opencode, claudeCode } = {}) {
   const jobs = new Map();
+  // Native CLI backends own their upstream connection. A request none of them
+  // accepts continues to plain HTTP unchanged.
+  const natives = [opencode, claudeCode].filter(Boolean);
   // A previously seen ID must never become resubmittable, even after its job is
   // evicted for capacity. The horizon remembers evicted IDs so a late resubmit
   // is answered with an expired tombstone instead of running a second time.
@@ -177,7 +180,9 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
     }
   }
 
-  function start(input) {
+  // source describes the caller: { local } is true only for the Roblox game on
+  // this computer, which is the only caller Claude Code may serve.
+  function start(input, source = {}) {
     if (!input || typeof input.id !== 'string' || !/^[\w-]{8,100}$/.test(input.id)) throw new Error('Invalid request ID');
     if (input.instance !== instance) throw new Error('Bridge restarted; request was not resubmitted');
     if (typeof input.body !== 'string' || Buffer.byteLength(input.body) > maxBytes) throw new Error('Invalid inference body');
@@ -218,27 +223,33 @@ function createInference({ publish = () => {}, maxBytes = 16 * 1024 * 1024,
     // deliberately ignored; only Stop, shutdown or a real failure ends a job.
     let model;
     try { const b = JSON.parse(input.body); if (b && typeof b.model === 'string') model = b.model; } catch { /* body need not be JSON */ }
+    const backend = natives.find(item => item.capability().available && item.accepts(url.href, providerBody, source));
+    // The Claude Code sentinel host never resolves; explain a refusal rather
+    // than letting plain HTTP fail at DNS.
+    const refused = !backend && claudeCode?.refusal(url.href, providerBody, source);
+    if (refused) { const e = new Error(refused.message); e.status = refused.status; throw e; }
     const job = { id: input.id, fingerprint, sessionId: input.sessionId, state: 'running', body: '', bytes: 0, bodyBytes: 0, wireBytes: 0,
       startedAt: Date.now(), seq: 0, frameCount: 0, ring: [], ringBytes: 0, ringDropped: false,
       firstFrameAt: null, sawText: false, model, requestBytes };
     jobs.set(job.id, job);
-    if (opencode?.capability().available && opencode.accepts(url.href, providerBody)) {
+    if (backend) {
+      const label = backend.label || 'OpenCode';
       const controller = new AbortController();
       job.request = { destroy: () => controller.abort() };
       activeRequestBytes += requestBytes;
       if (job.sessionId) publish({ kind: 'inference:start', id: job.id, sessionId: job.sessionId, model: job.model, startedAt: job.startedAt });
-      opencode.request({ body: providerBody, url: url.href, signal: controller.signal,
+      backend.request({ body: providerBody, url: url.href, signal: controller.signal, source,
         onFrame: frame => { if (job.state === 'running') onFrame(job, frame); } }).then(result => {
         if (job.state !== 'running') return;
         job.status = result.status; job.headers = result.headers;
         const bytes = Buffer.byteLength(result.body);
         if (bytes > effectiveMax || retainedBytes + bytes > maxTotalBytes ||
           Buffer.byteLength(JSON.stringify({ ...view(job), state: 'completed', body: result.body })) > deliverableMax) {
-          finish(job, 'failed', 'OpenCode response exceeds the deliverable limit; it will not be resubmitted'); return;
+          finish(job, 'failed', label + ' response exceeds the deliverable limit; it will not be resubmitted'); return;
         }
         job.body = result.body; job.bodyBytes = bytes; retainedBytes += bytes;
         finish(job, 'completed');
-      }, error => { if (job.state === 'running') finish(job, 'failed', String(error?.message || 'OpenCode request failed')); });
+      }, error => { if (job.state === 'running') finish(job, 'failed', String(error?.message || label + ' request failed')); });
       return view(job);
     }
     const decoder = new StringDecoder('utf8');

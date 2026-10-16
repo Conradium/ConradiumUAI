@@ -59,6 +59,11 @@ return function(env)
 	local function maskedKey(record)
 		local raw = tostring(record.apiKey or "")
 		if util.trim(raw) == "" and registry.opencodeKeyOptional(record) then return "Provided by connected OpenCode CLI", nil end
+		-- The user's own Claude Code sign-in, never a key this client holds.
+		if util.trim(raw) == "" and registry.isClaudeCode(record) then
+			if registry.claudeCodeKeyOptional(record) then return "Provided by your signed-in Claude Code", nil end
+			return registry.claudeCodeProblem(record) or env.require("runtime/support").claudeCode(), "warn"
+		end
 		if util.trim(raw) == "" then return "not set", "warn" end
 		local pool = registry.keysOf(record)
 		if #pool > 1 then
@@ -342,6 +347,12 @@ return function(env)
 					keyLabel.Text, keyLabel.TextColor3 = shown, tone and theme.color.warn or theme.color.textSecondary
 				end
 				if setKeyButton then setKeyButton.setText("Replace") end
+			elseif preset.defaultModel and util.trim(editing.model or "") == "" then
+				editing.model, editing.models = preset.defaultModel, { preset.defaultModel }
+			end
+			if keyLabel and registry.isClaudeCode(editing) then
+				local shown, tone = maskedKey(editing)
+				keyLabel.Text, keyLabel.TextColor3 = shown, tone and theme.color.warn or theme.color.textSecondary
 			end
 			if presetButton then presetButton.setText(preset.label) end
 			if urlField then urlField.set(editing.baseUrl) end

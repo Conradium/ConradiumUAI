@@ -290,6 +290,24 @@ its verified public catalog retain direct HTTP behavior. The native server binds
 loopback, uses private authentication and isolated owned sessions, and leaves UAI
 tools to Roblox. Capability and catalog data cannot survive a changed connection.
 
+The **Claude Code (local CLI)** preset is personal, local use with the user's own
+Claude Code sign-in. Its Chat Completions base `https://claude-code.invalid/v1` never
+resolves; `registry.isClaudeCode` identifies it, its identity is always `none`, and
+pricing counts it at zero because the user's own plan is billed. The bridge reports
+authenticated `capabilities.claudeCode` (schema 1, state `missing`, `starting`,
+`signed-out`, `ready` or `failed`, aliases and display labels only) and lists
+`/api/claudecode/models`. `registry.claudeCodeKeyOptional` waives the key only when
+that capability is ready, the model is an alias or full `claude-` id, Cowork Web
+runtime holds and the client is not touch-only. Otherwise discovery and requests
+return `support.claudeCode()` without dialling the sentinel, and the companion relay
+refuses it. The bridge runs the installed, unmodified `claude` binary once per
+request for the loopback game only (exact host, no browser, forwarding or companion
+markers), one request at a time, with no host tools, only its private UAI MCP
+server, no hooks or session files and never `--bare`. It never reads credentials,
+never offers sign-in and keeps the user's own home/config environment. Tool calls
+return to Roblox at the end of the model turn; the child is stopped before a second
+turn.
+
 Project UAI Free uses the existing intentionally distributed HCNSEC community key
 and the provider-supported `auto` router, verified through live discovery and tool
 inference. Empty startup/import/reset configurations receive this ready provider;

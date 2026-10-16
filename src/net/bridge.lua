@@ -28,6 +28,8 @@ return function(env)
 	local alive, generation = false, 0
 	local opencode, nextHello = nil, 0
 	local opencodeModels = {}
+	-- The user's own signed-in Claude Code, run by the bridge on this computer.
+	local claudeCode, claudeCodeModels = nil, {}
 	local uploadFailed, pollFailed = false, false
 	local function syncRuntime()
 		local value = M.online and "web" or "game"
@@ -193,6 +195,39 @@ return function(env)
 		return value
 	end
 
+	function M.claudeCodeStatus()
+		if not M.online or not claudeCode then return { available = false, state = "disconnected" } end
+		return util.copy(claudeCode)
+	end
+
+	-- Aliases come from the bridge; any full claude- model id the user types is
+	-- also served, because the installed CLI resolves it itself.
+	function M.claudeCodeHasModel(id)
+		local status = M.claudeCodeStatus()
+		local model = tostring(id or "")
+		if not status.available or status.state ~= "ready" then return false end
+		return claudeCodeModels[model] == true or (#model <= 100 and model:match("^claude%-[%w][%w%.%-]*$") ~= nil)
+	end
+
+	function M.claudeCodeModels(opts)
+		opts = opts or {}
+		local support = env.require("runtime/support")
+		local status = M.claudeCodeStatus()
+		if not status.available or status.state ~= "ready" then return nil, support.error(status.message or support.claudeCode()) end
+		local res, err = call({ url = base() .. "/api/claudecode/models", method = "GET",
+			timeout = opts.timeout or 10, aborted = opts.aborted })
+		if not res or not res.ok then return nil, env.require("provider/openai").errorText(res, err) end
+		local value = #res.body <= 65536 and util.decode(res.body)
+		if type(value) ~= "table" or type(value.data) ~= "table" or value.error then
+			return nil, support.error("Claude Code returned an invalid model list.")
+		end
+		if not M.claudeCodeStatus().available then return nil, support.error("Claude Code availability changed; fetch models again.") end
+		for _, row in ipairs(value.data) do
+			if type(row) == "table" and type(row.id) == "string" then claudeCodeModels[row.id] = true end
+		end
+		return value
+	end
+
 	local function runCommand(command)
 		if type(command) ~= "table" then return end
 		local sessions = env.require("agent/session")
@@ -268,6 +303,7 @@ return function(env)
 		M.online = false
 		opencode, nextHello = nil, 0
 		opencodeModels = {}
+		claudeCode, claudeCodeModels = nil, {}
 		M.lastError = reason
 		syncRuntime()
 		if moved then
@@ -539,9 +575,24 @@ return function(env)
 					opencode = { available = backend.available == true, state = tostring(backend.state or "unavailable"),
 						version = type(backend.version) == "string" and backend.version or nil }
 				end
+				local native = type(capabilities) == "table" and capabilities.claudeCode
+				local previousClaude = claudeCode
+				claudeCode = nil
+				if type(native) == "table" and native.schema == 1 then
+					local function label(value) return type(value) == "string" and #value <= 80 and value or nil end
+					claudeCode = { available = native.available == true, state = tostring(native.state or "unavailable"),
+						version = label(native.version), authMethod = label(native.authMethod), apiProvider = label(native.apiProvider),
+						message = type(native.message) == "string" and util.truncate(native.message, 600) or nil }
+				end
+				claudeCodeModels = {}
+				if claudeCode and claudeCode.available and claudeCode.state == "ready" and type(native.aliases) == "table" then
+					for _, id in ipairs(native.aliases) do
+						if type(id) == "string" and #id <= 40 then claudeCodeModels[id] = true end
+					end
+				end
 				nextHello = clock.ms() + 4000
 				if not opencode or not opencode.available then opencodeModels = {} end
-				if util.encode(previous) ~= util.encode(opencode) then M.changed:fire() end
+				if util.encode(previous) ~= util.encode(opencode) or util.encode(previousClaude) ~= util.encode(claudeCode) then M.changed:fire() end
 			end
 			-- After a failed poll, prove the inbox is back without waiting through
 			-- another idle long poll before Web runtime can recover.
@@ -615,6 +666,7 @@ return function(env)
 		M.online = false
 		opencode, nextHello = nil, 0
 		opencodeModels = {}
+		claudeCode, claudeCodeModels = nil, {}
 		syncRuntime()
 		if detach then pcall(detach) end
 		detach, attachedId = nil, nil
@@ -685,6 +737,7 @@ return function(env)
 			source = connection.get().source,
 			searching = connection.searching(),
 			opencode = M.opencodeStatus(),
+			claudeCode = M.claudeCodeStatus(),
 			queued = #queue,
 			runtime = M.online and "web" or "game",
 			error = M.lastError,

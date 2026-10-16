@@ -13,6 +13,7 @@ const { Supervisor } = require('../supervisor');
 const RELEASE = require('../release');
 const { runtimeSource } = require('../../tools/build_bridge');
 process.env.UAI_OPENCODE_DISABLED = '1';
+process.env.UAI_CLAUDE_DISABLED = '1';
 const { materialize } = require('../launcher');
 const source = path.resolve(__dirname, '..');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));

@@ -104,6 +104,22 @@ return function(env)
 			note = "Paid OpenCode Go access uses your own subscribed workspace key and the separate Go endpoint. Review the workspace Privacy region setting if Go requires Global regions. Fetch models from Go; DeepSeek uses Chat, GPT/Grok/Muse use Responses, and Claude/Minimax/Qwen use Messages automatically. Gemini's native API is not supported. Go uses keyed requests; the desktop-only free CLI catalog is separate. A successful model list does not verify your subscription.",
 		},
 		{
+			id = "claude-code",
+			label = "Claude Code (local CLI)",
+			-- The reserved .invalid host never resolves. Only the desktop bridge on this
+			-- computer serves it, by running the user's own installed, signed-in Claude
+			-- Code; a request that misses the bridge fails at DNS on this machine.
+			baseUrl = "https://claude-code.invalid/v1",
+			authStyle = "bearer",
+			-- Claude Code makes its own requests. This client never imitates it.
+			claudeUa = false,
+			defaultModel = "sonnet",
+			keyHint = "No key: Claude Code uses your own sign-in on this computer",
+			docs = "https://code.claude.com/docs/en/legal-and-compliance",
+			note = "Personal, local use with your own Claude Code sign-in. Project UAI Bridge runs your installed Claude Code on this computer, and usage counts toward your own Claude plan. Run `claude` in a terminal and sign in, then restart Cowork. Unavailable on mobile, through the Android companion and through relays. Models: sonnet, opus, haiku, fable or a full claude- model ID. Terms: https://code.claude.com/docs/en/legal-and-compliance",
+			noteHighlight = "Personal, local use with your own Claude Code sign-in.",
+		},
+		{
 			id = "azure-foundry",
 			label = "Azure AI Foundry",
 			-- The v1 surface rather than the per-deployment preview path: it speaks

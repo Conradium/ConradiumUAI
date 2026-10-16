@@ -33,7 +33,12 @@ return function(env)
 
 	function M.complete(record, request)
 		local support = env.require("runtime/support")
-		local problem = env.require("provider/registry").protocolProblem(record)
+		local registry = env.require("provider/registry")
+		local problem = registry.protocolProblem(record)
+		if problem then return nil, support.error(problem) end
+		-- Explain an unavailable Claude Code backend instead of dialling its
+		-- sentinel host, which would only fail at DNS.
+		problem = registry.claudeCodeProblem(record)
 		if problem then return nil, support.error(problem) end
 		local result, err, response = M.adapterFor(record).complete(record, request)
 		return result, err and support.error(err) or nil, response

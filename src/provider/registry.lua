@@ -175,6 +175,9 @@ return function(env)
 		if record.api ~= nil and record.api ~= "openai" and record.api ~= "anthropic" then
 			return "choose Chat completions or Anthropic messages; this API protocol is not implemented"
 		end
+		if M.isClaudeCode(record) and (record.api or "openai") ~= "openai" then
+			return "Claude Code (local CLI) uses Chat completions; choose that protocol"
+		end
 		if not (opts and opts.discovery) and M.opencodeGoProtocol(record) == "gemini" then
 			return "Gemini on OpenCode Go requires Google's native API, which this client does not support; choose another Go model"
 		end
@@ -276,6 +279,8 @@ return function(env)
 		-- A manually entered Zen endpoint gets the same compatibility identity as
 		-- the preset without competing Claude/Stainless headers.
 		if M.isOpencode(record) then return "none" end
+		-- The installed Claude Code makes its own requests; never imitate it.
+		if M.isClaudeCode(record) then return "none" end
 		if M.requiresClaude(record) then return "claude" end
 		return (record.claudeUa ~= false) and "claude" or "none"
 	end
@@ -293,6 +298,40 @@ return function(env)
 		local status = bridge.opencodeStatus()
 		return status.available == true and status.state == "ready" and bridge.opencodeHasModel(model) == true
 			and env.require("net/transport").coworkWeb()
+	end
+
+	-- The sentinel endpoint served only by the desktop bridge's Claude Code
+	-- backend. .invalid never resolves, so nothing reaches a network directly.
+	function M.isClaudeCode(record)
+		local parsed = urls.parse(M.normaliseBaseUrl(record and record.baseUrl or ""))
+		if not parsed or parsed.scheme ~= "https" or parsed.host ~= "claude-code.invalid" then return false end
+		local port = parsed.authority:match(":(%d+)$")
+		return (port == nil or port == "443") and parsed.path:gsub("/+$", "") == "/v1"
+	end
+
+	-- Personal, local use only: the user's own signed-in Claude Code, reached
+	-- through a connected desktop bridge from a non-touch client. The key is then
+	-- provided by that sign-in, never by this client.
+	function M.claudeCodeKeyOptional(record)
+		if (record.api or "openai") ~= "openai" or not M.isClaudeCode(record) then return false end
+		if env.require("net/relay_link").mobile() then return false end
+		local bridge = env.require("net/bridge")
+		local status = bridge.claudeCodeStatus()
+		return status.available == true and status.state == "ready" and bridge.claudeCodeHasModel(record.model) == true
+			and env.require("net/transport").coworkWeb()
+	end
+
+	-- Why a Claude Code record cannot be served right now, or nil.
+	function M.claudeCodeProblem(record)
+		if not M.isClaudeCode(record) then return nil end
+		local support = env.require("runtime/support")
+		if env.require("net/relay_link").mobile() or not env.require("net/transport").coworkWeb() then return support.claudeCode() end
+		local status = env.require("net/bridge").claudeCodeStatus()
+		if status.available ~= true or status.state ~= "ready" then return status.message or support.claudeCode() end
+		if not env.require("net/bridge").claudeCodeHasModel(record.model) then
+			return "Choose a Claude Code model: sonnet, opus, haiku, fable or a full claude- model ID."
+		end
+		return nil
 	end
 
 	local BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -536,7 +575,8 @@ return function(env)
 				problems[#problems + 1] = "socket URL must be a ws:// or wss:// gateway that implements UAI's envelope protocol"
 			end
 		end
-		if (record.authStyle or "bearer") ~= "none" and util.trim(record.apiKey) == "" and not M.opencodeKeyOptional(record) then
+		if (record.authStyle or "bearer") ~= "none" and util.trim(record.apiKey) == "" and not M.opencodeKeyOptional(record)
+			and not M.claudeCodeKeyOptional(record) then
 			problems[#problems + 1] = "an API key is required for this auth style"
 		end
 		-- Azure takes the model from the deployment in the URL; everyone else needs

@@ -19,8 +19,14 @@ return function(env)
 			or host:match("^127%.%d+%.%d+%.%d+$") ~= nil or host == "::1" or host == "0:0:0:0:0:0:0:1"
 	end
 
+	-- Claude Code (local CLI) bills the user's own Claude plan, not this client.
+	local function claudeCode(record)
+		local parsed = urls.parse(urls.normaliseBase(tostring(record.baseUrl or "")))
+		return parsed ~= nil and parsed.host == "claude-code.invalid"
+	end
+
 	function M.ratesFor(model, record, promptTokens)
-		if record and (community.isApplied(record) or localEndpoint(record)) then return ZERO end
+		if record and (community.isApplied(record) or localEndpoint(record) or claudeCode(record)) then return ZERO end
 		local row = info.lookup(model, record)
 		local base = row and row.price
 		if not base then return nil end

@@ -30,6 +30,7 @@ local MATRIX = {
 	{ "openrouter", "https://openrouter.ai/api/v1", "openai", "bearer" },
 	{ "zen", "https://opencode.ai/zen/v1", "openai", "bearer" },
 	{ "opencode-go", "https://opencode.ai/inference/go/v1", "openai", "bearer" },
+	{ "claude-code", "https://claude-code.invalid/v1", "openai", "bearer", bridgeOnly = true },
 	{ "azure-foundry", "https://YOUR-RESOURCE.openai.azure.com/openai/v1", "openai", "api-key" },
 	{ "anthropic-messages", "https://api.anthropic.com/v1", "anthropic", "x-api-key" },
 	{ "anthropic", "https://api.anthropic.com/v1", "openai", "x-api-key" },
@@ -59,7 +60,10 @@ case("the protocol matrix covers every advertised preset", function()
 	f.healthy(); f.close()
 end)
 
-for _, row in ipairs(MATRIX) do
+-- The Claude Code sentinel is never dialled directly; its own case follows.
+local DIRECT = {}
+for _, row in ipairs(MATRIX) do if not row.bridgeOnly then DIRECT[#DIRECT + 1] = row end end
+for _, row in ipairs(DIRECT) do
 	case(row[1] .. " discovers, calls tools and replays results over JSON/SSE", function()
 		local f = F.new(); local record = recordFor(f, row[1]); local native = row[3] == "anthropic"
 		local posts, seenBodies = 0, {}
@@ -127,6 +131,26 @@ for _, row in ipairs(MATRIX) do
 		f.healthy(); f.close()
 	end)
 end
+
+case("claude-code is served only by the desktop bridge and never dialled directly", function()
+	local f = F.new(); local registry = f.env.require("provider/registry")
+	local record = registry.blank("claude-code"); record.id = "fixture-claude-code"
+	local sentinel = 0
+	f.h.http.handler = function(entry)
+		if has(entry.url, "claude-code.invalid") then sentinel = sentinel + 1 end
+		return { StatusCode = 503, Body = "" }
+	end
+	check("preset wire, default model and no imitated identity", record.api == "openai" and record.authStyle == "bearer"
+		and record.model == "sonnet" and registry.identityFor(record) == "none" and registry.isClaudeCode(record))
+	check("a key is required while no signed-in Claude Code is reachable", not registry.claudeCodeKeyOptional(record) and not registry.validate(record))
+	local found, note = f.run(function() return f.env.require("provider/models").discover(record) end)
+	check("discovery explains the bridge requirement", #found == 0 and has(note, "Project UAI Bridge"))
+	local result, why = complete(f, record)
+	check("completion explains personal local use", result == nil and has(why, "Project UAI Bridge") and has(why, "unavailable on mobile"))
+	check("the sentinel host was never dialled", sentinel == 0)
+	check("usage is priced at zero", f.env.require("agent/pricing").ratesFor("sonnet", record, 1000).input == 0)
+	f.healthy(); f.close()
+end)
 
 case("URL normalization handles public, local, LAN, IPv6 and prefixes", function()
 	local f = F.new(); local registry = f.env.require("provider/registry")

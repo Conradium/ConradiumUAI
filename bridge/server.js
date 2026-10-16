@@ -35,6 +35,7 @@ const { createPictureStore } = require('./picture-store');
 const RELEASE = require('./release');
 const { help, DISCORD } = require('./support');
 const { createOpenCode } = require('./opencode');
+const { createClaudeCode } = require('./claudecode');
 
 const args = process.argv.slice(2);
 function flag(name, fallback) {
@@ -98,8 +99,9 @@ const commands = new Map();
 const commandPictures = new Map();
 const pictures = LEGACY ? null : createPictureStore({ limits: PICTURE_LIMITS });
 const opencode = createOpenCode();
+const claudeCode = createClaudeCode();
 const inference = createInference({ publish: broadcast, legacy: LEGACY,
-  prepareBody: (body, sessionId) => pictures ? pictures.providerBody(body, sessionId) : body, opencode });
+  prepareBody: (body, sessionId) => pictures ? pictures.providerBody(body, sessionId) : body, opencode, claudeCode });
 let gameInstance = null;
 
 const state = {
@@ -164,6 +166,17 @@ function originOk(req) {
   // and sends no Origin. Present and wrong is the case worth refusing.
   if (!origin) return true;
   return ORIGINS.has(origin);
+}
+
+// Claude Code serves only the Roblox game on this computer: a loopback peer
+// dialling the exact host the game uses, with no browser, forwarding or
+// companion-relay markers. Everything else is refused for that backend.
+function localGame(req, input) {
+  const peer = req.socket.remoteAddress;
+  return ['127.0.0.1', '::ffff:127.0.0.1', '::1'].includes(peer) && req.headers.host === `${HOST}:${PORT}` &&
+    req.headers.origin === undefined && !Object.keys(req.headers).some(key => key.startsWith('sec-fetch-')) &&
+    !['forwarded', 'via', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip'].some(name => req.headers[name] !== undefined) &&
+    !!input && typeof input === 'object' && input.timeout === undefined;
 }
 
 function authorised(req, url) {
@@ -735,6 +748,7 @@ const server = http.createServer(async (req, res) => {
     if (route === '/api/hello' && req.method === 'GET') {
       const capabilities = { browserStream: { schema: 1, replay: true }, agentInbox: { waitHeader: 'X-UAI-Poll-Wait-Ms', maxWaitMs: HOLD_MS } };
       capabilities.opencode = opencode.capability();
+      capabilities.claudeCode = claudeCode.capability();
       if (!LEGACY) capabilities.pictures = { mode: 'provider-image-content', version: 2 };
       sendJson(res, 200, {
         ok: true, connected: state.connected, protocol: 2, instance: inference.instance,
@@ -747,9 +761,11 @@ const server = http.createServer(async (req, res) => {
       });
     } else if (route === '/api/opencode/models' && req.method === 'GET') {
       sendJson(res, 200, await opencode.models());
+    } else if (route === '/api/claudecode/models' && req.method === 'GET') {
+      sendJson(res, 200, await claudeCode.models());
     } else if (route === '/api/inference' && post) {
       const input = JSON.parse(await readBody(req, 20 << 20));
-      sendJson(res, 202, inference.start(input));
+      sendJson(res, 202, inference.start(input, { local: localGame(req, input) }));
     } else if (route.startsWith('/api/inference/')) {
       const id = route.slice('/api/inference/'.length);
       if (req.method === 'DELETE') sendJson(res, 200, { cancelled: inference.cancel(id) });
@@ -910,6 +926,7 @@ setInterval(() => {
 
 server.listen(PORT, HOST, () => {
   if (opencode.capability().available) opencode.start().catch(() => {});
+  if (claudeCode.capability().available) claudeCode.start().catch(() => {});
   const origin = `http://${HOST}:${PORT}`;
   process.send({ type: 'ready', version: RELEASE.version, updateProtocol: RELEASE.updateProtocol, token: TOKEN, port: PORT }, () => {});
   if (DESKTOP) {
@@ -941,7 +958,7 @@ function shutdown() {
   inference.close();
   pictures?.close();
   server.closeAllConnections();
-  const stopped = opencode.close();
+  const stopped = Promise.all([opencode.close(), claudeCode.close()]);
   server.close(() => stopped.finally(() => process.exit(0)));
   setTimeout(() => process.exit(0), 5000).unref();
 }
