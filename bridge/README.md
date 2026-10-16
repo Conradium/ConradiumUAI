@@ -102,8 +102,10 @@ the MCP bearer secret out of the process list. Text and thinking stream as
 previews. Tool calls are returned to Roblox when the model turn stops; the child
 is ended before a second turn can start and the MCP calls are never answered. Any
 `mcp__uai__` call goes to Roblox, which applies its own registry, scope and
-permission checks, even for a UAI tool this request did not offer. A request for
-any other tool fails, names that tool, and nothing runs. Stop or shutdown ends the
+permission checks, even for a UAI tool this request did not offer. Because UAI's
+instructions name tools without the prefix, a bare name that exactly matches a
+tool offered in that request is treated the same way. A request for any other
+tool fails, names that tool, and nothing runs. Stop or shutdown ends the
 child and removes its folder. Model discovery uses authenticated
 `GET /api/claudecode/models` (`sonnet`, `opus`, `haiku`, `fable`; full `claude-`
 model IDs also work). `/api/hello` exposes `capabilities.claudeCode = {schema:1,

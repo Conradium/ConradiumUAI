@@ -262,6 +262,11 @@ test('non-UAI tools, closed tool lists and provider failures are refused without
   // its own registry, scope and permission checks.
   const unoffered = JSON.parse((await ask('unoffered')).body).choices[0];
   assert.equal(unoffered.finish_reason, 'tool_calls'); assert.equal(unoffered.message.tool_calls[0].function.name, 'remotes_capture');
+  // UAI's instructions name tools without the prefix. A bare name that matches
+  // an offered tool is that Roblox tool; any other bare name is refused.
+  const bare = JSON.parse((await ask('bare')).body).choices[0].message.tool_calls[0];
+  assert.equal(bare.function.name, 'lookup'); assert.deepEqual(JSON.parse(bare.function.arguments), { value: 'fixture' });
+  await assert.rejects(ask('bare-unoffered'), /local desktop action \(run_luau\)/);
   await assert.rejects(ask('mcp-down'), /could not reach the UAI tools/);
   await assert.rejects(ask('extra-tool'), /tools other than the UAI tools/);
   await assert.rejects(ask('error'), /usage or rate limit/);

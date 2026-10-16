@@ -191,7 +191,7 @@ function promptFor(body) {
   system.push([
     'You are Project UAI, acting in Roblox through the uai tools only.',
     'Continue the conversation given in the user message. It is the whole conversation of record; respect its message roles.',
-    'Call mcp__uai__* tools when an action is needed. Tool names in the conversation omit the mcp__uai__ prefix. Results arrive in the next request. Never invent results.',
+    'Call mcp__uai__* tools when an action is needed. The instructions and conversation above name tools without the mcp__uai__ prefix; always call them by their full mcp__uai__<name>, for example mcp__uai__run_luau for run_luau. Results arrive in the next request. Never invent results.',
   ].join('\n'));
   return { system: system.join('\n\n'), content: [{ type: 'text', text: 'Conversation to continue:\n' + JSON.stringify(conversation) }, ...images] };
 }
@@ -366,9 +366,16 @@ function createClaudeCode({ env = process.env, binary = findBinary(env), probeMs
       const toolBlock = block => ['tool_use', 'server_tool_use', 'mcp_tool_use'].includes(block?.type);
       // Any well-formed UAI tool goes to Roblox, even one this request did not
       // offer: Roblox enforces its registry, scope and permissions and answers
-      // with a normal "not run" result. Anything else is a host tool.
-      const uaiBlock = block => block.type === 'tool_use' && typeof block.name === 'string' &&
-        new RegExp('^' + PREFIX + '[a-zA-Z0-9_-]{1,54}$').test(block.name);
+      // with a normal "not run" result. UAI's own instructions name tools
+      // without the prefix, so a bare name that exactly matches a tool offered
+      // here is that Roblox tool too. Anything else is a host tool.
+      const uaiName = name => {
+        if (typeof name !== 'string') return null;
+        const prefixed = new RegExp('^' + PREFIX + '([a-zA-Z0-9_-]{1,54})$').exec(name);
+        if (prefixed) return prefixed[1];
+        return job.tools.some(tool => tool.name === name) ? name : null;
+      };
+      const uaiBlock = block => block.type === 'tool_use' && uaiName(block.name) !== null;
       function handoff() {
         const calls = []; let bytes = 0;
         for (const [, block] of [...turn.blocks.entries()].sort((a, b) => a[0] - b[0])) {
@@ -380,7 +387,7 @@ function createClaudeCode({ env = process.env, binary = findBinary(env), probeMs
           if (!args || typeof args !== 'object' || Array.isArray(args) || calls.length >= 64 || bytes > MAX_ARGUMENTS) {
             fail('Claude Code returned invalid or oversized tool arguments; nothing was run.'); return;
           }
-          calls.push({ id: 'call_' + crypto.randomBytes(12).toString('hex'), name: block.name.slice(PREFIX.length), arguments: args });
+          calls.push({ id: 'call_' + crypto.randomBytes(12).toString('hex'), name: uaiName(block.name), arguments: args });
         }
         for (const [index, call] of calls.entries()) frame({ choices: [{ delta: { tool_calls: [{ index, id: call.id, type: 'function',
           function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } }] });

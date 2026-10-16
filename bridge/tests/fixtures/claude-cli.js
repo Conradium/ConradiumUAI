@@ -81,14 +81,14 @@ if (args[0] === 'auth' && args[1] === 'status') {
     setInterval(() => {}, 1000);
     return;
   }
-  if (scenario === 'tool' || scenario === 'parallel' || scenario === 'host' || scenario === 'unoffered') {
+  if (scenario === 'tool' || scenario === 'parallel' || scenario === 'host' || scenario === 'unoffered' || scenario === 'bare' || scenario === 'bare-unoffered') {
     text(0, 'Checking Roblox.');
     const count = scenario === 'parallel' ? 2 : 1;
-    const name = scenario === 'host' ? 'Bash' : scenario === 'unoffered' ? 'mcp__uai__remotes_capture' : 'mcp__uai__lookup';
+    const name = { host: 'Bash', unoffered: 'mcp__uai__remotes_capture', bare: 'lookup', 'bare-unoffered': 'run_luau' }[scenario] || 'mcp__uai__lookup';
     for (let index = 0; index < count; index++) tool(index + 1, name, 'toolu_fixture_' + index);
     stream({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 12 } });
     // Send the MCP calls first, as a slow pipe could, so the bridge must hold them.
-    for (let index = 0; index < count && scenario !== 'host' && scenario !== 'unoffered'; index++) {
+    for (let index = 0; index < count && scenario !== 'host' && scenario !== 'unoffered' && !scenario.startsWith('bare'); index++) {
       log({ type: 'tools/call-sent', index });
       rpc('tools/call', { name: 'lookup', arguments: { value: 'fixture' } }, 10 + index)
         .then(reply => log({ type: 'tools/call-result', index, reply }), () => log({ type: 'tools/call-closed', index }));
