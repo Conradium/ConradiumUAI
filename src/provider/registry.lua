@@ -321,14 +321,25 @@ return function(env)
 			and env.require("net/transport").coworkWeb()
 	end
 
-	-- Why a Claude Code record cannot be served right now, or nil.
+	-- Why a Claude Code record cannot be sent to the bridge right now, or nil.
+	-- Only conditions that would keep the request off the bridge are decided
+	-- here; once it can reach the bridge, the bridge's own answer is authoritative.
 	function M.claudeCodeProblem(record)
 		if not M.isClaudeCode(record) then return nil end
 		local support = env.require("runtime/support")
-		if env.require("net/relay_link").mobile() or not env.require("net/transport").coworkWeb() then return support.claudeCode() end
+		if env.require("net/relay_link").mobile() or not env.require("net/bridge_connection").enabled() then return support.claudeCode() end
+		if not env.require("net/transport").coworkWeb() then
+			return "Project UAI Bridge is not answering right now, so Claude Code (local CLI) could not be reached. "
+				.. "Keep the bridge running and Cowork connected, then retry."
+		end
 		local status = env.require("net/bridge").claudeCodeStatus()
-		if status.available ~= true or status.state ~= "ready" then return status.message or support.claudeCode() end
-		if not env.require("net/bridge").claudeCodeHasModel(record.model) then
+		-- A known refusal from the bridge (missing, signed out, failed) is final.
+		if status.state ~= "ready" and status.state ~= "disconnected" and status.state ~= "starting" then
+			return status.message or support.claudeCode()
+		end
+		local model = tostring(record.model or "")
+		if not (model == "sonnet" or model == "opus" or model == "haiku" or model == "fable"
+			or env.require("net/bridge").claudeCodeHasModel(model) or (#model <= 100 and model:match("^claude%-[%w][%w%.%-]*$"))) then
 			return "Choose a Claude Code model: sonnet, opus, haiku, fable or a full claude- model ID."
 		end
 		return nil

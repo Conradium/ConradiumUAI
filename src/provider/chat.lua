@@ -37,8 +37,19 @@ return function(env)
 		local problem = registry.protocolProblem(record)
 		if problem then return nil, support.error(problem) end
 		-- Explain an unavailable Claude Code backend instead of dialling its
-		-- sentinel host, which would only fail at DNS.
+		-- sentinel host, which would only fail at DNS. A bridge connection that
+		-- dropped for a moment while the executor was busy gets time to recover.
 		problem = registry.claudeCodeProblem(record)
+		if problem and registry.isClaudeCode(record) and env.require("net/bridge_connection").enabled()
+			and not env.require("net/relay_link").mobile() then
+			local clock = env.require("runtime/clock")
+			local waitUntil = clock.ms() + 15000
+			while problem and not env.require("net/transport").coworkWeb() and clock.ms() < waitUntil do
+				if request and request.aborted and request.aborted() then return nil, "aborted" end
+				clock.wait(0.25)
+				problem = registry.claudeCodeProblem(record)
+			end
+		end
 		if problem then return nil, support.error(problem) end
 		local result, err, response = M.adapterFor(record).complete(record, request)
 		return result, err and support.error(err) or nil, response

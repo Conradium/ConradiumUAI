@@ -9,8 +9,11 @@ local READY = { schema = 1, available = true, state = "ready", models = "/api/cl
 local status = READY
 local h = envMock.new()
 local jobs, modelRequests, direct = {}, 0, 0
+local helloBroken, inboxBroken = false, false
 h.http.handler = function(req)
 	if req.url:find("claude-code.invalid", 1, true) then direct = direct + 1; return { StatusCode = 503, Body = "" } end
+	if helloBroken and req.url:find("/api/hello", 1, true) then return { StatusCode = 500, Body = "" } end
+	if inboxBroken and req.url:find("/api/agent/", 1, true) then return { StatusCode = 500, Body = "" } end
 	if req.url:find("/api/hello", 1, true) then
 		return { StatusCode = 200, Body = json.encode({ protocol = 2, instance = "fixture-instance", capabilities = { claudeCode = status } }) }
 	end
@@ -66,6 +69,21 @@ check("the sentinel URL reaches the bridge unchanged", jobs[1].url == SENTINEL a
 check("no key and no Claude Code identity is sent", header(jobs[1], "authorization") == nil and header(jobs[1], "x-app") == nil
 	and not tostring(header(jobs[1], "user-agent") or ""):find("claude-cli", 1, true))
 check("the sentinel host was never dialled", direct == 0)
+
+-- A busy executor can time out a status check or drop a poll mid-turn.
+helloBroken = true; h.settle(9)
+check("a failed status check keeps the last Claude Code answer", bridge.claudeCodeStatus().state == "ready")
+helloBroken = false
+result, why = complete(record)
+check("the next request still reaches the bridge: " .. tostring(why), result and result.content == "PONG" and #jobs == 2)
+inboxBroken = true; h.settle(1)
+check("the dropped poll takes the client off Web runtime", not app.env.require("net/transport").coworkWeb())
+local recovered, recoveredWhy
+h.sched.spawn(function()
+	recovered, recoveredWhy = app.env.require("provider/chat").complete(record, { messages = { { role = "user", content = "hello" } }, stream = false })
+end)
+h.settle(0.5); inboxBroken = false; h.settle(14)
+check("a request waits for the bridge to come back: " .. tostring(recoveredWhy), recovered and recovered.content == "PONG" and #jobs == 3 and direct == 0)
 
 local relayed
 h.sched.spawn(function()

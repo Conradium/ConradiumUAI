@@ -575,19 +575,23 @@ return function(env)
 					opencode = { available = backend.available == true, state = tostring(backend.state or "unavailable"),
 						version = type(backend.version) == "string" and backend.version or nil }
 				end
-				local native = type(capabilities) == "table" and capabilities.claudeCode
 				local previousClaude = claudeCode
-				claudeCode = nil
-				if type(native) == "table" and native.schema == 1 then
-					local function label(value) return type(value) == "string" and #value <= 80 and value or nil end
-					claudeCode = { available = native.available == true, state = tostring(native.state or "unavailable"),
-						version = label(native.version), authMethod = label(native.authMethod), apiProvider = label(native.apiProvider),
-						message = type(native.message) == "string" and util.truncate(native.message, 600) or nil }
-				end
-				claudeCodeModels = {}
-				if claudeCode and claudeCode.available and claudeCode.state == "ready" and type(native.aliases) == "table" then
-					for _, id in ipairs(native.aliases) do
-						if type(id) == "string" and #id <= 40 then claudeCodeModels[id] = true end
+				-- A hello that timed out while the executor was busy says nothing
+				-- about Claude Code. Keep the last answer until a readable hello or a
+				-- lost connection replaces it.
+				if type(capabilities) == "table" then
+					local native = capabilities.claudeCode
+					claudeCode, claudeCodeModels = nil, {}
+					if type(native) == "table" and native.schema == 1 then
+						local function label(value) return type(value) == "string" and #value <= 80 and value or nil end
+						claudeCode = { available = native.available == true, state = tostring(native.state or "unavailable"),
+							version = label(native.version), authMethod = label(native.authMethod), apiProvider = label(native.apiProvider),
+							message = type(native.message) == "string" and util.truncate(native.message, 600) or nil }
+					end
+					if claudeCode and claudeCode.available and claudeCode.state == "ready" and type(native.aliases) == "table" then
+						for _, id in ipairs(native.aliases) do
+							if type(id) == "string" and #id <= 40 then claudeCodeModels[id] = true end
+						end
 					end
 				end
 				nextHello = clock.ms() + 4000
