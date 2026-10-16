@@ -20,7 +20,7 @@ return function(env)
 	local ENTRIES = {
 		{
 			version = "3.2.0",
-			revision = "2026-10-15-free-opencode-desktop-and-go",
+			revision = "2026-10-16-intro-tour",
 			date = "October 15, 2026",
 			title = "Project UAI Free and OpenCode desktop",
 			highlights = "Start with included free access, keep the OpenCode desktop workaround, and add an optional installed CLI bridge path. OpenCode free models are unsupported on mobile.",
@@ -28,6 +28,10 @@ return function(env)
 				{ category = "added", label = "Project UAI Free", items = {
 					"Project UAI Free is ready by default when no provider is configured. Included public HCNSEC access uses its verified auto router; existing providers and credentials stay intact.",
 					"Thank you for your continued use and support. Shared capacity and speed vary, and more free providers may become available soon. Join https://discord.gg/9xYyyYuKap for help and updates.",
+				} },
+				{ category = "added", label = "Getting started", items = {
+					"A six-step introduction covers included free access, the workspace and permissions, with direct links to Chat and Providers. It waits for an available window; reopen it from Tutorial in the profile menu.",
+					"Clicks inside a dialog stay inside it, including empty form space. Dismissed Add provider forms retain their unsaved details for the session; Start over clears the draft.",
 				} },
 				{ category = "improved", label = "OpenCode desktop", items = {
 					"Strengthen the direct desktop workaround with a live-verified desktop identity, retaining required compatibility tool declarations and Chat/Responses fallback without the bridge.",

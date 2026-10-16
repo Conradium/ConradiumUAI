@@ -72,6 +72,82 @@ return function(env)
 		end)
 	end
 
+	-- Active frames do not exclude a GuiButton behind their empty space from
+	-- Roblox hit testing. Keep dismissal buttons physically outside the card.
+	local function bindOutsideDismiss(handle, zIndex)
+		local card, scrim = handle.card, handle.scrim
+		local regions, connections = {}, {}
+		local stopped = false
+		local function bounds()
+			local origin, size = scrim.AbsolutePosition, scrim.AbsoluteSize
+			local position, cardSize = card.AbsolutePosition, card.AbsoluteSize
+			return origin, size, position, cardSize
+		end
+		local function activated(input)
+			if stopped or handle.closed or M.open[#M.open] ~= handle then return end
+			local origin, size, position, cardSize = bounds()
+			if size.X <= 0 or size.Y <= 0 or cardSize.X <= 0 or cardSize.Y <= 0 then return end
+			if input and (input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch) then
+				-- Native geometry can settle between press and release. Recheck the
+				-- current card, rather than trusting the button's previous rectangle.
+				local point = input.Position
+				if point.X < origin.X or point.Y < origin.Y or point.X >= origin.X + size.X or point.Y >= origin.Y + size.Y then return end
+				if point.X >= position.X and point.X <= position.X + cardSize.X
+					and point.Y >= position.Y and point.Y <= position.Y + cardSize.Y then return end
+			end
+			handle.close()
+		end
+		for _, name in ipairs({ "Dismiss", "DismissLeft", "DismissRight", "DismissBottom" }) do
+			local button = Instance.new("TextButton", scrim)
+			button.Name, button.Text = name, ""
+			button.BackgroundTransparency, button.BorderSizePixel = 1, 0
+			button.AutoButtonColor, button.Selectable = false, false
+			button.Size = UDim2.fromOffset(0, 0)
+			button.ZIndex = zIndex
+			regions[#regions + 1] = button
+			connections[#connections + 1] = button.Activated:Connect(activated)
+		end
+		local function setRegion(index, x, y, width, height)
+			local button = regions[index]
+			button.Position = UDim2.fromOffset(x, y)
+			button.Size = UDim2.fromOffset(width, height)
+			button.Active = width > 0 and height > 0
+			button.Visible = button.Active
+		end
+		local function update()
+			if stopped or handle.closed then return end
+			local origin, size, position, cardSize = bounds()
+			if size.X <= 0 or size.Y <= 0 or cardSize.X <= 0 or cardSize.Y <= 0 then
+				for index = 1, #regions do setRegion(index, 0, 0, 0, 0) end
+				return
+			end
+			-- Round away from the card so fractional pixels never produce an
+			-- interior sliver. Clamp against the scrim, including offscreen cards.
+			local left = util.clamp(math.floor(position.X - origin.X), 0, size.X)
+			local top = util.clamp(math.floor(position.Y - origin.Y), 0, size.Y)
+			local right = util.clamp(math.ceil(position.X + cardSize.X - origin.X), 0, size.X)
+			local bottom = util.clamp(math.ceil(position.Y + cardSize.Y - origin.Y), 0, size.Y)
+			setRegion(1, 0, 0, size.X, top)
+			setRegion(2, 0, top, left, bottom - top)
+			setRegion(3, right, top, size.X - right, bottom - top)
+			setRegion(4, 0, bottom, size.X, size.Y - bottom)
+		end
+		for _, surface in ipairs({ card, scrim }) do
+			for _, property in ipairs({ "AbsolutePosition", "AbsoluteSize" }) do
+				connections[#connections + 1] = surface:GetPropertyChangedSignal(property):Connect(update)
+			end
+		end
+		local release = dispose.add(function()
+			stopped = true
+			for _, connection in ipairs(connections) do connection:Disconnect() end
+			for _, button in ipairs(regions) do button.Active, button.Interactable = false, false end
+		end, "overlay dismiss bounds")
+		scrim.Destroying:Connect(release)
+		update()
+		return release
+	end
+
 	local layingOutToasts = false
 	local function layoutToasts()
 		if layingOutToasts or not M.toastColumn or not M.toastColumn.Parent then return end
@@ -434,19 +510,6 @@ return function(env)
 
 		local rect = responsive.usableRect(M.layer, theme.space.lg)
 
-		local dismiss
-		if props.dismissable ~= false then
-			-- Clicking the scrim is the way out. Placed behind the card, which is
-			-- Active and consumes its own clicks.
-			dismiss = Instance.new("TextButton", scrim)
-			dismiss.Name = "Dismiss"
-			dismiss.Text = ""
-			dismiss.BackgroundTransparency = 1
-			dismiss.Size = UDim2.fromScale(1, 1)
-			dismiss.ZIndex = theme.z.modal
-			dismiss.AutoButtonColor = false
-		end
-
 		local card = P.group(scrim, {
 			name = "Modal",
 			size = UDim2.fromOffset(math.min(props.width or theme.size.modal, rect.width), math.min(props.height or theme.size.modalTall, rect.height)),
@@ -455,7 +518,7 @@ return function(env)
 			zIndex = theme.z.modal + 1,
 			clip = true,
 		})
-		-- Active so clicks and touches inside the card never fall through to the dismiss button.
+		-- Keep world input behind the modal separate from its outside dismissal.
 		card.Active = true
 		card.GroupTransparency = 1
 		P.stroke(card, theme.color.border)
@@ -510,10 +573,12 @@ return function(env)
 
 		local handle = { card = card, scrim = scrim, closed = false, dismissable = props.dismissable ~= false }
 		local unbindResponsive
+		local unbindDismiss
 		local stopFit
 		local fitChrome
 		local function unregister()
 			if unbindResponsive then unbindResponsive(); unbindResponsive = nil end
+			if unbindDismiss then unbindDismiss(); unbindDismiss = nil end
 			if stopFit then stopFit(); stopFit = nil end
 			for index = #M.open, 1, -1 do
 				if M.open[index] == handle then table.remove(M.open, index) end
@@ -555,11 +620,8 @@ return function(env)
 		unbindResponsive = dispose.add(responsive.changed:connect(relayout), "modal layout")
 		card.Destroying:Connect(unbindResponsive)
 
-		if dismiss then
-			dismiss.Activated:Connect(handle.close)
-		end
-
 		if props.dismissable ~= false then
+			unbindDismiss = bindOutsideDismiss(handle, theme.z.modal)
 			local closeButton = P.iconButton(header, {
 				name = "Close",
 				icon = "close",
@@ -989,14 +1051,6 @@ return function(env)
 		})
 		scrim.Active = true
 
-		local dismiss = Instance.new("TextButton", scrim)
-		dismiss.Name = "Dismiss"
-		dismiss.Text = ""
-		dismiss.BackgroundTransparency = 1
-		dismiss.Size = UDim2.fromScale(1, 1)
-		dismiss.AutoButtonColor = false
-		dismiss.ZIndex = theme.z.modal
-
 		local card = P.group(scrim, {
 			name = props.name or "Dialog",
 			size = UDim2.fromOffset(width, height),
@@ -1013,6 +1067,7 @@ return function(env)
 
 		local handle = { card = card, scrim = scrim, closed = false, width = width, height = height }
 		local unbindResponsive
+		local unbindDismiss
 		local function relayout()
 			if handle.closed then return end
 			local bounds = responsive.usableRect(M.layer, theme.space.lg)
@@ -1030,6 +1085,7 @@ return function(env)
 			handle.closed = true
 			releaseFocusWithin(card)
 			if unbindResponsive then unbindResponsive() end
+			if unbindDismiss then unbindDismiss() end
 			for index, item in ipairs(M.open) do
 				if item == handle then table.remove(M.open, index) end
 			end
@@ -1040,13 +1096,14 @@ return function(env)
 			local notify = not handle.closed
 			handle.closed = true
 			if unbindResponsive then unbindResponsive() end
+			if unbindDismiss then unbindDismiss() end
 			for index = #M.open, 1, -1 do
 				if M.open[index] == handle then table.remove(M.open, index) end
 			end
 			if notify and props.onClose then pcall(props.onClose) end
 		end)
 
-		dismiss.Activated:Connect(handle.close)
+		unbindDismiss = bindOutsideDismiss(handle, theme.z.modal)
 
 		local closeDiameter = math.max(theme.size.control, responsive.minTarget())
 		local closePad = theme.space.sm
@@ -1090,12 +1147,6 @@ return function(env)
 			size = UDim2.fromScale(1, 1),
 			zIndex = theme.z.dropdown,
 		})
-		local dismiss = Instance.new("TextButton", scrim)
-		dismiss.Text = ""
-		dismiss.BackgroundTransparency = 1
-		dismiss.Size = UDim2.fromScale(1, 1)
-		dismiss.AutoButtonColor = false
-
 		local width = math.max(props.width or target.AbsoluteSize.X, theme.size.menuMin)
 		if not props.width then
 			for _, option in ipairs(props.options or {}) do
@@ -1222,7 +1273,9 @@ return function(env)
 		relayout()
 		if handle.closed then return handle end
 
-		dismiss.Activated:Connect(handle.close)
+		-- Keep menu dismissal above the modal that opened it. Only the topmost
+		-- surface may react to an outside click or touch.
+		releases[#releases + 1] = bindOutsideDismiss(handle, theme.z.dropdown)
 
 		local list = P.scroll(card, {
 			name = "Options",

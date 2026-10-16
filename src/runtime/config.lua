@@ -61,6 +61,10 @@ return function(env)
 			-- Note revisions can change without changing the client version.
 			lastSeenChangelog = "",
 			communityInvite = { lastShown = 0, disabled = false },
+			-- The intro tour's first-run gate. Set when the tour is shown, so a
+			-- fresh install sees it once; the profile menu's Tutorial entry opens
+			-- it again whether the flag is set or not.
+			tutorial = { seen = false },
 		},
 		agent = {
 			maxTurns = 60,

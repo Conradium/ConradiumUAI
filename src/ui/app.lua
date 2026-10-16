@@ -308,6 +308,9 @@ return function(env)
 		env.require("ui/panels/ask").watch()
 		local releaseCommunity = dispose.add(env.require("ui/community").watch(M), "community invitation")
 		screen.Destroying:Connect(releaseCommunity)
+		-- The tutorial owns its pending display and screen-destruction listener.
+		-- It waits for a visible, available window after the boot indicator leaves.
+		dispose.add(env.require("ui/tutorial").firstRun(M), "intro tour")
 
 		log.info("app", "interface mounted in " .. tostring(container.Name) .. " as " .. responsive.mode)
 		return M
@@ -1323,6 +1326,7 @@ return function(env)
 				{ label = env.require("ui/changelog").menuLabel(), value = "changelog", icon = "spark" },
 				{ label = "ProjectUAI", value = "project", icon = "brand" },
 				{ label = "About this build", value = "about", icon = "book" },
+				{ label = "Tutorial", value = "tutorial" },
 				{ label = "Join Discord", value = "discord", icon = "globe" },
 				{ label = "Donate", value = "donate", icon = "spark" },
 				{ divider = true },
@@ -1339,6 +1343,8 @@ return function(env)
 					env.require("ui/project").open()
 				elseif value == "about" then
 					M.showAbout()
+				elseif value == "tutorial" then
+					env.require("ui/tutorial").open()
 				elseif value == "discord" then
 					M.joinDiscord()
 				elseif value == "donate" then

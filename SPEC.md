@@ -1110,6 +1110,22 @@ Dismissal keeps the cooldown; opting out or successfully copying the invite
 disables reminders. Manual menu access stays available. UI-free boot schedules
 nothing; screen destruction and runtime disposal release the watcher.
 
+The introduction is an app-owned modal. It opens once when the mounted window
+is visible and enabled, deferring while an overlay, focused text field or request
+is active. Showing it marks it seen; a manual open also consumes a pending
+automatic introduction. Tutorial in the profile menu reopens it from the start.
+Back and Next move through six pages in a fitted, scrolling card with compact
+progress and navigation. Chat and Providers actions open those panels without
+sending a request or changing the selected conversation; Discord and donation
+actions open the existing dialogs. UI-free boot schedules nothing. Screen
+destruction and runtime disposal cancel pending automatic display.
+
+Dismissal hit targets surround modal and menu cards without covering their
+interiors, including empty form space. Closing Add provider retains an unsaved
+draft in memory for this client session, including protocol and authentication
+choices. Start over clears it, and successful Save consumes it. Existing-record
+edits remain isolated from the Add draft.
+
 The player profile menu has a branded ProjectUAI entry alongside the existing
 What's New entry. Its project/support modal opens the official repository on an
 explicit Star us on GitHub action, falling back to a copied or selectable URL

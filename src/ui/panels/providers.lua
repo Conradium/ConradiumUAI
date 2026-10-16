@@ -129,8 +129,19 @@ return function(env)
 		return out
 	end
 
-	-- The connection modal: preset, name, URL, protocol, auth, key. Six rows, not nine.
-	--
+	-- Keep an unfinished Add in memory for this client session. Existing records
+	-- remain isolated edit copies; their unsaved changes do not become Add drafts.
+	local addDraft = nil
+
+	local function draftDirty(candidate)
+		local blank = registry.blank("custom")
+		for _, key in ipairs({ "preset", "label", "baseUrl", "apiKey", "api", "authStyle", "model" }) do
+			if util.trim(candidate[key]) ~= util.trim(blank[key]) then return true end
+		end
+		return false
+	end
+
+	-- The connection modal: preset, name, URL, protocol, auth, key and model.
 	-- Everything else a record carries -- its models, its behaviour switches, its extra
 	-- headers -- is edited in the detail pane, which is a surface that does not have to
 	-- be dismissed to see the rest of the screen. This modal exists for the one moment
@@ -138,6 +149,7 @@ return function(env)
 	function M.editor(record, onSaved)
 		local editing = util.deepCopy(record)
 		local adding = util.trim(editing.id) == ""
+		local retainDraft = adding
 		local modal = overlay.modal({
 			title = adding and "Add a provider" or ("Connection for " .. tostring(editing.label)),
 			description = "Any endpoint that speaks /v1/chat/completions, or Anthropic's Messages API.",
@@ -148,6 +160,13 @@ return function(env)
 			-- the bottom at once, taking the title and the Save button with it. Bounded and
 			-- scrolled, the header and the footer stay put and the form moves.
 			scroll = true,
+			-- Scrim, close button and Escape preserve every editable connection
+			-- field. Saving and Start over explicitly release the retained draft.
+			onClose = function()
+				if retainDraft and util.trim(editing.id) == "" then
+					addDraft = draftDirty(editing) and util.deepCopy(editing) or nil
+				end
+			end,
 		})
 		if not modal then return end
 
@@ -794,6 +813,22 @@ return function(env)
 			end,
 		})
 
+		if adding then
+			P.button(modal.footer, {
+				name = "StartOverProvider",
+				text = "Start over",
+				variant = "ghost",
+				size = "sm",
+				layoutOrder = 0,
+				onClick = function()
+					retainDraft = false
+					addDraft = nil
+					modal.close()
+					M.add(onSaved)
+				end,
+			})
+		end
+
 		P.button(modal.footer, {
 			name = "SaveProvider",
 			text = adding and "Add" or "Save",
@@ -814,6 +849,8 @@ return function(env)
 					problemLabel.Visible = true
 					return
 				end
+				if adding then addDraft = nil end
+				retainDraft = false
 				modal.close()
 				overlay.toast("Saved " .. editing.label, "good", 2)
 				if onSaved then onSaved(editing.id) end
@@ -831,7 +868,8 @@ return function(env)
 	-- picker in front of the editor was a second modal for the same decision, and
 	-- the one a person had to dismiss before they could see a single field.
 	function M.add(onSaved)
-		M.editor(registry.blank("custom"), onSaved)
+		-- Explicit preset entry points still open their requested seed.
+		M.editor(addDraft or registry.blank("custom"), onSaved)
 	end
 
 	-- The featured provider cards.

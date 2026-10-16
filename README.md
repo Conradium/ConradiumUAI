@@ -649,9 +649,17 @@ remain usable without JavaScript; only search and copy controls need it.
 
 ## First run
 
-The interface opens with a floating orb. There is nothing configured, so the
-conversation says so and points at the inference configuration. Add an endpoint,
-fetch its models or type one, and send a message.
+Project UAI Free is ready on a fresh install. Open Chat and send a message, or
+add your own connection in Providers: choose a preset or base URL, enter its
+authentication details, and fetch or type an exact model ID. Shared free capacity
+and speed can vary; existing provider choices stay intact.
+
+The introduction opens once when the interface is visible and ready, waiting
+while a dialog, text field or request is active. Its six short pages cover Chat,
+the workspace, providers, permissions and optional community support, with direct
+links to Chat and Providers. Close it any time; **Tutorial** in the profile menu
+reopens it. A dismissed Add provider form keeps your draft for this client session;
+**Start over** clears it.
 
 New configurations default to **Allow everything**: reads, writes and execution
 run without approval unless a tool rule says otherwise. Existing saved access

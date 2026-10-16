@@ -64,6 +64,79 @@ local function response(f, model, delay)
 	return { StatusCode = 200, Body = f.h.json.encode({ data = { { id = model } } }), delay = delay }
 end
 
+for _, setting in ipairs({
+	{ name = "protocol", control = "Protocol", value = "anthropic", field = "api" },
+	{ name = "auth", control = "AuthStyle", value = "x-api-key", field = "authStyle" },
+}) do
+	case("a dismissed " .. setting.name .. "-only draft survives reopening Add", function()
+		local f = F.ui(1000, 850)
+		local providers = f.env.require("ui/panels/providers")
+		local registry = f.env.require("provider/registry")
+		providers.add()
+		click(f, "Segment_" .. setting.value, f.h.byName(setting.control))
+		if setting.field == "api" then
+			f.h.press("Escape")
+		else
+			local surfaces = f.env.require("ui/overlay").open
+			click(f, "Dismiss", surfaces[#surfaces].scrim)
+		end
+		check("dismissing setup does not save an incomplete provider", registry.count() == 0)
+		providers.add(function(id) f.saved = registry.get(id) end)
+		field(f, "ProviderName", "Resumed connection")
+		field(f, "BaseUrl", "https://resumed.fixture/v1")
+		key(f, "fixture-resumed-key")
+		click(f, "ActiveModel")
+		click(f, "Option_add")
+		field(f, "PromptField", "resumed-model")
+		click(f, "SaveProvider")
+		check("the saved connection retains the dismissed selection", f.saved and f.saved[setting.field] == setting.value)
+		check("finishing the draft keeps its new fields", f.saved.label == "Resumed connection"
+			and f.saved.apiKey == "fixture-resumed-key" and f.saved.model == "resumed-model")
+		check("resuming and saving never contacts the endpoint", f.h.http.requestCount == 0)
+		f.healthy(); f.close()
+	end)
+end
+
+case("Start over discards a retained key and connection without saving", function()
+	local f = fixture()
+	local providers = f.env.require("ui/panels/providers")
+	f.h.press("Escape")
+	providers.add()
+	check("Add resumes the dismissed connection", f.h.byName("BaseUrl"):FindFirstChildOfClass("TextBox").Text == f.original.baseUrl
+		and f.h.byName("KeyState").Text:find("-key", 1, true) ~= nil)
+	click(f, "StartOverProvider")
+	check("Start over opens one empty connection", #f.h.allByName("SaveProvider") == 1
+		and f.h.byName("BaseUrl"):FindFirstChildOfClass("TextBox").Text == "")
+	check("the old key and model are removed", f.h.byName("KeyState").Text == "not set"
+		and f.h.textOf(f.h.byName("ActiveModel")) == "Choose a model")
+	f.h.press("Escape")
+	providers.add()
+	check("closing the empty form cannot restore the discarded draft", f.h.byName("BaseUrl"):FindFirstChildOfClass("TextBox").Text == ""
+		and f.h.byName("KeyState").Text == "not set")
+	check("discarding leaves the source record intact", f.original.apiKey == "fixture-key" and f.original.model == "manual-model")
+	check("discarding neither saves nor contacts a provider", f.env.require("provider/registry").count() == 0
+		and f.h.http.requestCount == 0)
+	f.healthy(); f.close()
+end)
+
+case("saving a resumed draft leaves the next Add empty", function()
+	local f = fixture()
+	local providers = f.env.require("ui/panels/providers")
+	local registry = f.env.require("provider/registry")
+	f.h.press("Escape")
+	providers.add(function(id) f.saved = registry.get(id) end)
+	click(f, "SaveProvider")
+	check("the retained connection is saved once", f.saved and registry.count() == 1
+		and f.saved.apiKey == "fixture-key" and f.saved.model == "manual-model")
+	providers.add()
+	check("the next Add starts without the saved key or URL", f.h.byName("KeyState").Text == "not set"
+		and f.h.byName("BaseUrl"):FindFirstChildOfClass("TextBox").Text == "")
+	check("the next Add has no previous model", f.h.textOf(f.h.byName("ActiveModel")) == "Choose a model")
+	check("the saved connection remains intact", registry.get(f.saved.id).apiKey == "fixture-key" and registry.count() == 1)
+	check("saving performs no inference", f.h.http.requestCount == 0)
+	f.healthy(); f.close()
+end)
+
 for _, id in ipairs({ "ollama", "lmstudio", "vllm", "llamacpp", "sglang" }) do
 	case(id .. " applies local defaults when chosen inside Add Provider", function()
 		local f = fixture()

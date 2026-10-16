@@ -139,10 +139,20 @@ local function toolCall(id, name, args)
 end
 
 -- Boots a client with one provider configured and a scripted HTTP handler.
+--
+-- Every scenario but the tour's own would otherwise be interrupted by the
+-- introduction a beat into its boot. The gate is seeded before the client reads
+-- its settings, because the open is scheduled from mount; a scenario that is
+-- about the tour asks for it with { tutorial = true }.
+local function suppressTour(harness)
+	harness.files["UAI/config.json"] = json.encode({ version = 1, ui = { tutorial = { seen = true } } })
+end
+
 local function bootWith(opts)
 	opts = opts or {}
 	local harness = envMock.new({ executor = opts.executor })
 	harness.http.handler = opts.handler
+	if not opts.tutorial then suppressTour(harness) end
 	local handle, err = harness.boot()
 	if not handle then error("boot failed: " .. tostring(err), 0) end
 	harness.settle(1)
@@ -244,6 +254,7 @@ scenario("capabilities are detected from the host", function()
 	check("executor identified", handle.caps.executor, "OfflineHarness 1.0")
 
 	local vanilla = envMock.new({ executor = false })
+	suppressTour(vanilla)
 	local vanillaHandle = select(1, vanilla.boot())
 	truthy("a client with no executor still boots", vanillaHandle ~= nil)
 	check("falls back to HttpService", vanillaHandle.caps.http, "roblox")
@@ -279,6 +290,7 @@ scenario("requests carry the Claude Code identity", function()
 	-- And the identity is genuinely gone on a transport that cannot carry it.
 	local vanilla = envMock.new({ executor = false })
 	vanilla.http.handler = function() return { StatusCode = 200, Body = chatBody({ content = "ok" }) } end
+	suppressTour(vanilla)
 	local vanillaHandle = select(1, vanilla.boot())
 	local record = vanillaHandle.providers.blank("custom")
 	record.label = "Vanilla"
@@ -743,6 +755,7 @@ scenario("a write tool waits for permission", function()
 			toolCalls = { toolCall("w2", "instance_create", { class = "Folder", name = "Nope", parent = "Workspace" }) },
 		}) }
 	end
+	suppressTour(denied)
 	local deniedHandle = select(1, denied.boot())
 	local record = deniedHandle.providers.blank("custom")
 	record.label = "D"
@@ -2557,6 +2570,7 @@ scenario("the Anthropic Messages API is spoken natively", function()
 		end
 		return { StatusCode = 200, Body = messagesBody({ text = "This place is Mock Place 123456789." }) }
 	end
+	suppressTour(harness)
 	local handle = select(1, harness.boot())
 	harness.settle(1)
 
@@ -2949,6 +2963,7 @@ scenario("an over-large reply ceiling is lowered to what the model allows", func
 		end
 		return { StatusCode = 200, Body = messagesBody({ text = "Within the limit." }) }
 	end
+	suppressTour(native)
 	local nativeHandle = select(1, native.boot())
 	native.settle(1)
 
@@ -5251,6 +5266,7 @@ scenario("the boot indicator reports real module progress", function()
 	harness.http.handler = function() return { StatusCode = 404, Body = "{}" } end
 	-- Read before settling: the notice is on screen during the boot and removes itself
 	-- shortly after, so this is the only moment it exists.
+	suppressTour(harness)
 	local handle, err = harness.boot()
 	truthy("the client booted", handle ~= nil, tostring(err))
 
@@ -6126,7 +6142,72 @@ scenario("adding a provider opens the editor directly", function()
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
--- Included free access must not hide the recommended providers or their setup.
+-- Dismissing the add form must not discard it. A scrim click, the close button
+-- or Escape used to throw away a pasted key and a corrected URL, and the whole
+-- form had to be done over; now the draft is stashed and reopening Add restores
+-- it, while saving clears it.
+scenario("a dismissed add keeps its draft", function()
+	local harness, handle = bootWith({ provider = false })
+	handle.app.show("providers")
+	harness.settle(1)
+	harness.click(harness.byName("AddProvider"))
+	harness.settle(1)
+
+	local form = harness.byName("Form")
+	truthy("the add form is open", form ~= nil)
+	local nameBox = harness.byName("ProviderName", form)
+		and harness.byName("ProviderName", form):FindFirstChildOfClass("TextBox")
+	local urlRow = harness.byName("BaseUrl", form)
+	local urlBox = urlRow and urlRow:FindFirstChildOfClass("TextBox")
+	truthy("with a name and a url to type in", nameBox ~= nil and urlBox ~= nil)
+	harness.type(nameBox, "Drafted")
+	harness.type(urlBox, "https://draft.test/v1")
+
+	harness.click(harness.byName("Dismiss"))
+	harness.settle(1)
+	falsy("the scrim dismisses the form", harness.byName("Form"))
+
+	harness.click(harness.byName("AddProvider"))
+	harness.settle(1)
+	local again = harness.byName("Form")
+	truthy("reopening Add brings the form back", again ~= nil)
+	local nameAgain = harness.byName("ProviderName", again)
+		and harness.byName("ProviderName", again):FindFirstChildOfClass("TextBox")
+	local urlAgainRow = harness.byName("BaseUrl", again)
+	local urlAgain = urlAgainRow and urlAgainRow:FindFirstChildOfClass("TextBox")
+	check("with the typed name intact", nameAgain and nameAgain.Text, "Drafted")
+	check("and the typed url intact", urlAgain and urlAgain.Text, "https://draft.test/v1")
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- A dropdown open inside the editor must take click-away first. The menu's
+-- dismiss button used to sit below the modal's own, so clicking away from an
+-- open preset list closed the whole editor -- and the menu with it.
+scenario("a menu over the editor dismisses without it", function()
+	local harness, handle = bootWith({ provider = false })
+	handle.app.show("providers")
+	harness.settle(1)
+	harness.click(harness.byName("AddProvider"))
+	harness.settle(1)
+	harness.click(harness.byName("Preset"))
+	harness.settle(1)
+
+	local layer = harness.byName("MenuLayer")
+	truthy("the preset menu is open", layer ~= nil)
+	local menuDismiss = layer and harness.byName("Dismiss", layer)
+	local card = harness.byName("Modal")
+	truthy("both dismiss buttons exist", menuDismiss ~= nil and card ~= nil)
+	check("the menu takes click-away first",
+		menuDismiss and card and menuDismiss.ZIndex > card.ZIndex, true)
+
+	harness.click(menuDismiss)
+	harness.settle(1)
+	falsy("the menu is gone", harness.byName("MenuLayer"))
+	truthy("the editor survived it", harness.byName("Form") ~= nil)
+	check("no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
 scenario("a first-run client is pointed at the featured provider", function()
 	local harness, handle = bootWith({ provider = "default" })
 	local active = handle.providers.active()
@@ -7395,6 +7476,90 @@ scenario("the profile menu offers a donation that confirms before teleporting", 
 	harness.click(teleport)
 	harness.settle(1)
 	check("and no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+-- The introduction. It opens itself once per install, walks with Back and Next,
+-- and stays reachable from the profile menu afterwards.
+scenario("the first run opens the introduction and its pages step", function()
+	local harness, handle = bootWith({ provider = false, tutorial = true })
+
+	local title = harness.byName("TourTitle")
+	truthy("the introduction opened on its own", title ~= nil, harness.dump(handle.app.screen))
+	check("on the first page", title and title.Text, "Welcome to Project UAI")
+	contains("with the step named", harness.textOf(handle.app.screen), "Step 1 of ")
+	check("the first-run gate is set as soon as it is shown", handle.config.get("ui.tutorial.seen"), true)
+
+	local back, forward = harness.byName("TourBack"), harness.byName("TourNext")
+	truthy("Back and Next exist", back ~= nil and forward ~= nil)
+	check("Back is off on the first page", back.Active, false)
+	check("with six dots trailing the steps", #harness.allByName("TourDot"), 6)
+	check("and the forward action is Next", harness.textOf(forward), "Next")
+
+	harness.click(forward)
+	check("Next advances the page", harness.byName("TourTitle").Text, "Find your way around")
+	contains("and the step follows", harness.textOf(handle.app.screen), "Step 2 of ")
+	check("Back becomes available", harness.byName("TourBack").Active, true)
+
+	harness.click(harness.byName("TourBack"))
+	check("Back returns to the page before it", harness.byName("TourTitle").Text, "Welcome to Project UAI")
+
+	for _ = 1, 5 do harness.click(harness.byName("TourNext")) end
+	check("the last page is reached", harness.byName("TourTitle").Text, "Support the project")
+	check("where the forward action becomes Finish", harness.textOf(harness.byName("TourNext")), "Finish")
+	harness.click(harness.byName("TourNext"))
+	falsy("Finish closes the tour", harness.byName("TourPage"))
+	truthy("the seen state can be saved", handle.config.saveNow())
+	local reloaded = envMock.new()
+	reloaded.files["UAI/config.json"] = harness.files["UAI/config.json"]
+	local reloadedHandle = select(1, reloaded.boot())
+	truthy("the saved client boots again", reloadedHandle ~= nil)
+	reloaded.settle(3)
+	falsy("a new session does not replay the saved introduction", reloaded.byName("TourPage"))
+	check("the saved first-run gate survives reload", reloadedHandle.config.get("ui.tutorial.seen"), true)
+	check("reloading has no thread errors", #reloaded.errors(), 0)
+	check("and no thread errors", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("the profile menu reopens the introduction", function()
+	local harness, handle = bootWith({ provider = false })
+	falsy("a client that has seen it is not interrupted", harness.byName("TourPage"))
+	local selectedSession, panel = handle.sessions.current(), handle.app.panel
+
+	local anchor = harness.byName("ProfileBar")
+	truthy("the profile control exists", anchor ~= nil)
+	local menu = handle.app.showProfileMenu(anchor)
+	truthy("the profile menu opens", menu ~= nil)
+	local entry = harness.byName("Option_tutorial", menu.card)
+	truthy("with a Tutorial entry", entry ~= nil, harness.dump(menu.card))
+	harness.click(entry)
+
+	truthy("which opens the tour", harness.byName("TourPage") ~= nil)
+	check("at the first page", harness.byName("TourTitle").Text, "Welcome to Project UAI")
+	harness.press("Escape")
+	falsy("Escape dismisses it", harness.byName("TourPage"))
+	check("the selected conversation is preserved", handle.sessions.current(), selectedSession)
+	check("the current panel is preserved", handle.app.panel, panel)
+	check("nothing was disturbed by it", #harness.errors(), 0,
+		harness.errors()[1] and harness.errors()[1].traceback or nil)
+end)
+
+scenario("a UI-free client defers the introduction until its window opens", function()
+	local harness = envMock.new({ context = { ui = false } })
+	local handle = select(1, harness.boot())
+	truthy("the UI-free client boots", handle ~= nil)
+	harness.settle(3)
+	check("runtime boot does not mount an interface", handle.uiMounted, false)
+	check("runtime boot leaves first run eligible", handle.config.get("ui.tutorial.seen"), false)
+	handle.show()
+	harness.settle(3)
+	truthy("showing the window mounts the introduction", harness.byName("TourPage") ~= nil)
+	check("display consumes its first-run gate", handle.config.get("ui.tutorial.seen"), true)
+	handle.unload()
+	harness.sched.advance(3)
+	falsy("unload destroys the mounted interface", harness.screen())
+	check("lazy mounting and unloading have no thread errors", #harness.errors(), 0,
 		harness.errors()[1] and harness.errors()[1].traceback or nil)
 end)
 
