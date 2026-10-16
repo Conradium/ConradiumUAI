@@ -227,9 +227,11 @@ function probe(binary, args, env, timeout) {
   });
 }
 
-function createClaudeCode({ env = process.env, binary = findBinary(env), probeMs = 5000, waitMs = 3000 } = {}) {
+// Startup probes are generous: `claude --help` alone can take several seconds.
+// A failed startup is retried after retryMs, so a slow moment needs no restart.
+function createClaudeCode({ env = process.env, binary = findBinary(env), probeMs = 20000, waitMs = 3000, retryMs = 30000 } = {}) {
   let directory, rpcServer, rpcSecret, starting, closed = false, active = false;
-  let state = binary ? 'starting' : 'missing', version, authMethod, apiProvider, failure;
+  let state = binary ? 'starting' : 'missing', version, authMethod, apiProvider, failure, failedAt = 0;
   const jobs = new Map(), children = new Set();
   const alive = child => child.exitCode === null && child.signalCode === null;
   const killChildren = () => { for (const child of children) if (alive(child)) child.kill(); };
@@ -237,7 +239,8 @@ function createClaudeCode({ env = process.env, binary = findBinary(env), probeMs
   const label = value => typeof value === 'string' && /^[\w .-]{1,40}$/.test(value) ? value : undefined;
   const message = () => closed ? 'Claude Code bridge stopped' : state === 'missing' ? missing : state === 'signed-out' ? signedOut :
     state === 'starting' ? 'Claude Code is still starting. Try again in a moment.' : failure || 'Claude Code could not start. ' + update;
-  const capability = () => ({ schema: 1, available: !!binary && !closed, state, models: '/api/claudecode/models', aliases: ALIASES,
+  // Reading the capability also retries a failed startup once retryMs passed.
+  const capability = () => (state === 'failed' && !closed && start().catch(() => {}), { schema: 1, available: !!binary && !closed, state, models: '/api/claudecode/models', aliases: ALIASES,
     ...(version ? { version } : {}), ...(authMethod ? { authMethod } : {}), ...(apiProvider ? { apiProvider } : {}),
     ...(state !== 'ready' || closed ? { message: help(message()) } : {}) });
 
@@ -282,20 +285,25 @@ function createClaudeCode({ env = process.env, binary = findBinary(env), probeMs
   async function start() {
     if (closed) throw Error('Claude Code bridge stopped');
     if (!binary) throw Error(missing);
-    if (starting) return starting;
+    if (starting && !(state === 'failed' && Date.now() - failedAt >= retryMs)) return starting;
+    state = 'starting';
     starting = (async () => {
-      const fail = text => { state = 'failed'; failure = text; };
+      const fail = text => { state = 'failed'; failure = text; failedAt = Date.now(); };
+      const retrying = ' It retries shortly; if this persists, ' + update;
       const probeEnv = childEnv(env);
+      // Judge each probe by what it printed: a CLI that is slow to exit after
+      // answering still answered.
       const reported = await probe(binary, ['--version'], probeEnv, probeMs);
-      const found = reported.code === 0 && /\b(\d+\.\d+\.\d+)\b/.exec(reported.output);
+      const found = /\b(\d+\.\d+\.\d+)\b/.exec(reported.output);
       if (closed) return;
-      if (!found) { fail('Claude Code did not report its version. ' + update); return; }
+      if (!found) { fail('Claude Code did not report its version in time.' + retrying); return; }
       version = found[1];
       const usage = await probe(binary, ['--help'], probeEnv, probeMs);
+      if (closed) return;
+      if (!usage.output.trim()) { fail('Claude Code ' + version + ' did not answer --help in time.' + retrying); return; }
       const lacking = FLAGS.filter(flag => !new RegExp('(?:^|[\\s,\\[])' + flag + '(?![\\w-])', 'm').test(usage.output));
       if (!/\bdontAsk\b/.test(usage.output)) lacking.push('--permission-mode dontAsk');
-      if (closed) return;
-      if (usage.code !== 0 || lacking.length) { fail('Claude Code ' + version + ' lacks ' + (lacking.join(', ') || 'a working --help') + '. ' + update); return; }
+      if (lacking.length) { fail('Claude Code ' + version + ' lacks ' + lacking.join(', ') + '. ' + update); return; }
       // Only the login flag and two display labels are kept from this output.
       const auth = await probe(binary, ['auth', 'status', '--json'], probeEnv, probeMs);
       let loggedIn;
@@ -304,15 +312,17 @@ function createClaudeCode({ env = process.env, binary = findBinary(env), probeMs
         loggedIn = status?.loggedIn; authMethod = label(status?.authMethod); apiProvider = label(status?.apiProvider);
       } catch { loggedIn = undefined; }
       if (closed) return;
-      if (typeof loggedIn !== 'boolean') { fail('Claude Code could not report its sign-in status. ' + update); return; }
+      if (typeof loggedIn !== 'boolean') { fail('Claude Code could not report its sign-in status in time.' + retrying); return; }
       if (!loggedIn) { state = 'signed-out'; return; }
-      directory = fs.mkdtempSync(path.join(os.tmpdir(), 'project-uai-claude-'));
-      rpcSecret = crypto.randomBytes(32).toString('hex');
-      rpcServer = http.createServer(serveMcp);
-      rpcServer.listen(0, '127.0.0.1'); await once(rpcServer, 'listening');
+      if (!rpcServer) {
+        directory = fs.mkdtempSync(path.join(os.tmpdir(), 'project-uai-claude-'));
+        rpcSecret = crypto.randomBytes(32).toString('hex');
+        rpcServer = http.createServer(serveMcp);
+        rpcServer.listen(0, '127.0.0.1'); await once(rpcServer, 'listening');
+      }
       if (closed) return;
       state = 'ready';
-    })().catch(() => { if (state === 'starting') { state = 'failed'; failure = 'Claude Code could not start. ' + update; } });
+    })().catch(() => { if (state === 'starting') { state = 'failed'; failedAt = Date.now(); failure = 'Claude Code could not start. ' + update; } });
     return starting;
   }
 

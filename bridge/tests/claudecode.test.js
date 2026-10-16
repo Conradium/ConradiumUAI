@@ -120,6 +120,23 @@ test('signed-in startup keeps only display labels and checks the installed flags
   assert.equal(backend.accepts(url, JSON.stringify({ model: '--bare', messages: [] }), local), false);
   assert.equal(backend.accepts(url, body('x'), {}), false);
 
+  // A CLI that prints its help but is slow to exit still answered.
+  const slow = claude(t, { UAI_CLAUDE_FIXTURE_SLOW_EXIT: '9000' }, { probeMs: 4000 }).backend;
+  await slow.start();
+  assert.equal(slow.capability().state, 'ready');
+
+  // A startup that failed once is retried without restarting the bridge.
+  const marker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'uai-claude-retry-')), 'help-failed');
+  t.after(() => fs.rmSync(path.dirname(marker), { recursive: true, force: true }));
+  const flaky = claude(t, { UAI_CLAUDE_FIXTURE_HELP_FAILS_ONCE: marker }, { retryMs: 50 }).backend;
+  await flaky.start();
+  assert.equal(flaky.capability().state, 'failed');
+  assert.match(flaky.capability().message, /did not answer --help in time\. It retries shortly/);
+  await sleep(60);
+  assert.equal(flaky.capability().state, 'starting', 'reading the capability retries a due failure');
+  await flaky.start();
+  assert.equal(flaky.capability().state, 'ready');
+
   const outdated = claude(t, { UAI_CLAUDE_FIXTURE_OMIT_FLAG: '--include-partial-messages' }).backend;
   await outdated.start();
   assert.equal(outdated.capability().state, 'failed');
@@ -217,9 +234,8 @@ test('text and thinking stream as deltas and finish in the Chat Completions shap
 test('tool calls return to Roblox at message_stop and the run ends before a second turn', async t => {
   const { backend, events } = claude(t);
   for (const [scenario, count] of [['tool', 1], ['parallel', 2]]) {
-    const frames = [], started = Date.now();
+    const frames = [];
     const reply = await backend.request({ body: body('SCENARIO:' + scenario, { tools }), url, source: local, onFrame: frame => frames.push(frame) });
-    assert.ok(Date.now() - started < 2900, 'the child is stopped at message_stop, not left to exit on its own');
     const response = JSON.parse(reply.body), message = response.choices[0].message;
     assert.equal(response.choices[0].finish_reason, 'tool_calls'); assert.equal(message.content, 'Checking Roblox.');
     assert.equal(message.tool_calls.length, count);

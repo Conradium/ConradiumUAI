@@ -15,9 +15,15 @@ const FLAGS = ['-p, --print', '--verbose', '--input-format <format>', '--output-
 
 if (args[0] === '--version') { process.stdout.write('2.1.301 (Claude Code)\n'); return; }
 if (args[0] === '--help') {
+  // The first --help after this marker is created answers nothing, as a CLI
+  // that was too busy to reply would.
+  const once = process.env.UAI_CLAUDE_FIXTURE_HELP_FAILS_ONCE;
+  if (once && !fs.existsSync(once)) { fs.writeFileSync(once, ''); process.exitCode = 1; return; }
   const omit = process.env.UAI_CLAUDE_FIXTURE_OMIT_FLAG;
   process.stdout.write('Usage: claude [options] [command] [prompt]\n\nOptions:\n' +
     FLAGS.filter(flag => !omit || !flag.startsWith(omit)).map(flag => '  ' + flag + '\n').join(''));
+  // A real CLI can take seconds to exit after printing its help.
+  if (process.env.UAI_CLAUDE_FIXTURE_SLOW_EXIT) setTimeout(() => {}, Number(process.env.UAI_CLAUDE_FIXTURE_SLOW_EXIT));
   return;
 }
 if (args[0] === 'auth' && args[1] === 'status') {
