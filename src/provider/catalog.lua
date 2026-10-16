@@ -68,7 +68,7 @@ return function(env)
 			headers = {
 				["X-Title"] = "Project UAI",
 				["X-OpenRouter-Title"] = "Project UAI",
-				["HTTP-Referer"] = "https://github.com/Project-Ptolemy/ProjectUAI",
+				["HTTP-Referer"] = "https://github.com/Conradium/ConradiumUAI",
 				["X-OpenRouter-Categories"] = "game,cli-agent",
 			},
 			claudeUa = false,

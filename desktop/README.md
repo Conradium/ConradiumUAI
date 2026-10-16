@@ -71,7 +71,7 @@ active work and retained receipts/pictures are idle. An automatic worker restart
 keeps the same pairing token. The browser reconnects to the updated bridge.
 
 The desktop app separately checks stable releases in
-`Project-Ptolemy/ProjectUAI` on startup and every 15 minutes. It downloads and
+`Conradium/ConradiumUAI` on startup and every 15 minutes. It downloads and
 verifies a compatible desktop executable in the background. A ready update
 applies on restart; the **Restart to update app** action is available once the bridge is
 stopped. Updates never automatically stop an active conversation.

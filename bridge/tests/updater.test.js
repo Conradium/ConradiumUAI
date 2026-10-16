@@ -9,6 +9,7 @@ const { spawn, fork } = require('node:child_process');
 const { once } = require('node:events');
 const { Updater, RELEASES_URL, MANIFEST_NAME, PACKAGE_NAME, ROOT_FILES, checkPackage,
   compare, validPath, trustedUrl, releaseCandidates, cacheDirectory, hash, json } = require('../updater');
+const REPO = /\/repos\/([^/]+\/[^/]+)\/releases/.exec(RELEASES_URL)[1];
 const { Supervisor } = require('../supervisor');
 const RELEASE = require('../release');
 const { runtimeSource } = require('../../tools/build_bridge');
@@ -26,7 +27,7 @@ function temporary(t) {
   });
   return root;
 }
-function fixture(next = '3.3.0', overrides = {}) {
+function fixture(next = '3.3.0', overrides = {}, repo = REPO) {
   const names = [...ROOT_FILES, 'web/index.html'].sort();
   const files = names.map(name => {
     let data = name === 'web/index.html' ? Buffer.from('<html>synthetic bridge release</html>') : runtimeSource(name);
@@ -34,15 +35,16 @@ function fixture(next = '3.3.0', overrides = {}) {
     if (Object.hasOwn(overrides, name)) data = Buffer.from(overrides[name]);
     return { path: name, bytes: data.length, sha256: hash(data), data: data.toString('base64') };
   });
-  return fromFiles(next, files);
+  return fromFiles(next, files, repo);
 }
-function fromFiles(next, files) {
+function fromFiles(next, files, repo = REPO) {
   const archive = json({ format: 'project-uai-bridge-package', schema: 1, version: next, files });
   const manifest = { format: 'project-uai-bridge-release', schema: 1, ...RELEASE, version: next,
     package: { name: PACKAGE_NAME, bytes: archive.length, sha256: hash(archive) } };
   const release = { tag_name: 'bridge-v' + next, draft: false, prerelease: false, assets: [MANIFEST_NAME, PACKAGE_NAME].map(name => ({
-    name, browser_download_url: `https://github.com/Project-Ptolemy/ProjectUAI/releases/download/bridge-v${next}/${name}` })) };
-  const responses = new Map([[RELEASES_URL, json([release])],
+    name, browser_download_url: `https://github.com/${repo}/releases/download/bridge-v${next}/${name}` })) };
+  const releases = repo === REPO ? RELEASES_URL : `https://api.github.com/repos/${repo}/releases?per_page=100`;
+  const responses = new Map([[releases, json([release])],
     [release.assets[0].browser_download_url, json(manifest)], [release.assets[1].browser_download_url, archive]]);
   const requests = [];
   return { archive, manifest, release, files, requests, fetchBytes: async (url, limit, signal) => {
@@ -111,7 +113,9 @@ test('the shipped 3.1 updater accepts the new release without additional root fi
   assert.equal(hash(snapshot), '13092676e9075cd21f7014ef0d7be215dfb54768840c547ef832d211d372a985', 'exact released validator fixture');
   fs.writeFileSync(path.join(root, 'updater.js'), snapshot);
   fs.writeFileSync(path.join(root, 'release.js'), "module.exports={version:'3.1.0',protocol:2,updateProtocol:1,minNode:18};\n");
-  const previous = require(path.join(root, 'updater.js')), data = fixture('3.2.0');
+  // Installed 3.1 bridges came from the original project and trust only its
+  // releases; they never see this fork's releases.
+  const previous = require(path.join(root, 'updater.js')), data = fixture('3.2.0', {}, 'Project-Ptolemy/ProjectUAI');
   const files = previous.checkPackage(data.archive, data.manifest);
   assert.deepEqual(files.filter(file => !file.path.startsWith('web/')).map(file => file.path).sort(), previous.ROOT_FILES.slice().sort());
   assert.ok(files.find(file => file.path === 'server.js').data.includes(Buffer.from('function createOpenCode')));

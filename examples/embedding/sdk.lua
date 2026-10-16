@@ -1,7 +1,7 @@
 -- UI-free executor entry point. Pin the same reviewed revision in this entry URL
 -- and its dependency below. Configure a real provider/model before calling ask.
 local revision = "main"
-local root = "https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/" .. revision .. "/"
+local root = "https://raw.githubusercontent.com/Conradium/ConradiumUAI/" .. revision .. "/"
 local downloaded, source = pcall(function() return game:HttpGet(root .. "dist/uai.lua") end)
 assert(downloaded and type(source) == "string", "Could not download UAI: " .. tostring(source))
 local chunk, compileError = loadstring(source, "@uai-sdk-example")

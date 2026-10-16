@@ -1,7 +1,7 @@
 -- Complete executor entry point. Replace main with one reviewed commit SHA in
 -- production so the runtime, UI library and example modules stay on one revision.
 local revision = "main"
-local root = "https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/" .. revision .. "/"
+local root = "https://raw.githubusercontent.com/Conradium/ConradiumUAI/" .. revision .. "/"
 local function loadModule(path)
 	local ok, source = pcall(function() return game:HttpGet(root .. path) end)
 	assert(ok and type(source) == "string", "Could not download " .. path .. ": " .. tostring(source))

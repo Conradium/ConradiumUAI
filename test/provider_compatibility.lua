@@ -248,7 +248,7 @@ case("the retired OpenRouter attribution URL migrates in saved records", functio
 
 	check("one saved record migrates", registry.migrate() == 1)
 	check("referer points at the repository", registry.get("fixture-openrouter").headers["HTTP-Referer"]
-		== "https://github.com/Project-Ptolemy/ProjectUAI")
+		== "https://github.com/Conradium/ConradiumUAI")
 	check("a user-set referer is untouched", registry.get("fixture-custom").headers["HTTP-Referer"]
 		== "https://example.test/keep-me/")
 	check("a similar URL is untouched", registry.get("fixture-near").headers["http-referer"]

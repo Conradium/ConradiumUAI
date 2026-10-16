@@ -31,7 +31,7 @@ return function(checkOnly)
 		"-- Generated from docs/SCRIPT_DEVELOPMENT.md by tools/build_script_docs.lua; edit the Markdown.",
 		"return function(env)",
 		"\treturn {",
-		'\t\turl = "https://github.com/Project-Ptolemy/ProjectUAI/blob/main/docs/SCRIPT_DEVELOPMENT.md",',
+		'\t\turl = "https://github.com/Conradium/ConradiumUAI/blob/main/docs/SCRIPT_DEVELOPMENT.md",',
 		"\t\torder = {",
 	}
 	for _, heading in ipairs(headings) do lines[#lines + 1] = "\t\t\t" .. string.format("%q", heading.key) .. "," end

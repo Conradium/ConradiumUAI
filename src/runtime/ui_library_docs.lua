@@ -2,8 +2,8 @@
 return function(env)
 	return {
 		version = "1.3.0",
-		url = "https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua",
-		repository = "https://github.com/Project-Ptolemy/ProjectUAI",
+		url = "https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai-ui.lua",
+		repository = "https://github.com/Conradium/ConradiumUAI",
 		sections = {
 			["quickstart"] = [=[
 ## Quickstart
@@ -15,7 +15,7 @@ initial and "Current experience" remain until those lookups finish.
 
 ```lua
 local UI = loadstring(game:HttpGet(
-	"https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua"
+	"https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai-ui.lua"
 ))()
 
 local window = UI:CreateWindow({
@@ -86,7 +86,7 @@ Keep production URLs on one reviewed commit SHA when you need reproducibility.
 
 ```lua
 local revision = "main" -- Replace with a reviewed commit SHA for a pinned release.
-local url = "https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/"
+local url = "https://raw.githubusercontent.com/Conradium/ConradiumUAI/"
 	.. revision .. "/dist/uai-ui.lua"
 local ok, source = pcall(function() return game:HttpGet(url) end)
 assert(ok and type(source) == "string", "UI library download failed: " .. tostring(source))
@@ -641,7 +641,7 @@ Given an existing live `uai` handle and loaded `UI` API:
 
 ```lua
 local createPanel = loadstring(game:HttpGet(
-	"https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/examples/embedding/assistant_panel.lua"
+	"https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/examples/embedding/assistant_panel.lua"
 ))()
 local window, session = createPanel(uai, UI, {
 	Id = "my-assistant-panel",

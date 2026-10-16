@@ -14,7 +14,7 @@ Project UAI 2.8.0 with embedding SDK 1.0.0 and UI LIB 1.3.0.
 
 ```lua
 local integration = loadstring(game:HttpGet(
-	"https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/examples/embedding/sdk.lua"
+	"https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/examples/embedding/sdk.lua"
 ))()
 -- After a real provider/model has been configured:
 local request, why = integration.ask("Call sdk_example_status and summarize the result.")
@@ -48,7 +48,7 @@ In a Roblox executor host that supports HTTP and `loadstring`:
 
 ```lua
 local integration = loadstring(game:HttpGet(
-	"https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/examples/embedding/launcher.lua"
+	"https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/examples/embedding/launcher.lua"
 ))()
 ```
 

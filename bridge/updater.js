@@ -10,7 +10,7 @@ const crypto = require('node:crypto');
 const https = require('node:https');
 const RELEASE = require('./release');
 
-const REPO = 'Project-Ptolemy/ProjectUAI';
+const REPO = 'Conradium/ConradiumUAI';
 const RELEASES_URL = `https://api.github.com/repos/${REPO}/releases?per_page=100`;
 const MANIFEST_NAME = 'bridge-release.json';
 const PACKAGE_NAME = 'uai-bridge-package.json';

@@ -111,7 +111,7 @@ Standalone UI:
 
 ```lua
 local UI = loadstring(game:HttpGet(
-	"https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua"
+	"https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai-ui.lua"
 ))()
 local window = UI:CreateWindow({ Id = "my-tool", Title = "My tool" })
 ```
@@ -120,7 +120,7 @@ Full client with host context:
 
 ```lua
 local uai = loadstring(game:HttpGet(
-	"https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai.lua"
+	"https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai.lua"
 ))({
 	prompt = "This host provides workbench_status and workbench_configure for local workbench settings.",
 })
@@ -138,7 +138,7 @@ its app. This also supports a UI-free first boot:
 
 ```lua
 local source = game:HttpGet(
-	"https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai.lua"
+	"https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai.lua"
 )
 local chunk, why = loadstring(source)
 assert(chunk, why)

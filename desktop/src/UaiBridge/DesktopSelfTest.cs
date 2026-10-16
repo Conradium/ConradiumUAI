@@ -118,6 +118,6 @@ internal static class DesktopSelfTest
     {
         string[] names = ["desktop-release.json", $"UAI-Bridge-{version}-win-x64.exe"];
         return new { draft = false, prerelease, tag_name = "v" + version, assets = names.Select(name => new {
-            name, browser_download_url = $"https://github.com/{(untrusted ? "Other/Repo" : "Project-Ptolemy/ProjectUAI")}/releases/download/v{version}/{name}" }).ToArray() };
+            name, browser_download_url = $"https://github.com/{(untrusted ? "Other/Repo" : "Conradium/ConradiumUAI")}/releases/download/v{version}/{name}" }).ToArray() };
     }
 }

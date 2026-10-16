@@ -115,7 +115,7 @@ Native workspace:
 	local SCRIPT_UI = [[
 Script interfaces:
 - New script UIs use Project UAI UI LIB:
-  https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua
+  https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai-ui.lua
   loaded with loadstring(game:HttpGet(url))(). Read ui_library_docs quickstart,
   controls and lifecycle first, including continuations; fallback: docs/UI_LIBRARY.md
   in that repository. Read layout for GameName/ReducedMotion and other sections as needed.

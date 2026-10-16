@@ -48,5 +48,5 @@ Download only from the official release. The adjacent .sha256 and
 desktop-release.json identify the executable content; they are not a publisher
 signature. The app verifies its embedded files before starting the bridge.
 
-Source: https://github.com/Project-Ptolemy/ProjectUAI
+Source: https://github.com/Conradium/ConradiumUAI
 Licenses and third-party notices are included in the embedded files.

@@ -3,7 +3,7 @@ package.path = "test/?.lua;test/mock/?.lua;" .. package.path
 local F = require("coding_fixture")
 local suite = F.suite("Project support")
 local check, case = suite.check, suite.case
-local URL = "https://github.com/Project-Ptolemy/ProjectUAI"
+local URL = "https://github.com/Conradium/ConradiumUAI"
 local function mobile(width, height, textScale)
 	local f = F.ui(width, height)
 	local uis = f.h.services.UserInputService

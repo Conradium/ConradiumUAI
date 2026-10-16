@@ -9,7 +9,7 @@ Use our **Project UAI UI LIB** for new script-owned interfaces. Read
 [docs/UI_LIBRARY.md](docs/UI_LIBRARY.md), especially Quickstart, Controls, and
 Lifecycle. Load the published bundle from:
 
-`https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua`
+`https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai-ui.lua`
 
 Scripts declare tabs, sections, values, and domain callbacks. They do not build
 ScreenGuis, controls, colors, fonts, padding, drag systems, or external UI-library

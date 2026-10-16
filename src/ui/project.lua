@@ -8,7 +8,7 @@ return function(env)
 	local R = env.require("ui/settingsrows")
 	local icons = env.require("ui/icons")
 	local M = {}
-	local REPOSITORY = "https://github.com/Project-Ptolemy/ProjectUAI"
+	local REPOSITORY = "https://github.com/Conradium/ConradiumUAI"
 	local current
 
 	function M.open()

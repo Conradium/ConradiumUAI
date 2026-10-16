@@ -380,7 +380,7 @@ the authoritative API reference. Read `layout`, `configuration`, `recipes` or
 
 The canonical standalone bundle is:
 
-`https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua`
+`https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai-ui.lua`
 
 Load it once at the script entry point, then pass the API to any application
 modules. Scripts declare tabs, sections, values and domain callbacks. The library
@@ -398,7 +398,7 @@ library, and closing/replacing the window releases the folder:
 
 ```lua
 local UI = loadstring(game:HttpGet(
-	"https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua"
+	"https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai-ui.lua"
 ))()
 local window = UI:CreateWindow({ Id = "example-marker-tools", Title = "Marker tools" })
 local tab = window:Tab({ Id = "main", Title = "Main" })

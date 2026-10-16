@@ -1,5 +1,5 @@
 -- Every public control, using the exact loader agents put in standalone scripts.
-local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua"))()
+local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai-ui.lua"))()
 local window = UI:CreateWindow({
 	Id = "uai-library-showcase",
 	Title = "Fieldwork",

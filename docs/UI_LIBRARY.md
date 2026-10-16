@@ -7,7 +7,7 @@ It does not replace or redesign the agent client's interface.
 
 The source is [ui-lib/](../ui-lib/), the public artifact is
 [dist/uai-ui.lua](../dist/uai-ui.lua), and the repository is
-[Project-Ptolemy/ProjectUAI](https://github.com/Project-Ptolemy/ProjectUAI).
+[Conradium/ConradiumUAI](https://github.com/Conradium/ConradiumUAI).
 Every window, minimized launcher, and dialog includes the fixed bottom attribution
 `Project UAI | UI LIB.`. There is no option to remove or replace it.
 The library uses text for the window title, navigation, and every action. It draws
@@ -38,7 +38,7 @@ initial and "Current experience" remain until those lookups finish.
 
 ```lua
 local UI = loadstring(game:HttpGet(
-	"https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua"
+	"https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai-ui.lua"
 ))()
 
 local window = UI:CreateWindow({
@@ -108,7 +108,7 @@ Keep production URLs on one reviewed commit SHA when you need reproducibility.
 
 ```lua
 local revision = "main" -- Replace with a reviewed commit SHA for a pinned release.
-local url = "https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/"
+local url = "https://raw.githubusercontent.com/Conradium/ConradiumUAI/"
 	.. revision .. "/dist/uai-ui.lua"
 local ok, source = pcall(function() return game:HttpGet(url) end)
 assert(ok and type(source) == "string", "UI library download failed: " .. tostring(source))
@@ -657,7 +657,7 @@ Given an existing live `uai` handle and loaded `UI` API:
 
 ```lua
 local createPanel = loadstring(game:HttpGet(
-	"https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/examples/embedding/assistant_panel.lua"
+	"https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/examples/embedding/assistant_panel.lua"
 ))()
 local window, session = createPanel(uai, UI, {
 	Id = "my-assistant-panel",

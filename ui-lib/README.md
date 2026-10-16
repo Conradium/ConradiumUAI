@@ -4,7 +4,7 @@ An independent, responsive Roblox UI library with a graphite-and-porcelain
 workbench, inset fields, strong typography, and Project UAI's coral accent.
 
 ```lua
-local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua"))()
+local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai-ui.lua"))()
 ```
 
 - [API and agent guide](../docs/UI_LIBRARY.md)

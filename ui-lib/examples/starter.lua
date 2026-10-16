@@ -1,5 +1,5 @@
 -- A standalone consumer: declarations and application logic only.
-local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Project-Ptolemy/ProjectUAI/main/dist/uai-ui.lua"))()
+local UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Conradium/ConradiumUAI/main/dist/uai-ui.lua"))()
 local window = UI:CreateWindow({
 	Id = "uai-session-tools",
 	Title = "Session tools",

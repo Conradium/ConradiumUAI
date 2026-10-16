@@ -1,8 +1,8 @@
 {
   "format": "project-uai-ui",
   "version": "1.3.0",
-  "sha256": "998f82bb6ca617b4cb9c699eaa00ad67702870a0759fb1bd829ba6a7541e0134",
-  "bytes": 163825,
+  "sha256": "df7d2ebc0ac32329c4f858b915c52547401659b3753ad63e7b04e9bdba4376b1",
+  "bytes": 163809,
   "loaderSha256": "88447fb4987885e1435103b57cf660a58511564fbc5f4adb66c46ef348bfcbd5",
   "modules": [
     {
