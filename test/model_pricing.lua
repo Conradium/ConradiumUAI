@@ -115,7 +115,8 @@ case("verified CLI limits and direct provider limits reach model traits", functi
 	local expected = {
 		["cat-jam-free"] = { 262144, 131072 }, ["longcat-2.5-preview-free"] = { 1000000, 131072 },
 		["space-bunny-free"] = { 524288, 524288 }, ["mimo-v2.6-flash-free"] = { 200000, 32000 },
-		["step-5-preview-free"] = { 1000000, 65536 }, ["deepseek-v4.1-flash-free"] = { 200000, 32000 },
+		["step-5-preview-free"] = { 1000000, 65536 }, ["deepseek-v4.1-flash-free"] = { 1000000, 32000 },
+		["glm-5.3-flash-free"] = { 1000000, 32000 },
 		["muse-spark-1.3-contributor-free"] = { 1048576, 131072 }, ["nemotron-3.5-lightning-free"] = { 262144, 262144 },
 		["nemotron-3-ultra-free"] = { 1000000, 128000 }, ["big-pickle"] = { 160000, 32000 },
 	}
