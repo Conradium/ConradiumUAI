@@ -31,6 +31,9 @@ const update = 'Update Claude Code (run `claude update`), then restart Cowork.';
 const localOnly = 'Claude Code (local CLI) serves only the Roblox game on this computer, using your own Claude Code sign-in. It is unavailable on mobile, through the Android companion and through relays.';
 const busy = 'Claude Code (local CLI) answers one request at a time. Wait for the current reply, or use another provider for parallel work such as subagents.';
 const hostAction = 'Claude Code requested a local desktop action. UAI runs tools only in Roblox; nothing was run.';
+// Names the refused tool, so a refusal can be diagnosed without logs.
+const hostActionFor = name => typeof name === 'string' && /^[\w.:-]{1,80}$/.test(name)
+  ? 'Claude Code requested a local desktop action (' + name + '). UAI runs tools only in Roblox; nothing was run.' : hostAction;
 // Flags this adapter relies on. Older builds that lack one fail with a clear
 // update message instead of an unexplained exit.
 const FLAGS = ['--print', '--verbose', '--input-format', '--output-format', '--include-partial-messages', '--tools',
@@ -361,8 +364,11 @@ function createClaudeCode({ env = process.env, binary = findBinary(env), probeMs
           tokens, finish: turn.stop === 'max_tokens' ? 'length' : 'stop' }, calls, false);
       };
       const toolBlock = block => ['tool_use', 'server_tool_use', 'mcp_tool_use'].includes(block?.type);
-      const uaiBlock = block => block.type === 'tool_use' && typeof block.name === 'string' && block.name.startsWith(PREFIX) &&
-        job.tools.some(tool => PREFIX + tool.name === block.name);
+      // Any well-formed UAI tool goes to Roblox, even one this request did not
+      // offer: Roblox enforces its registry, scope and permissions and answers
+      // with a normal "not run" result. Anything else is a host tool.
+      const uaiBlock = block => block.type === 'tool_use' && typeof block.name === 'string' &&
+        new RegExp('^' + PREFIX + '[a-zA-Z0-9_-]{1,54}$').test(block.name);
       function handoff() {
         const calls = []; let bytes = 0;
         for (const [, block] of [...turn.blocks.entries()].sort((a, b) => a[0] - b[0])) {
@@ -388,7 +394,7 @@ function createClaudeCode({ env = process.env, binary = findBinary(env), probeMs
           if (turn.stopped) { fail('Claude Code started another model turn; UAI stopped it. Nothing was run.'); return; }
           turn = fresh(); usage(event.message?.usage);
         } else if (event.type === 'content_block_start' && toolBlock(event.content_block)) {
-          if (!uaiBlock(event.content_block)) { fail(hostAction); return; }
+          if (!uaiBlock(event.content_block)) { fail(hostActionFor(event.content_block.name)); return; }
           turn.blocks.set(event.index, { id: event.content_block.id, name: event.content_block.name, json: '' });
         } else if (event.type === 'content_block_delta') {
           const delta = event.delta;
@@ -431,7 +437,7 @@ function createClaudeCode({ env = process.env, binary = findBinary(env), probeMs
           }
           for (const block of Array.isArray(message?.content) ? message.content : []) {
             if (toolBlock(block)) {
-              if (!uaiBlock(block)) { fail(hostAction); return; }
+              if (!uaiBlock(block)) { fail(hostActionFor(block.name)); return; }
               turn.complete.set(block.id, block);
             } else if (block?.type === 'text' && typeof block.text === 'string') turn.finalText += block.text;
             else if (block?.type === 'thinking' && typeof block.thinking === 'string') turn.finalReasoning += block.thinking;

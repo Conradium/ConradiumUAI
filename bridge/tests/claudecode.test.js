@@ -257,7 +257,11 @@ test('tool calls return to Roblox at message_stop and the run ends before a seco
 test('non-UAI tools, closed tool lists and provider failures are refused without a tool call', async t => {
   const { backend } = claude(t);
   const ask = scenario => backend.request({ body: body('SCENARIO:' + scenario, { tools }), url, source: local });
-  await assert.rejects(ask('host'), /requested a local desktop action\. UAI runs tools only in Roblox; nothing was run\./);
+  await assert.rejects(ask('host'), /requested a local desktop action \(Bash\)\. UAI runs tools only in Roblox; nothing was run\./);
+  // A UAI tool this request did not offer still goes to Roblox, which applies
+  // its own registry, scope and permission checks.
+  const unoffered = JSON.parse((await ask('unoffered')).body).choices[0];
+  assert.equal(unoffered.finish_reason, 'tool_calls'); assert.equal(unoffered.message.tool_calls[0].function.name, 'remotes_capture');
   await assert.rejects(ask('mcp-down'), /could not reach the UAI tools/);
   await assert.rejects(ask('extra-tool'), /tools other than the UAI tools/);
   await assert.rejects(ask('error'), /usage or rate limit/);
